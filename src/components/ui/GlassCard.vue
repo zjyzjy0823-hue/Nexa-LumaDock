@@ -27,9 +27,9 @@ defineProps<{
   height: 100%;
   overflow: hidden;
   padding: 17px 19px 18px;
-  border: 1px solid rgba(255, 255, 255, .48);
+  border: var(--glass-card-border);
   border-radius: var(--radius-card);
-  background: linear-gradient(140deg, rgba(217,229,255,.27), rgba(202,216,246,.19) 55%, rgba(247,220,237,.24));
+  background: var(--glass-card-background);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(var(--glass-blur)) saturate(125%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(125%);
@@ -56,9 +56,9 @@ defineProps<{
   pointer-events: none;
 }
 .glass-card:hover {
-  transform: translateY(-3px);
+  transform: translateY(-3px) scale(1.02);
   border-color: rgba(255,255,255,.72);
-  box-shadow: var(--shadow-card-hover);
+  box-shadow: var(--glass-card-hover-shadow);
 }
 .glass-card__header, .glass-card__body { position: relative; z-index: 1; }
 .glass-card__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }

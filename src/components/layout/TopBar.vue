@@ -1,21 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Search, Bell, Plus, ChevronRight, ArrowUpRight, Globe2, StickyNote, Workflow, Database, Check, Sparkles } from 'lucide-vue-next'
+import { Search, ChevronRight, Globe2, StickyNote, Workflow, Database } from 'lucide-vue-next'
 import { useDashboardStore } from '../../stores/dashboard'
-import { demoNotifications, demoProfile } from '../../data/overview'
+import { demoProfile } from '../../data/overview'
+import TopActionControls from './TopActionControls.vue'
 
 withDefaults(defineProps<{ name?: string }>(), { name: demoProfile.name })
 const dashboard = useDashboardStore()
 
 const emit = defineEmits<{ navigate: [section: string]; create: [kind: string] }>()
 const toolbarRef = ref<HTMLElement | null>(null)
+const actionControls = ref<{ closeMenus: () => void } | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const query = ref('')
 const searchOpen = ref(false)
-const notificationsOpen = ref(false)
-const createOpen = ref(false)
 const now = ref(new Date())
 let timeInterval: number | undefined
+const homeCreateItems = [
+  { label: '网站快捷方式', kind: '网站快捷方式', icon: Globe2 },
+  { label: '数据集', kind: '数据集', icon: Database },
+  { label: '自动化', kind: '自动化', icon: Workflow },
+  { label: '便签', kind: '便签', icon: StickyNote },
+]
 
 const greeting = computed(() => {
   const hour = now.value.getHours()
@@ -36,12 +42,10 @@ const filteredSections = computed(() => {
 
 function closeMenus() {
   searchOpen.value = false
-  notificationsOpen.value = false
-  createOpen.value = false
+  actionControls.value?.closeMenus()
 }
 function openSearch() {
-  notificationsOpen.value = false
-  createOpen.value = false
+  actionControls.value?.closeMenus()
   searchOpen.value = true
 }
 function navigate(id: string) {
@@ -97,23 +101,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="tool-wrap">
-        <button class="topbar__icon-button" :aria-expanded="notificationsOpen" aria-label="通知" type="button" @click="notificationsOpen = !notificationsOpen; createOpen = false; searchOpen = false">
-          <Bell :size="27" :stroke-width="1.65" /><span class="notification-dot" />
-        </button>
-        <div v-if="notificationsOpen" class="toolbar-popover notifications-panel">
-          <div class="popover-heading">通知 <span>{{ demoNotifications.length }} 条新消息</span></div>
-          <div v-for="item in demoNotifications" :key="item.id" class="notification-item"><span class="notification-icon" :class="`notification-icon--${item.kind}`"><Check v-if="item.kind === 'success'" :size="15" /><Sparkles v-else :size="15" /></span><div><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></div></div>
-        </div>
-      </div>
-
-      <div class="tool-wrap">
-        <button class="topbar__new" :aria-expanded="createOpen" aria-label="新建" type="button" @click="createOpen = !createOpen; notificationsOpen = false; searchOpen = false"><Plus :size="26" :stroke-width="1.65" /></button>
-        <div v-if="createOpen" class="toolbar-popover create-panel">
-          <div class="popover-heading">新建</div>
-          <button v-for="item in [{ label: '网站快捷方式', icon: Globe2 }, { label: '数据集', icon: Database }, { label: '自动化', icon: Workflow }, { label: '便签', icon: StickyNote }]" :key="item.label" type="button" class="create-item" @click="emit('create', item.label); closeMenus()"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><ArrowUpRight :size="14" /></button>
-        </div>
-      </div>
+      <TopActionControls ref="actionControls" :create-items="homeCreateItems" @opened="searchOpen = false" @create="kind => emit('create', kind)" />
     </div>
   </header>
 </template>
@@ -125,7 +113,7 @@ h1 { margin: 0; color: #fff; font-size: clamp(30px, 2.5vw, 38px); font-weight: 4
 .topbar__date { margin-top: 9px; color: rgba(255,255,255,.94); font-size: 17px; font-weight: 450; line-height: 1.2; }
 .topbar__intro p { margin: 4px 0 0; color: rgba(255,255,255,.58); font-size: 14px; font-weight: 450; }
 .topbar__tools { display: flex; align-items: center; gap: 14px; padding-top: 0; }
-.search-wrap, .tool-wrap { position: relative; }
+.search-wrap { position: relative; }
 .search-box {
   display: flex;
   align-items: center;
@@ -149,12 +137,6 @@ h1 { margin: 0; color: #fff; font-size: clamp(30px, 2.5vw, 38px); font-weight: 4
 .search-box input::-webkit-search-cancel-button { display: none; }
 .search-box kbd { flex: none; display: grid; min-width: 24px; height: 25px; place-items: center; padding: 0 6px; border: 1px solid rgba(255,255,255,.17); border-radius: 6px; color: rgba(255,255,255,.75); background: rgba(202,218,255,.12); font-size: 11px; font-family: inherit; }
 .search-box kbd + kbd { margin-left: -7px; }
-.topbar__icon-button, .topbar__new { display: grid; flex: none; width: 47px; height: 47px; place-items: center; color: #fff; transition: transform .2s, background .2s, box-shadow .2s; }
-.topbar__icon-button { position: relative; border: 0; border-radius: 15px; background: transparent; }
-.topbar__icon-button:hover { transform: translateY(-2px); background: rgba(255,255,255,.13); }
-.notification-dot { position: absolute; top: 8px; right: 7px; width: 10px; height: 10px; border-radius: 50%; background: #ff647d; box-shadow: 0 0 0 2px rgba(90,111,174,.8); }
-.topbar__new { border: 1px solid rgba(255,255,255,.38); border-radius: 15px; background: rgba(218,230,255,.23); box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 8px 20px rgba(22,37,84,.13); backdrop-filter: blur(16px); }
-.topbar__new:hover { transform: translateY(-2px); background: rgba(235,242,255,.31); box-shadow: 0 10px 24px rgba(22,37,84,.2); }
 .toolbar-popover { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: 280px; padding: 12px; color: #fff; border: 1px solid rgba(255,255,255,.28); border-radius: 18px; background: rgba(43,59,103,.92); box-shadow: 0 20px 45px rgba(20,31,67,.35), inset 0 1px 0 rgba(255,255,255,.12); backdrop-filter: blur(28px); }
 .popover-heading { display: flex; justify-content: space-between; padding: 4px 7px 10px; color: rgba(255,255,255,.6); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .popover-heading span { color: #a7d9ff; }
@@ -166,16 +148,6 @@ h1 { margin: 0; color: #fff; font-size: clamp(30px, 2.5vw, 38px); font-weight: 4
 .search-result strong { color: #fff; font-size: 12px; }
 .search-result small { color: rgba(255,255,255,.62); font-size: 10px; }
 .search-empty { margin: 8px; color: rgba(255,255,255,.72); font-size: 11px; }
-.notification-item { display: flex; align-items: flex-start; gap: 9px; padding: 11px 6px; border-top: 1px solid rgba(255,255,255,.14); }
-.notification-icon { display: grid; place-items: center; flex: none; width: 27px; height: 27px; border-radius: 9px; }
-.notification-icon--success { color: #a2f3c8; background: rgba(91,204,149,.18); }
-.notification-icon--info { color: #bad4ff; background: rgba(121,160,234,.22); }
-.notification-item strong, .notification-item small { display: block; }
-.notification-item strong { margin-bottom: 4px; color: #fff; font-size: 11px; }
-.notification-item small { color: rgba(255,255,255,.63); font-size: 10px; line-height: 1.35; }
-.create-item { gap: 10px; padding: 10px 8px; font-size: 11px; font-weight: 600; }
-.create-item svg:first-child { color: #c0d9ff; }
-.create-item svg:last-child { margin-left: auto; color: rgba(255,255,255,.62); }
 @media (max-width: 1150px) { .topbar { gap: 12px; padding-left: 4px; } .search-box { width: 220px; } }
 @media (max-width: 800px) { .topbar { height: auto; min-height: 0; padding: 24px 4px; flex-wrap: wrap; gap: 18px; } .topbar__tools { width: 100%; } .search-wrap { flex: 1; } .search-box { width: 100%; } }
 @media (max-width: 420px) { h1 { font-size: 29px; } .topbar__tools { gap: 7px; } .topbar__date { font-size: 15px; } .search-box kbd { display: none; } }

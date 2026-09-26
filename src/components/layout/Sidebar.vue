@@ -26,11 +26,7 @@ const navItems = [
 <template>
   <aside class="sidebar" aria-label="主导航">
     <div class="brand">
-      <span class="brand__mark" aria-hidden="true">
-        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M18 2.5 22.1 13.9 33.5 18 22.1 22.1 18 33.5 13.9 22.1 2.5 18 13.9 13.9 18 2.5Z" stroke="currentColor" stroke-width="2.15" stroke-linejoin="round" />
-        </svg>
-      </span>
+      <span class="brand__mark" aria-hidden="true"><img src="/nexa-app-icon.png" alt="" /></span>
       <span class="brand__name">Nexa</span>
     </div>
 
@@ -97,7 +93,7 @@ const navItems = [
   white-space: nowrap;
 }
 .brand__mark { display: grid; width: 30px; height: 36px; flex: none; place-items: center; }
-.brand__mark svg { display: block; width: 30px; height: 30px; }
+.brand__mark img { display: block; width: 30px; height: 30px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 8px rgba(22,37,89,.2); }
 .brand__name { font-size: 24px; font-weight: 520; letter-spacing: -.045em; }
 .sidebar__nav { display: flex; flex: 1; flex-direction: column; gap: 2px; margin-top: 0; }
 .nav-item {
@@ -171,7 +167,7 @@ const navItems = [
   .sidebar { position: relative; top: auto; flex-direction: row; width: 100%; height: 64px; min-height: 0; padding: 8px 10px; border-radius: 18px; }
   .brand { height: 46px; padding: 0; }
   .brand__mark { width: 28px; height: 36px; }
-  .brand__mark svg { width: 31px; height: 31px; }
+  .brand__mark img { width: 31px; height: 31px; }
   .sidebar__nav { flex-direction: row; flex: 1; align-items: center; justify-content: flex-start; gap: 2px; min-width: 0; margin-left: 12px; overflow-x: auto; scrollbar-width: none; }
   .sidebar__nav::-webkit-scrollbar { display: none; }
   .nav-item { width: 44px; min-width: 44px; min-height: 42px; }

@@ -8,6 +8,7 @@ import { useWidgetLayout } from '../composables/useWidgetLayout'
 import { useAuthStore } from '../stores/auth'
 import { useDashboardStore } from '../stores/dashboard'
 
+const emit = defineEmits<{ navigate: [page: string]; create: [kind: string] }>()
 const auth = useAuthStore()
 const dashboard = useDashboardStore()
 const activeItem = ref('Home')
@@ -39,6 +40,7 @@ function focusSection(id: string) {
 function selectNav(item: string) {
   activeItem.value = item
   if (item === 'Home') window.scrollTo({ top: 0, behavior: 'smooth' })
+  else if (['Websites', 'Devices', 'Agents', 'Data', 'Ledger', 'Automation'].includes(item)) emit('navigate', item)
   else if (navSections[item]) focusSection(navSections[item])
   else showToast('设置功能即将推出。')
 }
@@ -62,10 +64,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="dashboard-shell">
+  <div class="dashboard-shell nexa-shell">
     <Sidebar :active-item="activeItem" @select="selectNav" />
     <main class="dashboard-main">
-      <TopBar @navigate="focusSection" @create="kind => showToast(`${kind}功能即将推出。`)" />
+      <TopBar @navigate="focusSection" @create="kind => ['网站快捷方式', '数据集', '自动化'].includes(kind) ? emit('create', kind) : showToast(`${kind}功能即将推出。`)" />
       <div class="board-wrap">
         <div class="dashboard-layout-toolbar">
           <span v-if="editing && desktop" class="layout-hint">拖动卡片上方移动，拖动右下角调整大小</span>
@@ -96,7 +98,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.dashboard-shell { display: grid; grid-template-columns: 194px minmax(0, 1fr); gap: 10px; width: min(100%, 1920px); min-height: 100vh; margin: 0 auto; padding: 16px 32px 16px 16px; }
 .dashboard-main { min-width: 0; }
 .board-wrap { position: relative; }
 .board-measure { width: 100%; }
@@ -110,12 +111,10 @@ onUnmounted(() => {
 .toast-enter-active, .toast-leave-active { transition: opacity .2s, transform .2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(10px); }
 @media (max-width: 1279px) {
-  .dashboard-shell { grid-template-columns: 76px minmax(0,1fr); gap: 16px; padding-right: 20px; }
   .dashboard-layout-toolbar { position: static; justify-content: flex-end; margin: -36px 0 8px; }
   .layout-hint, .layout-button--reset { display: none; }
 }
 @media (max-width: 700px) {
-  .dashboard-shell { display: block; padding: 12px; }
   .dashboard-layout-toolbar { margin: 0 0 10px; }
 }
 </style>
