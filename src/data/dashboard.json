@@ -1,0 +1,13 @@
+{
+  "widgets": [
+    { "id": "quick-access", "type": "quick-access", "title": "快捷访问", "icon": "link", "position": { "x": 0, "y": 0 }, "size": { "width": 521, "height": 299 }, "config": {}, "datasource": null },
+    { "id": "clock", "type": "clock", "title": "时钟与天气", "icon": "clock", "position": { "x": 539, "y": 0 }, "size": { "width": 284, "height": 299 }, "config": {}, "datasource": null },
+    { "id": "devices", "type": "device", "title": "设备", "icon": "monitor", "position": { "x": 841, "y": 0 }, "size": { "width": 441, "height": 299 }, "config": {}, "datasource": "/api/devices" },
+    { "id": "agents", "type": "agent", "title": "智能体", "icon": "bot", "position": { "x": 0, "y": 318 }, "size": { "width": 383, "height": 246 }, "config": {}, "datasource": "/api/agents" },
+    { "id": "ledger", "type": "ledger", "title": "账本", "icon": "wallet", "position": { "x": 401, "y": 318 }, "size": { "width": 409, "height": 246 }, "config": {}, "datasource": "/api/data" },
+    { "id": "system", "type": "system", "title": "系统", "icon": "activity", "position": { "x": 828, "y": 318 }, "size": { "width": 456, "height": 246 }, "config": {}, "datasource": "/api/devices" },
+    { "id": "collections", "type": "collections", "title": "数据集", "icon": "database", "position": { "x": 0, "y": 587 }, "size": { "width": 572, "height": 198 }, "config": {}, "datasource": "/api/data" },
+    { "id": "automation", "type": "automation", "title": "自动化", "icon": "zap", "position": { "x": 590, "y": 587 }, "size": { "width": 325, "height": 198 }, "config": {}, "datasource": "/api/automation" },
+    { "id": "notes", "type": "notes", "title": "便签", "icon": "sticky-note", "position": { "x": 1036, "y": 587 }, "size": { "width": 248, "height": 216 }, "config": {}, "datasource": "/api/data" }
+  ]
+}
