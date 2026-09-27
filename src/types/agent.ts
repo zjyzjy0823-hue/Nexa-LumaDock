@@ -1,5 +1,5 @@
-export type AgentStatus = 'running' | 'idle' | 'offline'
-export type AgentTaskStatus = 'running' | 'completed' | 'queued'
+export type AgentStatus = 'running' | 'idle' | 'error' | 'offline' | 'disabled'
+export type AgentTaskStatus = 'running' | 'completed' | 'queued' | 'failed'
 export type AgentCapabilityIcon = 'search' | 'file' | 'globe' | 'database' | 'code' | 'calendar'
 
 export interface AgentTask {
@@ -10,6 +10,10 @@ export interface AgentTask {
   status: AgentTaskStatus
   createdAt: string
   updatedAt: string
+  claimedAt: string | null
+  completedAt: string | null
+  result: { text?: string } | null
+  errorMessage: string | null
 }
 
 export interface AgentCapability {
@@ -21,7 +25,10 @@ export interface AgentCapability {
 
 export interface AgentLog {
   time: string
-  level: 'success' | 'info' | 'warning'
+  createdAt: string
+  eventType: string | null
+  taskId: string | null
+  level: 'success' | 'info' | 'warning' | 'error'
   message: string
 }
 
@@ -49,6 +56,13 @@ export interface Agent {
   uptime: string
   lastActive: string
   lastSeenAt: string | null
+  runtimeType: string | null
+  runtimeVersion: string | null
+  runtimeInstance: string | null
+  currentTaskId: string | null
+  lastError: string | null
+  tokenLast4: string | null
+  tokenCreatedAt: string | null
   capabilities: AgentCapability[]
   tasks: AgentTask[]
   logs: AgentLog[]

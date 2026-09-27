@@ -45,6 +45,15 @@ export const useAgentsStore = defineStore('agents', () => {
     await agentService.remove(token, id)
     if (current === sequence) agents.value = agents.value.filter(item => item.id !== id)
   }
+  async function generateToken(token: string, id: string) {
+    const credential = await agentService.generateToken(token, id)
+    await refreshOne(token, id)
+    return credential
+  }
+  async function revokeToken(token: string, id: string) {
+    await agentService.revokeToken(token, id)
+    await refreshOne(token, id)
+  }
   async function createTask(token: string, id: string, title: string, description = '') {
     await agentService.createTask(token, id, { title, description })
     return refreshOne(token, id)
@@ -58,5 +67,5 @@ export const useAgentsStore = defineStore('agents', () => {
     return refreshOne(token, id)
   }
   function reset() { ++sequence; agents.value = []; loading.value = false; loadedAt.value = null; error.value = '' }
-  return { agents, loading, loadedAt, error, load, refreshOne, create, update, remove, createTask, updateTask, removeTask, reset }
+  return { agents, loading, loadedAt, error, load, refreshOne, create, update, remove, generateToken, revokeToken, createTask, updateTask, removeTask, reset }
 })

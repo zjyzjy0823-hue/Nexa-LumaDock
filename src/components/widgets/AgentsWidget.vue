@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { Sparkles } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
 import { useAuthStore } from '../../stores/auth'
@@ -7,13 +7,14 @@ import { useAgentsStore } from '../../stores/agents'
 
 const auth = useAuthStore()
 const store = useAgentsStore()
+let pollTimer: ReturnType<typeof setInterval> | undefined
 const counts = computed(() => ({ running: store.agents.filter(item => item.status === 'running').length,
   idle: store.agents.filter(item => item.status === 'idle').length,
-  offline: store.agents.filter(item => item.status === 'offline').length,
+  offline: store.agents.filter(item => item.status === 'offline' || item.status === 'disabled').length,
   enabled: store.agents.filter(item => item.enabled).length }))
 const agentSnapshots = computed(() => store.agents.slice(0, 3).map(agent => ({
   id: agent.id, name: agent.name, model: agent.model,
-  status: agent.status === 'running' ? '运行中' : agent.status === 'offline' ? '已停用' : '空闲',
+  status: agent.status === 'running' ? '运行中' : agent.status === 'disabled' ? '已停用' : agent.status === 'offline' ? '离线' : agent.status === 'error' ? '错误' : '空闲',
   enabled: agent.enabled,
   latestTask: agent.tasks[0]?.title,
   activity: Array.from({ length: 7 }, (_, index) => {
@@ -21,7 +22,11 @@ const agentSnapshots = computed(() => store.agents.slice(0, 3).map(agent => ({
     return Math.min(100, agent.tasks.filter(task => new Date(task.createdAt).toDateString() === day.toDateString()).length * 25)
   }),
 })))
-onMounted(() => { if (auth.token) void store.load(auth.token) })
+onMounted(() => {
+  if (auth.token) void store.load(auth.token)
+  pollTimer = setInterval(() => { if (auth.token) void store.load(auth.token, true) }, 30_000)
+})
+onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
 function activityPoints(values: number[]) {
   return values.map((value, index) => `${(index * 88) / Math.max(values.length - 1, 1)},${25 - value * .22}`).join(' ')

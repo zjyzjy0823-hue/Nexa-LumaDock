@@ -51,7 +51,7 @@ def test_dashboard_widget_sources_are_empty_and_user_scoped(client, users):
     assert len([site for site in sites if site["lastVisitedAt"]]) == 2
     assert len(devices) == 2 and sum(item["online"] for item in devices) == 1
     assert sum(not item["online"] for item in devices) == 1
-    assert len(agents) == 1 and agents[0]["status"] == "idle" and agents[0]["enabled"] is True
+    assert len(agents) == 1 and agents[0]["status"] == "offline" and agents[0]["enabled"] is True
     assert len(collections) == 2 and sum(item["recordCount"] for item in collections) == 2
     assert len(workflows) == 1 and workflows[0]["enabled"] is True
     assert len(client.get(f"/api/v1/automations/{workflows[0]['id']}/executions", headers=a).json()) == 1

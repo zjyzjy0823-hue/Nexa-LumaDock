@@ -1,4 +1,4 @@
-# Nexa-LumaDock — v0.4.1 Runtime Hardening
+# Nexa-LumaDock — v0.5 Agent Runtime
 
 Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger** 已接入数据库。Dashboard widgets now use persistent user-scoped data.
 
@@ -46,6 +46,7 @@ Nexa/
 │  ├─ migrations/      Alembic 数据库迁移
 │  └─ tests/           后端接口测试
 ├─ device-client/      Windows Python 指标采集与心跳
+├─ agent-adapters/openclaw/  OpenClaw Agent Runtime Adapter
 ├─ public/             图片与静态资源
 └─ README.md
 ```
@@ -72,7 +73,19 @@ Nexa/
 
 Automation 目前仅保存工作流与触发器配置、执行历史，并提供模拟 `test-run`。Real scheduler / action execution engine is not implemented yet. 启用状态不会自动执行动作。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
 
-Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。Agent runtime 执行器仍未提供。通知尚无统一事件来源，保持空状态。
+Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。通知尚无统一事件来源，保持空状态。
+
+## Agent Runtime
+
+```text
+Nexa → Agent Task → Agent Runtime API → OpenClaw Adapter → OpenClaw → result/events → Nexa
+```
+
+OpenClaw is the first adapter. Nexa Agent Runtime protocol is adapter-independent. 创建 Agent 后在 Agents 页面生成 `na_live_` Token，复制到 `agent-adapters/openclaw/config.json`。参考 [Adapter 配置和启动说明](agent-adapters/openclaw/README.md)。Adapter 每次只处理一个 queued 任务：先 claim 为 running，调用 OpenClaw 后写入结果和 completed，或写入错误和 failed；任务日志写入现有 AgentEvent。心跳每 10–30 秒发送，超过 120 秒未收到时 Agents 页面派生 offline 状态。页面每 20 秒刷新，无 WebSocket 依赖。
+
+Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 SHA-256 hash 和末四位。重新生成或撤销后旧 Token 立即失效，删除 Agent 时凭证随之失效。请安全保存 Token，远程部署使用 HTTPS，不要提交 `config.json`。Agent Token 仅能控制其对应 Agent 的 Runtime 资源，不能作为用户 JWT 使用。
+
+本版未实现 WebSocket realtime streaming、Automation Engine、远程 shell、multi-agent orchestration、distributed/priority queue、Agent memory synchronization、file upload protocol、tool/live token streaming、Agent marketplace 或 Codex Adapter。Automation 不消费 Agent Event。
 
 ## API
 
@@ -94,8 +107,15 @@ Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Da
 | GET、POST | `/api/v1/agents` | 智能体列表、新建智能体 |
 | GET、PATCH、DELETE | `/api/v1/agents/{id}` | 读取、修改、删除智能体；PATCH 可设置 `enabled` |
 | POST | `/api/v1/agents/{id}/heartbeat` | 更新运行时状态与在线时间 |
+| POST、DELETE | `/api/v1/agents/{id}/token` | JWT 用户生成或撤销专属 Agent Token |
 | POST | `/api/v1/agents/{id}/tasks` | 创建任务 |
-| PATCH、DELETE | `/api/v1/agents/{id}/tasks/{taskId}` | 更新或删除任务 |
+| PATCH、DELETE | `/api/v1/agents/{id}/tasks/{taskId}` | 更新任务文本或删除非运行任务；状态由 Runtime 控制 |
+| POST | `/api/agent/heartbeat` | Agent Token 上报 idle/running/error 及 Runtime 信息 |
+| GET | `/api/agent/tasks` | Agent Token 查询自己 queued 任务 |
+| POST | `/api/agent/tasks/{id}/claim` | 原子 claim queued → running |
+| POST | `/api/agent/tasks/{id}/events` | 写入自己的任务事件和日志 |
+| POST | `/api/agent/tasks/{id}/complete` | running → completed，保存结果 |
+| POST | `/api/agent/tasks/{id}/fail` | running → failed，保存错误 |
 | GET、POST | `/api/api-keys` | 列出、创建当前账户的 API Key（仅 JWT） |
 | PUT | `/api/api-keys/{id}/status` | 启用或停用 API Key（仅 JWT） |
 | GET | `/api/devices`、`/api/agents`、`/api/data`、`/api/automation` | JWT 或具有对应 scope 的 API Key 读取 |

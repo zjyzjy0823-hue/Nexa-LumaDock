@@ -35,3 +35,16 @@ jobs:
       - run: python -m pip install -r device-client/requirements.txt pytest
       - run: python -m compileall device-client
       - run: python -m pytest -q device-client/tests
+  openclaw-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: agent-adapters/openclaw/requirements.txt
+      - run: python -m pip install -r agent-adapters/openclaw/requirements.txt
+      - run: python -m compileall agent-adapters/openclaw
+      - run: python -m pytest -q
+        working-directory: agent-adapters/openclaw

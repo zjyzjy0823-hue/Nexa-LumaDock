@@ -1,0 +1,8 @@
+{
+  "serverUrl": "http://127.0.0.1:8000",
+  "agentToken": "na_live_replace_with_generated_token",
+  "pollIntervalSeconds": 10,
+  "runtimeInstance": "desktop-openclaw",
+  "executionTimeoutSeconds": 600,
+  "allowInsecureHttp": false
+}

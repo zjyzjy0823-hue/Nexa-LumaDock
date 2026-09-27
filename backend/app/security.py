@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import ApiKey, Device, User, utcnow
+from .models import Agent, ApiKey, Device, User, utcnow
 
 
 JWT_SECRET = os.getenv("JWT_SECRET")
@@ -19,6 +19,19 @@ if not JWT_SECRET or len(JWT_SECRET) < 16:
     raise RuntimeError("JWT_SECRET must be set to a secret of at least 16 characters")
 JWT_ALGORITHM = "HS256"
 bearer = HTTPBearer(auto_error=False)
+
+
+def agent_from_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> Agent:
+    if credentials is None or not credentials.credentials.startswith("na_live_"):
+        raise HTTPException(401, "Invalid agent token")
+    token_hash = hashlib.sha256(credentials.credentials.encode()).hexdigest()
+    agent = db.scalar(select(Agent).where(Agent.token_hash == token_hash))
+    if agent is None:
+        raise HTTPException(401, "Invalid agent token")
+    return agent
 
 
 def device_from_token(

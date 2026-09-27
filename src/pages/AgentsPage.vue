@@ -41,7 +41,9 @@ const newTaskDescription = ref('')
 const saving = ref(false)
 const formError = ref('')
 const toast = ref('')
+const revealedToken = ref('')
 let toastTimer: ReturnType<typeof setTimeout> | undefined
+let pollTimer: ReturnType<typeof setInterval> | undefined
 
 function openCreate() {
   agentDialogMode.value = 'add'
@@ -67,7 +69,10 @@ defineExpose({ openCreate })
 watch(agents, items => {
   if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
 }, { immediate: true })
-onMounted(() => { if (auth.token) void store.load(auth.token) })
+onMounted(() => {
+  if (auth.token) void store.load(auth.token)
+  pollTimer = setInterval(() => { if (auth.token) void store.load(auth.token, true) }, 20_000)
+})
 
 const tabs: { id: AgentTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -109,20 +114,46 @@ const activityByDay = computed(() => {
 
 function agentStatus(status: AgentStatus) {
   if (status === 'running') return { label: '运行中', tone: 'success' as const }
-  if (status === 'idle') return { label: '待连接', tone: 'warning' as const }
-  return { label: '已暂停', tone: 'neutral' as const }
+  if (status === 'idle') return { label: '在线 · 空闲', tone: 'success' as const }
+  if (status === 'error') return { label: '在线 · 错误', tone: 'warning' as const }
+  if (status === 'disabled') return { label: '已停用', tone: 'neutral' as const }
+  return { label: '离线', tone: 'neutral' as const }
 }
 
 function taskStatus(status: AgentTaskStatus) {
   if (status === 'running') return { label: '进行中', tone: 'info' as const }
   if (status === 'completed') return { label: '已完成', tone: 'success' as const }
+  if (status === 'failed') return { label: '失败', tone: 'warning' as const }
   return { label: '等待中', tone: 'warning' as const }
 }
 
 function selectAgent(id: string) {
   selectedId.value = id
+  revealedToken.value = ''
   activeTab.value = 'overview'
   taskFilter.value = 'all'
+}
+
+async function generateAgentToken() {
+  const item = selectedAgent.value
+  if (!auth.token || !item) return
+  try {
+    revealedToken.value = (await store.generateToken(auth.token, item.id)).token
+    showToast('新 Token 仅显示本次，请立即复制保存。')
+  } catch (error) { showToast(error instanceof Error ? error.message : '生成失败') }
+}
+
+async function revokeAgentToken() {
+  const item = selectedAgent.value
+  if (!auth.token || !item) return
+  try { await store.revokeToken(auth.token, item.id); revealedToken.value = ''; showToast('Token 已撤销。') }
+  catch (error) { showToast(error instanceof Error ? error.message : '撤销失败') }
+}
+
+async function copyAgentToken() {
+  if (!revealedToken.value) return
+  try { await navigator.clipboard.writeText(revealedToken.value); showToast('Token 已复制。') }
+  catch { showToast('复制失败，请手动复制。') }
 }
 
 async function toggleAgentStatus() {
@@ -185,13 +216,6 @@ async function createTask() {
   finally { saving.value = false }
 }
 
-async function setTaskStatus(task: AgentTask, status: AgentTaskStatus) {
-  const item = selectedAgent.value
-  if (!auth.token || !item) return
-  try { await store.updateTask(auth.token, item.id, task.id, status); showToast('任务状态已更新。') }
-  catch (error) { showToast(error instanceof Error ? error.message : '更新失败') }
-}
-
 async function removeTask(task: AgentTask) {
   const item = selectedAgent.value
   if (!auth.token || !item || !window.confirm(`删除任务「${task.title}」？`)) return
@@ -208,7 +232,7 @@ async function copyApiPath(path: string) {
   }
 }
 
-onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
+onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) clearInterval(pollTimer) })
 </script>
 
 <template>
@@ -237,7 +261,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
           <span class="agent-search__shortcut">筛选</span>
         </label>
         <div class="directory-filters" aria-label="智能体状态筛选">
-          <button v-for="filter in ([['all', '全部'], ['running', '运行中'], ['idle', '待连接'], ['offline', '已暂停']] as const)" :key="filter[0]" type="button" :class="{ active: directoryFilter === filter[0] }" :aria-pressed="directoryFilter === filter[0]" @click="directoryFilter = filter[0]">{{ filter[1] }}</button>
+          <button v-for="filter in ([['all', '全部'], ['running', '运行中'], ['idle', '空闲'], ['offline', '离线'], ['error', '错误'], ['disabled', '已停用']] as const)" :key="filter[0]" type="button" :class="{ active: directoryFilter === filter[0] }" :aria-pressed="directoryFilter === filter[0]" @click="directoryFilter = filter[0]">{{ filter[1] }}</button>
         </div>
         <div v-if="visibleAgents.length" class="directory-list">
           <ListItemCard v-for="agent in visibleAgents" :key="agent.id" :title="agent.name" :subtitle="agent.role" :selected="selectedId === agent.id" @click="selectAgent(agent.id)">
@@ -289,8 +313,20 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
                 <div><span>当前状态</span><StatusBadge :label="agentStatus(selectedAgent.status).label" :tone="agentStatus(selectedAgent.status).tone" /></div>
                 <div><span>任务完成率</span><strong>{{ selectedAgent.successRate }}</strong></div>
                 <div><span>最近连接</span><strong>{{ selectedAgent.uptime }}</strong></div>
+                <div><span>Runtime 类型</span><strong>{{ selectedAgent.runtimeType || '—' }}</strong></div>
+                <div><span>Runtime 版本</span><strong>{{ selectedAgent.runtimeVersion || '—' }}</strong></div>
+                <div><span>Runtime 实例</span><strong>{{ selectedAgent.runtimeInstance || '—' }}</strong></div>
+                <div><span>当前任务</span><strong>{{ selectedAgent.tasks.find(task => task.id === selectedAgent?.currentTaskId)?.title || '—' }}</strong></div>
+                <div><span>最近心跳</span><strong>{{ selectedAgent.lastSeenAt ? new Date(selectedAgent.lastSeenAt).toLocaleString() : '—' }}</strong></div>
               </div>
             </div>
+          </div>
+          <div class="runtime-token-panel">
+            <strong>Agent Token</strong>
+            <code>{{ revealedToken || (selectedAgent.tokenLast4 ? `na_live_••••${selectedAgent.tokenLast4}` : '尚未生成') }}</code>
+            <button v-if="revealedToken" type="button" @click="copyAgentToken">复制</button>
+            <button type="button" @click="generateAgentToken">{{ selectedAgent.tokenLast4 ? '重新生成' : '生成 Token' }}</button>
+            <button v-if="selectedAgent.tokenLast4" type="button" @click="revokeAgentToken">撤销</button>
           </div>
           <div class="overview-bottom-grid">
             <SectionContainer class="overview-section" title="近期任务">
@@ -316,16 +352,16 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 
         <div v-else-if="activeTab === 'tasks'" class="tab-content">
           <div class="tab-content__heading"><div><span class="eyebrow">TASK CENTER</span><h3>任务中心</h3><p>跟踪 {{ selectedAgent.name }} 的全部工作</p></div><ActionButton size="sm" @click="formError = ''; createTaskOpen = true"><Plus :size="15" />创建任务</ActionButton></div>
-          <div class="task-filters"><Filter :size="14" /><button v-for="filter in ([['all', '全部'], ['running', '进行中'], ['completed', '已完成'], ['queued', '等待中']] as const)" :key="filter[0]" type="button" :class="{ active: taskFilter === filter[0] }" :aria-pressed="taskFilter === filter[0]" @click="taskFilter = filter[0]">{{ filter[1] }}</button></div>
+          <div class="task-filters"><Filter :size="14" /><button v-for="filter in ([['all', '全部'], ['running', '进行中'], ['completed', '已完成'], ['failed', '失败'], ['queued', '等待中']] as const)" :key="filter[0]" type="button" :class="{ active: taskFilter === filter[0] }" :aria-pressed="taskFilter === filter[0]" @click="taskFilter = filter[0]">{{ filter[1] }}</button></div>
           <div v-if="visibleTasks.length" class="full-task-list">
-            <div v-for="task in visibleTasks" :key="task.id" class="full-task"><span class="full-task__symbol" :class="`full-task__symbol--${task.status}`"><Activity v-if="task.status === 'running'" :size="17" /><Check v-else-if="task.status === 'completed'" :size="17" /><Clock3 v-else :size="17" /></span><div class="full-task__copy"><strong>{{ task.title }}</strong><span>{{ task.description }}</span></div><span class="full-task__id">{{ task.id.slice(0, 8) }}</span><StatusBadge :label="taskStatus(task.status).label" :tone="taskStatus(task.status).tone" /><time>{{ task.time }}</time><span class="task-actions"><button v-if="task.status === 'queued'" type="button" @click="setTaskStatus(task, 'running')">标记进行中</button><button v-if="task.status !== 'completed'" type="button" @click="setTaskStatus(task, 'completed')">标记完成</button><button type="button" @click="removeTask(task)">删除</button></span></div>
+            <div v-for="task in visibleTasks" :key="task.id" class="full-task"><span class="full-task__symbol" :class="`full-task__symbol--${task.status}`"><Activity v-if="task.status === 'running'" :size="17" /><Check v-else-if="task.status === 'completed'" :size="17" /><Clock3 v-else :size="17" /></span><div class="full-task__copy"><strong>{{ task.title }}</strong><span>{{ task.description }}</span><span v-if="task.result?.text" class="full-task__detail">结果：{{ task.result.text }}</span><span v-if="task.errorMessage" class="full-task__detail">错误：{{ task.errorMessage }}</span></div><span class="full-task__id">{{ task.id.slice(0, 8) }}</span><StatusBadge :label="taskStatus(task.status).label" :tone="taskStatus(task.status).tone" /><time>{{ task.time }}</time><span class="task-actions"><button v-if="task.status === 'queued'" type="button" @click="removeTask(task)">删除</button></span></div>
           </div>
           <div v-else class="tab-empty"><Layers3 :size="23" />当前筛选下没有任务</div>
         </div>
 
         <div v-else-if="activeTab === 'logs'" class="tab-content">
           <div class="tab-content__heading"><div><span class="eyebrow">ACTIVITY LOG</span><h3>操作日志</h3><p>查看最近的设置和任务变更</p></div><StatusBadge label="已保存" tone="info" /></div>
-          <div v-if="selectedAgent.logs.length" class="log-list"><div v-for="(log, index) in selectedAgent.logs" :key="`${log.time}-${index}`" class="log-row"><span class="log-row__time">{{ log.time }}</span><span class="log-row__level" :class="`log-row__level--${log.level}`">{{ log.level === 'success' ? '完成' : log.level === 'warning' ? '注意' : '信息' }}</span><span class="log-row__message">{{ log.message }}</span></div></div>
+          <div v-if="selectedAgent.logs.length" class="log-list"><div v-for="(log, index) in selectedAgent.logs" :key="`${log.time}-${index}`" class="log-row"><span class="log-row__time">{{ new Date(log.createdAt).toLocaleString() }}</span><span class="log-row__level" :class="`log-row__level--${log.level}`">{{ log.level }}</span><span class="log-row__message">{{ log.eventType || 'agent.event' }} · {{ log.message }}</span></div></div>
           <div v-else class="tab-empty"><Activity :size="23" />暂无运行日志</div>
         </div>
 
@@ -367,6 +403,9 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 </template>
 
 <style scoped>
+.runtime-token-panel { display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin:15px 0; padding:12px; border:1px solid var(--agent-tile-border); border-radius:12px; background:var(--agent-tile-bg); color:#435570; font-size:11px; }
+.runtime-token-panel code { max-width:100%; overflow-wrap:anywhere; }
+.runtime-token-panel button { padding:5px 9px; border:1px solid #cbd8ef; border-radius:7px; background:#f3f6ff; color:#435570; cursor:pointer; }
 .agents-page { width:100%; min-width:0; padding-bottom:28px; color:#263653; --agent-tile-bg:var(--glass-tile-background); --agent-tile-border:rgba(255,255,255,.68); --agent-tile-shadow:var(--glass-tile-shadow); }
 .agent-state { display:flex; align-items:center; justify-content:center; gap:10px; min-height:220px; padding:28px; border:1px solid rgba(255,255,255,.55); border-radius:18px; background:rgba(218,229,255,.3); color:white; font-size:13px; text-align:center; }
 .agent-state button { padding:6px 11px; border:1px solid rgba(255,255,255,.55); border-radius:8px; background:rgba(255,255,255,.25); color:white; }
@@ -452,6 +491,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 .health-panel__rows > div { display:flex; align-items:center; justify-content:space-between; gap:9px; min-height:19px; }
 .health-panel__rows > div > span:first-child { color:#53627d; font-size:10px; }
 .health-panel__rows strong { color:#3d4e68; font-size:11px; font-weight:720; }
+.health-panel__rows strong { min-width:0; overflow-wrap:anywhere; text-align:right; }
 .overview-bottom-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(225px,.85fr); gap:13px; margin-top:13px; }
 .overview-section { min-height:230px; padding:18px !important; border-color:var(--agent-tile-border) !important; border-radius:15px !important; box-shadow:var(--agent-tile-shadow) !important; background:var(--agent-tile-bg) !important; }
 .overview-section :deep(.section-container__heading) { margin-bottom:12px; }
@@ -491,10 +531,11 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 .full-task__copy { display:flex; flex:1; flex-direction:column; gap:5px; min-width:0; }
 .full-task__copy strong { overflow:hidden; color:#3b4d69; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .full-task__copy span,.full-task__id,.full-task time { color:#596882; font-size:9px; white-space:nowrap; }
+.full-task__copy .full-task__detail { white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
 .full-task__id { width:62px; }
 .full-task time { width:74px; text-align:right; }
 .log-list { overflow:hidden; border:1px solid var(--agent-tile-border); border-radius:15px; background:var(--agent-tile-bg); box-shadow:var(--agent-tile-shadow); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
-.log-row { display:grid; grid-template-columns:70px 54px minmax(0,1fr); align-items:center; gap:13px; min-height:57px; padding:12px 17px; border-bottom:1px solid #e8eef7; }
+.log-row { display:grid; grid-template-columns:120px 54px minmax(0,1fr); align-items:center; gap:13px; min-height:57px; padding:12px 17px; border-bottom:1px solid #e8eef7; }
 .log-row:last-child { border-bottom:0; }
 .log-row__time { color:#596882; font-size:10px; font-variant-numeric:tabular-nums; }
 .log-row__level { width:39px; padding:4px; border-radius:5px; background:#eaf0ff; color:#6884d7; font-size:9px; font-weight:700; text-align:center; }

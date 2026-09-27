@@ -164,13 +164,13 @@ def test_agents_tasks_heartbeat_and_ownership():
             "name": "Nova", "role": "整理资料", "model": "本地模型", "description": "测试"})
         assert created.status_code == 201
         agent_id = created.json()["id"]
-        assert created.json()["status"] == "idle"
+        assert created.json()["status"] == "offline"
         assert client.get("/api/v1/agents", headers=second).json() == []
         assert client.get(f"/api/v1/agents/{agent_id}", headers=second).status_code == 404
         assert client.patch(f"/api/v1/agents/{agent_id}", headers=second, json={"name": "非法修改"}).status_code == 404
         assert client.post(f"/api/v1/agents/{agent_id}/heartbeat", headers=second, json={"status": "running"}).status_code == 404
         assert client.delete(f"/api/v1/agents/{agent_id}", headers=second).status_code == 404
-        assert client.patch(f"/api/v1/agents/{agent_id}", headers=first, json={"enabled": False}).json()["status"] == "offline"
+        assert client.patch(f"/api/v1/agents/{agent_id}", headers=first, json={"enabled": False}).json()["status"] == "disabled"
         assert client.post(f"/api/v1/agents/{agent_id}/heartbeat", headers=first, json={"status": "running"}).status_code == 409
         assert client.patch(f"/api/v1/agents/{agent_id}", headers=first, json={"enabled": True, "name": "Nova 2"}).json()["name"] == "Nova 2"
         assert client.post(f"/api/v1/agents/{agent_id}/heartbeat", headers=first,
@@ -184,7 +184,12 @@ def test_agents_tasks_heartbeat_and_ownership():
         assert client.delete(f"/api/v1/agents/{agent_id}/tasks/{task_id}", headers=second).status_code == 404
         updated = client.patch(f"/api/v1/agents/{agent_id}/tasks/{task_id}", headers=first,
                                json={"status": "completed"})
-        assert updated.json()["status"] == "completed"
+        assert updated.status_code == 409
+        token = client.post(f"/api/v1/agents/{agent_id}/token", headers=first).json()["token"]
+        runtime = {"Authorization": f"Bearer {token}"}
+        assert client.post(f"/api/agent/tasks/{task_id}/claim", headers=runtime).status_code == 200
+        assert client.post(f"/api/agent/tasks/{task_id}/complete", headers=runtime,
+                           json={"result": {"text": "done"}}).status_code == 200
         persisted = client.get(f"/api/v1/agents/{agent_id}", headers=first).json()
         assert persisted["tasks"][0]["title"] == "整理报告"
         assert persisted["successRate"] == "100%"
