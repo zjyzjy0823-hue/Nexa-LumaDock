@@ -7,6 +7,7 @@ const emit = defineEmits<{ navigate: [page: string]; create: [kind: string] }>()
 const pageTitles: Record<string, string> = {
   Websites: '网站', Devices: '设备', Agents: '智能体',
   Data: '数据', Ledger: '账本', Automation: '自动化',
+  API: 'API', Settings: '设置',
 }
 const createItems = [
   { kind: 'website', label: '添加网站', icon: Globe2 },

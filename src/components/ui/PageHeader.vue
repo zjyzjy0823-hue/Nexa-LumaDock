@@ -9,7 +9,7 @@ withDefaults(defineProps<{
 <template>
   <header class="page-header">
     <div class="page-header__copy">
-      <div class="page-header__eyebrow"><span class="page-header__sparkle">✦</span>{{ eyebrow }}</div>
+      <div v-if="eyebrow" class="page-header__eyebrow"><span class="page-header__sparkle">✦</span>{{ eyebrow }}</div>
       <h1>{{ title }}</h1>
       <p v-if="subtitle">{{ subtitle }}</p>
     </div>

@@ -9,11 +9,13 @@ import AgentsPage from './pages/AgentsPage.vue'
 import DataPage from './pages/DataPage.vue'
 import LedgerPage from './pages/LedgerPage.vue'
 import AutomationPage from './pages/AutomationPage.vue'
+import ApiPage from './pages/ApiPage.vue'
+import SettingsPage from './pages/SettingsPage.vue'
 
-type Page = 'Home' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation'
+type Page = 'Home' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings'
 const pagePaths: Record<Page, string> = {
   Home: '/', Websites: '/websites', Devices: '/devices', Agents: '/agents',
-  Data: '/data', Ledger: '/ledger', Automation: '/automation',
+  Data: '/data', Ledger: '/ledger', Automation: '/automation', API: '/api', Settings: '/settings',
 }
 const pageByPath = Object.fromEntries(Object.entries(pagePaths).map(([key, value]) => [value, key])) as Record<string, Page>
 function pageFromLocation(): Page {
@@ -26,6 +28,7 @@ const currentPage = ref<Page>(pageFromLocation())
 const currentComponent = computed(() => ({
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
+  API: ApiPage, Settings: SettingsPage,
 })[currentPage.value as Exclude<Page, 'Home'>])
 const pageRef = ref<{ openCreate: () => void } | null>(null)
 const toast = ref('')
@@ -76,8 +79,8 @@ onUnmounted(() => {
   <div v-else class="workspace-shell nexa-shell">
     <Sidebar :active-item="currentPage" @select="navigate" />
     <main class="workspace-main">
-      <TopSearchBar :current-page="currentPage" @navigate="navigate" @create="create" />
-      <div class="workspace-content"><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" /></div>
+      <TopSearchBar v-if="currentPage !== 'API' && currentPage !== 'Settings'" :current-page="currentPage" @navigate="navigate" @create="create" />
+      <div class="workspace-content"><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" @navigate="navigate" /></div>
     </main>
     <Transition name="workspace-toast"><div v-if="toast" class="workspace-toast" role="status">✦ <span>{{ toast }}</span></div></Transition>
   </div>

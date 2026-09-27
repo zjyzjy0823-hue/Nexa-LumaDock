@@ -23,10 +23,7 @@ function showToast(message: string) {
 }
 
 const { board, desktop, editing, activeWidget, scale, begin, keyAdjust, finish, resetWidget, resetAll, loadGuest } = useWidgetLayout(showToast)
-const navSections: Record<string, string> = {
-  Websites: 'quick-access', Devices: 'devices', Agents: 'agents', Data: 'collections',
-  Ledger: 'ledger', Automation: 'automation', API: 'system',
-}
+const destinationPages = ['Websites', 'Devices', 'Agents', 'Data', 'Ledger', 'Automation', 'API', 'Settings']
 
 function focusSection(id: string) {
   const section = document.getElementById(id)
@@ -40,9 +37,7 @@ function focusSection(id: string) {
 function selectNav(item: string) {
   activeItem.value = item
   if (item === 'Home') window.scrollTo({ top: 0, behavior: 'smooth' })
-  else if (['Websites', 'Devices', 'Agents', 'Data', 'Ledger', 'Automation'].includes(item)) emit('navigate', item)
-  else if (navSections[item]) focusSection(navSections[item])
-  else showToast('设置功能即将推出。')
+  else if (destinationPages.includes(item)) emit('navigate', item)
 }
 onMounted(async () => {
   try {

@@ -9,7 +9,7 @@ interface CreateAction {
   icon: Component
 }
 
-withDefaults(defineProps<{ createItems: CreateAction[]; addLabel?: string }>(), { addLabel: '新建' })
+withDefaults(defineProps<{ createItems: CreateAction[]; addLabel?: string; showCreate?: boolean }>(), { addLabel: '新建', showCreate: true })
 const emit = defineEmits<{ create: [kind: string]; opened: [] }>()
 const root = ref<HTMLElement | null>(null)
 const openMenu = ref<'notifications' | 'create' | null>(null)
@@ -55,7 +55,7 @@ defineExpose({ closeMenus })
       </div>
     </div>
 
-    <div class="tool-wrap">
+    <div v-if="showCreate" class="tool-wrap">
       <button class="topbar__new" :aria-expanded="openMenu === 'create'" :aria-label="addLabel" type="button" @click="toggleMenu('create')"><Plus :size="26" :stroke-width="1.65" /></button>
       <div v-if="openMenu === 'create'" class="toolbar-popover create-panel">
         <div class="popover-heading">新建</div>
