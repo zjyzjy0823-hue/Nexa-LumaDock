@@ -1,4 +1,4 @@
-# Nexa-LumaDock — v0.4 Real Device Runtime
+# Nexa-LumaDock — v0.4.1 Runtime Hardening
 
 Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger** 已接入数据库。Dashboard widgets now use persistent user-scoped data.
 
@@ -132,6 +132,22 @@ Nexa-LumaDock can receive runtime metrics from the Windows Device Client. 数据
 5. 运行 `python main.py`，按 Ctrl+C 停止；`python main.py --once` 可发送一次心跳用于检查。
 
 Device Token should be treated as a secret. `config.json` contains a secret. Do not commit it. 服务器仅保存 SHA-256 hash 和末四位；Token 只可调用自己的设备心跳，不能访问用户资源。客户端仅支持 Windows，第一版只统计 Windows 系统盘；无电池或无法取得局域网 IP 时字段为 `null`。没有远程控制、命令执行、进程管理、Agent Runtime、Automation Engine，也没有 WebSocket 实时推送。
+
+## Security Notes
+
+Device Token is a long-lived bearer credential. It can be intercepted over HTTP. Use HTTPS for production and cross-machine deployments. The Windows client permits HTTP only for `localhost` and `127.0.0.1` by default. Trusted LAN development can explicitly set `"allowInsecureHttp": true` in `config.json`; the token is then exposed to network eavesdropping. Device Token can be revoked in the Devices dialog, immediately stopping the current client from reporting.
+
+## Migration Policy
+
+Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen after this v0.4.1 repair. Every future schema change requires a new revision (0007, 0008, and so on); historical migrations must never import current ORM models or `Base.metadata`.
+
+## CI
+
+GitHub Actions runs three jobs on pushes and pull requests: frontend build, backend pytest, and Windows device client compile/test.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 首页天气卡片在浏览器允许定位后，从 [BigDataCloud](https://www.bigdatacloud.com/geocoding-apis/free-reverse-geocode-to-city-api) 获取城市，并从 [Open-Meteo](https://open-meteo.com/en/docs) 获取该位置的天气。拒绝定位时会尝试按 IP 显示大致城市，卡片标注“约”。位置请求由浏览器直接发出，成功结果和失败状态均缓存 30 分钟，避免每次进入首页重复请求；点击卡片中的位置可手动重试。
 

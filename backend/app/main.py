@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,8 @@ from .api.devices.routes import router as devices_router, legacy_router as legac
 from .api.websites import router as websites_router
 from .realtime.events import Event
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -28,7 +31,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Nexa API", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Nexa API", version="0.4.1", lifespan=lifespan)
 origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -57,7 +60,9 @@ async def http_error(_request: Request, exc: HTTPException):
 
 
 @app.exception_handler(Exception)
-async def api_error(_request: Request, _exc: Exception):
+async def api_error(request: Request, exc: Exception):
+    logger.error("Unhandled API error on %s %s", request.method, request.url.path,
+                 exc_info=(type(exc), exc, exc.__traceback__))
     return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": "Internal server error"}})
 
 

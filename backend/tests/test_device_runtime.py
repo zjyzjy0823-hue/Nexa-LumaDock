@@ -5,13 +5,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.main import app
-from app.models import (Agent, ApiKey, AutomationWorkflow, DataCollection, Device,
-                        LedgerCategory, User, Website)
+from app.models import Device
 
 
 def make_device(client, headers):
@@ -69,6 +68,8 @@ def test_device_token_heartbeat_isolation_and_lifecycle(client, users):
     assert record["diskUsed"] == 482343000000
     assert record["lastSeenAt"] is not None
     assert record["tokenLast4"] == first["last4"]
+    for field in ("lastSeenAt", "createdAt", "tokenCreatedAt"):
+        assert record[field].endswith("+00:00")
     assert "token" not in record
     assert client.get(f"/api/v1/devices/{other_device_id}", headers=other).json()["lastSeenAt"] is None
     for path in ("/api/v1/devices", "/api/v1/settings", "/api/v1/agents",
@@ -124,31 +125,55 @@ def test_upgrade_from_0005_preserves_device_and_other_rows(tmp_path: Path):
 
     upgrade("0005_persistent_pages")
     engine = create_engine(f"sqlite:///{db_file}")
-    with Session(engine) as session:
-        session.add(User(id=1, username="owner", email="owner@example.test", password_hash="hash"))
-        session.add(Device(id="device-1", user_id=1, name="Old PC", system="Windows", kind="desktop",
-                           ip="127.0.0.1", cpu=12, memory=34, disk=56))
-        session.add(Website(id="site-1", user_id=1, name="Site", url="https://example.com"))
-        session.add(Agent(id="agent-1", user_id=1, name="Agent"))
-        session.add(DataCollection(id="data-1", user_id=1, name="Data"))
-        session.add(AutomationWorkflow(id="auto-1", user_id=1, name="Auto"))
-        session.add(LedgerCategory(id="ledger-1", user_id=1, name="Food", type="expense"))
-        session.add(ApiKey(id="key-1", user_id=1, token_hash="a" * 64, name="Key", last4="1234", scopes=[]))
-        session.commit()
+    old_columns = {column["name"] for column in inspect(engine).get_columns("devices")}
+    assert "token_hash" not in old_columns
+    assert "hostname" not in old_columns
+    old_schema = MetaData()
+    def insert_old(conn, table_name, **values):
+        table = Table(table_name, old_schema, autoload_with=conn)
+        conn.execute(table.insert().values(**values))
+
+    now = datetime.now(timezone.utc)
     with engine.begin() as conn:
-        conn.execute(text("DROP INDEX ix_devices_token_hash"))
-        for column in ("token_hash", "token_last4", "token_created_at", "hostname", "os", "os_version",
-                       "architecture", "cpu_name", "memory_total", "memory_used", "disk_total", "disk_used",
-                       "uptime_seconds", "local_ip", "client_version"):
-            conn.execute(text(f"ALTER TABLE devices DROP COLUMN {column}"))
+        insert_old(conn, "users", id=1, username="owner", email="owner@example.test", password_hash="hash",
+                   created_at=now, updated_at=now)
+        insert_old(conn, "devices", id="device-1", user_id=1, name="Old PC", system="Windows", kind="mac",
+                   ip="127.0.0.1", location="", cpu=12, memory=34, disk=56, activity_json=[],
+                   created_at=now, updated_at=now)
+        insert_old(conn, "websites", id="site-1", user_id=1, name="Site", url="https://example.com",
+                   favorite=False, order=0, created_at=now, updated_at=now)
+        insert_old(conn, "agents", id="agent-1", user_id=1, name="Agent", role="assistant", description="",
+                   model="none", workspace="default", avatar="spark", enabled=True, runtime_status="idle",
+                   created_at=now, updated_at=now)
+        insert_old(conn, "agent_tasks", id="task-1", agent_id="agent-1", title="Old task",
+                   description="", status="queued", created_at=now, updated_at=now)
+        insert_old(conn, "agent_events", id="event-1", agent_id="agent-1", level="info",
+                   message="Old event", created_at=now)
+        insert_old(conn, "data_collections", id="data-1", user_id=1, name="Data", description="",
+                   icon="custom", tone="blue", created_at=now, updated_at=now)
+        insert_old(conn, "data_records", id="record-1", collection_id="data-1", name="Old record",
+                   status="active", category="", data_json={}, created_at=now, updated_at=now)
+        insert_old(conn, "automation_workflows", id="auto-1", user_id=1, name="Auto", description="",
+                   enabled=True, trigger_type="manual", trigger_config_json={}, workflow_json=[],
+                   created_at=now, updated_at=now)
+        insert_old(conn, "automation_executions", id="execution-1", workflow_id="auto-1", status="success",
+                   started_at=now, finished_at=now, message="", result_json={})
+        insert_old(conn, "ledger_categories", id="ledger-1", user_id=1, name="Food", type="expense",
+                   icon="shopping", created_at=now)
+        insert_old(conn, "ledger_transactions", id="transaction-1", user_id=1, category_id="ledger-1",
+                   type="expense", amount=12, description="Old purchase", merchant="", note="",
+                   occurred_at=now, created_at=now, updated_at=now)
+        insert_old(conn, "api_keys", id="key-1", user_id=1, token_hash="a" * 64, name="Key", last4="1234",
+                   scopes=[], is_active=True, created_at=now)
     engine.dispose()
     upgrade("head")
     engine = create_engine(f"sqlite:///{db_file}")
     with engine.connect() as conn:
         assert {"token_hash", "hostname", "memory_total", "client_version"}.issubset(
             {column["name"] for column in inspect(conn).get_columns("devices")})
-        for table in ("users", "websites", "devices", "agents", "data_collections",
-                      "automation_workflows", "ledger_categories", "api_keys"):
+        for table in ("users", "websites", "devices", "agents", "agent_tasks", "agent_events",
+                      "data_collections", "data_records", "automation_workflows", "automation_executions",
+                      "ledger_categories", "ledger_transactions", "api_keys"):
             assert conn.execute(text(f"SELECT count(*) FROM {table}")).scalar() == 1
-        assert conn.execute(text("SELECT name, cpu, memory, disk, token_hash FROM devices WHERE id='device-1'")).one() == ("Old PC", 12, 34, 56, None)
+        assert conn.execute(text("SELECT name, kind, cpu, memory, disk, token_hash, hostname, memory_total, client_version FROM devices WHERE id='device-1'")).one() == ("Old PC", "laptop", 12, 34, 56, None, None, None, None)
     engine.dispose()

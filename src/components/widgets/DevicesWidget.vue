@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { Apple, HardDrive, Server, Tablet } from 'lucide-vue-next'
+import { HardDrive, Laptop, Monitor, Server, Tablet } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useDevicesStore } from '../../stores/devices'
@@ -10,7 +10,7 @@ const store = useDevicesStore()
 const onlineCount = computed(() => store.devices.filter(device => device.online).length)
 const deviceSnapshots = computed(() => [...store.devices].sort((a, b) =>
   (b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0) - (a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0)).slice(0, 4).map(device => ({
-  id: device.id, name: device.name, platform: device.system,
+  id: device.id, name: device.name, platform: device.osVersion || device.os || device.system,
   icon: device.kind,
   online: device.online, cpu: device.cpu, ram: device.memory, disk: device.disk,
   battery: device.battery ?? undefined, activity: device.activity, lastSeenAt: device.lastSeenAt,
@@ -31,8 +31,8 @@ function activityPoints(values: number[]) {
       <p v-else-if="!deviceSnapshots.length" class="widget-empty">{{ !store.loadedAt ? '正在加载设备…' : '还没有设备' }}</p>
       <div v-for="device in deviceSnapshots" :key="device.id" class="device-row">
         <span class="device-icon" :class="`device-icon--${device.icon}`" aria-hidden="true">
-          <span v-if="device.icon === 'desktop'" class="windows-mark"><i /><i /><i /><i /></span>
-          <Apple v-else-if="device.icon === 'mac'" :size="27" :stroke-width="1.45" fill="currentColor" />
+          <Monitor v-if="device.icon === 'desktop'" :size="27" :stroke-width="1.6" />
+          <Laptop v-else-if="device.icon === 'laptop'" :size="27" :stroke-width="1.6" />
           <svg v-else-if="device.icon === 'phone'" class="android-mark" viewBox="0 0 36 36">
             <path d="m8 13 3-5m17 5-3-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
             <path d="M7 15a11 11 0 0 1 22 0Z" fill="currentColor" />
@@ -76,7 +76,7 @@ function activityPoints(values: number[]) {
 .device-row { display: grid; grid-template-columns: 37px minmax(0,1fr) 62px 72px 60px; align-items: center; gap: 7px; min-width: 0; min-height: 0; padding: 5px 11px; border: 1px solid rgba(255,255,255,.5); border-radius: 15px; background: linear-gradient(110deg, rgba(247,249,255,.76), rgba(231,238,255,.64)); box-shadow: inset 0 1px 0 rgba(255,255,255,.58); transition: transform .2s ease, background .2s ease; }
 .device-row:hover { transform: translateX(2px); background: rgba(255,255,255,.85); }
 .device-icon { display: grid; width: 34px; height: 34px; place-items: center; }
-.device-icon--mac { color: #353a48; }
+.device-icon--laptop { color: #353a48; }
 .device-icon--phone { color: #61bb38; }
 .android-mark { width: 32px; height: 32px; }
 .windows-mark { display: grid; width: 25px; height: 25px; grid-template-columns: repeat(2,1fr); gap: 2px; transform: perspective(35px) rotateY(-9deg); }

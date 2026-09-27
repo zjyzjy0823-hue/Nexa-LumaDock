@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -11,20 +11,17 @@ from ..database import get_db
 from ..models import ApiKey, User, utcnow
 from ..schemas import ApiKeyCreate, ApiKeyCreated, ApiKeyPublic, ApiKeyStatusUpdate
 from ..security import current_user
+from ..utils.time import aware_utc
 
 router = APIRouter(prefix="/api/api-keys", tags=["api-keys"])
 
 
-def utc(value: datetime | None) -> datetime | None:
-    return value.replace(tzinfo=timezone.utc) if value and value.tzinfo is None else value
-
-
 def public_key(item: ApiKey) -> ApiKeyPublic:
-    expires_at = utc(item.expires_at)
+    expires_at = aware_utc(item.expires_at)
     status = "expired" if expires_at and expires_at <= utcnow() else "active" if item.is_active else "inactive"
     return ApiKeyPublic(
         id=item.id, name=item.name, status=status, masked_key=f"sk_live_••••{item.last4}",
-        scopes=item.scopes, created_at=utc(item.created_at), last_used_at=utc(item.last_used_at),
+        scopes=item.scopes, created_at=aware_utc(item.created_at), last_used_at=aware_utc(item.last_used_at),
         expires_at=expires_at,
     )
 
@@ -55,7 +52,7 @@ def set_api_key_status(id: str, payload: ApiKeyStatusUpdate, user: User = Depend
     item = db.scalar(select(ApiKey).where(ApiKey.id == id, ApiKey.user_id == user.id))
     if item is None:
         raise HTTPException(404, "API Key not found")
-    if payload.status == "active" and item.expires_at and utc(item.expires_at) <= utcnow():
+    if payload.status == "active" and item.expires_at and aware_utc(item.expires_at) <= utcnow():
         raise HTTPException(409, "Expired API Key cannot be activated")
     item.is_active = payload.status == "active"
     db.commit()

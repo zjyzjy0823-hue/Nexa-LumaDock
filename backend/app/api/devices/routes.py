@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ...utils.time import iso_utc, aware_utc
 from ...database import get_db
 from ...models import Device, User
 from ...security import current_user, device_from_token, read_user_for
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 legacy_router = APIRouter(prefix="/api/devices", tags=["devices"])
 runtime_router = APIRouter(prefix="/api/device", tags=["device-runtime"])
 
-DeviceKind = Literal["desktop", "mac", "phone", "tablet", "server", "nas"]
+DeviceKind = Literal["desktop", "laptop", "phone", "tablet", "server", "nas"]
 
 
 class DeviceInput(BaseModel):
@@ -72,18 +73,14 @@ class RuntimeHeartbeat(BaseModel):
     clientVersion: str | None = Field(default=None, min_length=1, max_length=40)
 
 
-def aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-
-
 def online(item: Device) -> bool:
-    return bool(item.last_seen_at and (datetime.now(timezone.utc) - aware(item.last_seen_at)).total_seconds() < 120)
+    return bool(item.last_seen_at and (datetime.now(timezone.utc) - aware_utc(item.last_seen_at)).total_seconds() < 120)
 
 
 def last_seen(item: Device) -> str:
     if not item.last_seen_at:
         return "从未连接"
-    seconds = max(0, int((datetime.now(timezone.utc) - aware(item.last_seen_at)).total_seconds()))
+    seconds = max(0, int((datetime.now(timezone.utc) - aware_utc(item.last_seen_at)).total_seconds()))
     if seconds < 60:
         return "刚刚"
     if seconds < 3600:
@@ -97,13 +94,13 @@ def device_json(item: Device) -> dict:
     return dict(id=item.id, name=item.name, system=item.system, ip=item.ip, kind=item.kind,
                 location=item.location, online=online(item), cpu=item.cpu, memory=item.memory,
                 disk=item.disk, battery=item.battery, activity=item.activity_json or [],
-                lastSeen=last_seen(item), lastSeenAt=item.last_seen_at.isoformat() if item.last_seen_at else None,
-                tokenLast4=item.token_last4, tokenCreatedAt=item.token_created_at.isoformat() if item.token_created_at else None,
+                lastSeen=last_seen(item), lastSeenAt=iso_utc(item.last_seen_at),
+                tokenLast4=item.token_last4, tokenCreatedAt=iso_utc(item.token_created_at),
                 hostname=item.hostname, os=item.os, osVersion=item.os_version, architecture=item.architecture,
                 cpuName=item.cpu_name, memoryTotal=item.memory_total, memoryUsed=item.memory_used,
                 diskTotal=item.disk_total, diskUsed=item.disk_used, uptimeSeconds=item.uptime_seconds,
                 localIp=item.local_ip, clientVersion=item.client_version,
-                createdAt=item.created_at.isoformat(), updatedAt=item.updated_at.isoformat())
+                createdAt=iso_utc(item.created_at), updatedAt=iso_utc(item.updated_at))
 
 
 def owned_device(db: Session, user: User, id: str) -> Device:
@@ -174,7 +171,7 @@ def generate_token(id: str, response: Response, user: User = Depends(current_use
     item.token_created_at = datetime.now(timezone.utc)
     db.commit()
     return {"deviceId": item.id, "token": token, "last4": item.token_last4,
-            "createdAt": item.token_created_at.isoformat()}
+            "createdAt": iso_utc(item.token_created_at)}
 
 
 @router.delete("/{id}/token", status_code=204)
@@ -208,7 +205,7 @@ def runtime_heartbeat(payload: RuntimeHeartbeat, item: Device = Depends(device_f
     item.activity_json = [*(item.activity_json or []), item.cpu][-14:]
     item.last_seen_at = datetime.now(timezone.utc)
     db.commit()
-    return {"ok": True, "deviceId": item.id, "lastSeenAt": item.last_seen_at.isoformat(), "online": online(item)}
+    return {"ok": True, "deviceId": item.id, "lastSeenAt": iso_utc(item.last_seen_at), "online": online(item)}
 
 
 @router.post("/{id}/heartbeat")

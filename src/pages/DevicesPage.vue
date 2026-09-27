@@ -80,7 +80,7 @@ const filters: { label: string; value: DeviceFilter }[] = [
 ]
 
 function deviceIcon(kind: DeviceKind) {
-  return { desktop: Monitor, mac: Laptop, phone: Smartphone, tablet: Tablet, server: Server, nas: HardDrive }[kind]
+  return { desktop: Monitor, laptop: Laptop, phone: Smartphone, tablet: Tablet, server: Server, nas: HardDrive }[kind]
 }
 
 function sparkline(values: number[], width = 130, height = 35) {
@@ -139,6 +139,18 @@ async function generateToken() {
   tokenError.value = ''
   try { generatedToken.value = (await store.generateToken(auth.token, selectedDevice.value.id)).token }
   catch (error) { tokenError.value = error instanceof Error ? error.message : '生成失败' }
+  finally { tokenBusy.value = false }
+}
+async function revokeToken() {
+  const item = selectedDevice.value
+  if (!auth.token || !item?.tokenLast4 || tokenBusy.value || !window.confirm(`撤销「${item.name}」的 Device Token？当前客户端将无法继续上报。`)) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  try {
+    await store.revokeToken(auth.token, item.id)
+    closeTokenDialog()
+    emit('action', 'Device Token 已撤销，当前客户端将无法继续上报。')
+  } catch (error) { tokenError.value = error instanceof Error ? error.message : '撤销失败' }
   finally { tokenBusy.value = false }
 }
 async function copyToken() {
@@ -229,7 +241,7 @@ async function copyToken() {
         <div class="detail-panel__identity">
           <span class="detail-icon" :class="`device-glyph--${selectedDevice.kind}`"><component :is="deviceIcon(selectedDevice.kind)" :size="31" :stroke-width="1.7" /></span>
           <div class="detail-name"><div class="detail-name__title"><h3>{{ selectedDevice.name }}</h3><StatusBadge :label="selectedDevice.online ? '在线' : '离线'" :tone="selectedDevice.online ? 'success' : 'neutral'" /></div><p>{{ selectedDevice.hostname || '等待设备上报主机名' }}</p></div>
-          <div class="detail-meta"><div><span>Windows</span><strong>{{ selectedDevice.osVersion || selectedDevice.system }}</strong></div><div><span>架构</span><strong>{{ selectedDevice.architecture || '—' }}</strong></div><div><span>局域网 IP</span><strong>{{ selectedDevice.localIp || '—' }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location || '未设置' }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div><div><span>Client</span><strong>{{ selectedDevice.clientVersion || '—' }}</strong></div></div>
+          <div class="detail-meta"><div><span>操作系统</span><strong>{{ selectedDevice.osVersion || selectedDevice.os || selectedDevice.system }}</strong></div><div><span>架构</span><strong>{{ selectedDevice.architecture || '—' }}</strong></div><div><span>局域网 IP</span><strong>{{ selectedDevice.localIp || '—' }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location || '未设置' }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div><div><span>Client</span><strong>{{ selectedDevice.clientVersion || '—' }}</strong></div></div>
           <div class="device-detail-actions"><ActionButton variant="secondary" size="sm" @click="openEdit">编辑设备</ActionButton><ActionButton variant="secondary" size="sm" @click="openTokenDialog">{{ selectedDevice.tokenLast4 ? '重新生成 Device Token' : '生成 Device Token' }}</ActionButton><ActionButton variant="secondary" size="sm" @click="removeDevice">删除设备</ActionButton></div>
           <p class="device-token-mask">{{ selectedDevice.tokenLast4 ? `当前 Token：nd_live_••••${selectedDevice.tokenLast4}` : '尚未生成 Device Token' }}</p>
         </div>
@@ -241,7 +253,7 @@ async function copyToken() {
               <div class="resource-item__track"><i :style="{ width: selectedDevice.lastSeenAt ? `${metric.value}%` : '0%' }" /></div>
             </div>
           </div>
-          <div class="detail-trend"><span>活动趋势</span><svg viewBox="0 0 390 43" preserveAspectRatio="none" aria-hidden="true"><polyline :points="sparkline(selectedDevice.activity, 390, 43)" /></svg><span>24 小时</span></div>
+          <div class="detail-trend"><span>活动趋势</span><svg viewBox="0 0 390 43" preserveAspectRatio="none" aria-hidden="true"><polyline :points="sparkline(selectedDevice.activity, 390, 43)" /></svg><span>最近 14 次心跳</span></div>
         </div>
       </div>
     </SectionContainer>
@@ -250,7 +262,7 @@ async function copyToken() {
       <div class="device-dialog" role="dialog" aria-modal="true" aria-labelledby="device-token-title" @keydown.esc="closeTokenDialog">
         <div class="device-dialog__header"><div><span>DEVICE TOKEN</span><h2 id="device-token-title">{{ selectedDevice?.tokenLast4 ? '管理 Device Token' : '生成 Device Token' }}</h2><p>此令牌只允许这台设备发送心跳。</p></div><button type="button" class="device-dialog__close" aria-label="关闭" @click="closeTokenDialog"><X :size="18" /></button></div>
         <template v-if="generatedToken"><p class="device-token-warning">该 Token 仅显示一次，请立即保存。重新生成后旧 Token 立即失效。</p><input class="device-token-value" :value="generatedToken" readonly aria-label="新生成的 Device Token" @focus="($event.target as HTMLInputElement).select()" /><div class="device-dialog__actions"><ActionButton variant="secondary" type="button" @click="copyToken">复制</ActionButton><ActionButton variant="primary" type="button" @click="closeTokenDialog">完成</ActionButton></div></template>
-        <template v-else><p class="device-token-warning">{{ selectedDevice?.tokenLast4 ? `当前 Token：nd_live_••••${selectedDevice.tokenLast4}。重新生成会立即停用旧 Token。` : '生成后请将 Token 保存到 Windows Client 的 config.json。' }}</p><div class="device-dialog__actions"><ActionButton variant="secondary" type="button" @click="closeTokenDialog">取消</ActionButton><ActionButton variant="primary" type="button" :disabled="tokenBusy" @click="generateToken">{{ tokenBusy ? '生成中…' : selectedDevice?.tokenLast4 ? '重新生成' : '生成 Token' }}</ActionButton></div></template>
+        <template v-else><p class="device-token-warning">{{ selectedDevice?.tokenLast4 ? `当前 Token：nd_live_••••${selectedDevice.tokenLast4}。重新生成会立即停用旧 Token。` : '生成后请将 Token 保存到 Windows Client 的 config.json。' }}</p><div class="device-dialog__actions"><ActionButton v-if="selectedDevice?.tokenLast4" variant="secondary" type="button" :disabled="tokenBusy" @click="revokeToken">撤销 Token</ActionButton><ActionButton variant="secondary" type="button" @click="closeTokenDialog">取消</ActionButton><ActionButton variant="primary" type="button" :disabled="tokenBusy" @click="generateToken">{{ tokenBusy ? '生成中…' : selectedDevice?.tokenLast4 ? '重新生成' : '生成 Token' }}</ActionButton></div></template>
         <p v-if="tokenError" class="device-form-error" role="alert">{{ tokenError }}</p>
       </div>
     </div>
@@ -263,7 +275,7 @@ async function copyToken() {
           <label>操作系统<input v-model="draft.system" required placeholder="例如：Windows 11" /></label>
           <label>IP 地址<input v-model="draft.ip" required placeholder="例如：192.168.31.120" /></label>
           <label>设备位置<input v-model="draft.location" placeholder="例如：书房" /></label>
-          <label>设备类型<span class="device-dialog__select"><select v-model="draft.kind"><option value="desktop">台式电脑</option><option value="mac">笔记本电脑</option><option value="phone">手机</option><option value="tablet">平板电脑</option><option value="server">服务器</option><option value="nas">NAS</option></select><ChevronDown :size="16" /></span></label>
+          <label>设备类型<span class="device-dialog__select"><select v-model="draft.kind"><option value="desktop">台式电脑</option><option value="laptop">笔记本电脑</option><option value="phone">手机</option><option value="tablet">平板电脑</option><option value="server">服务器</option><option value="nas">NAS</option></select><ChevronDown :size="16" /></span></label>
         </div>
         <p v-if="formError" class="device-form-error" role="alert">{{ formError }}</p>
         <div class="device-dialog__actions"><ActionButton variant="secondary" type="button" :disabled="saving" @click="showAddDialog = false">取消</ActionButton><ActionButton variant="primary" type="submit" :disabled="saving"><Plus :size="16" />{{ saving ? '保存中…' : dialogMode === 'edit' ? '保存修改' : '添加设备' }}</ActionButton></div>
@@ -292,7 +304,7 @@ async function copyToken() {
 .device-card :deep(.glass-card__body) { display: flex; flex-direction: column; overflow: visible; }
 .device-card__top { display: flex; justify-content: space-between; align-items: flex-start; }
 .device-glyph { display: grid; width: 45px; height: 45px; flex: none; place-items: center; border: 1px solid rgba(136,163,244,.20); border-radius: 14px; background: linear-gradient(145deg, #eff3ff, #e3eaff); color: #6281d8; box-shadow: inset 0 1px 0 #fff; }
-.device-glyph--mac { background: linear-gradient(145deg, #f4f1ff, #eae5ff); color: #8a75cb; }
+.device-glyph--laptop { background: linear-gradient(145deg, #f4f1ff, #eae5ff); color: #8a75cb; }
 .device-glyph--phone, .device-glyph--tablet { background: linear-gradient(145deg, #effbf9, #e0f3f1); color: #4baea3; }
 .device-glyph--server, .device-glyph--nas { background: linear-gradient(145deg, #f0f3ff, #e4ebf8); color: #637caa; }
 .device-card__identity { margin-top: 14px; }

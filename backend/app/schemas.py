@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+
+from .utils.time import iso_utc
 
 
 class UserCreate(BaseModel):
@@ -26,6 +28,10 @@ class UserPublic(BaseModel):
     username: str
     avatar: str | None
     created_at: datetime
+
+    @field_serializer("created_at", when_used="json")
+    def serialize_created_at(self, value: datetime) -> str:
+        return iso_utc(value)
 
 
 class TokenResponse(BaseModel):
@@ -75,6 +81,10 @@ class DashboardPublic(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("created_at", "updated_at", when_used="json")
+    def serialize_timestamp(self, value: datetime) -> str:
+        return iso_utc(value)
+
 
 ApiScope = Literal["Devices", "Agents", "Data", "Automation", "Read"]
 ApiKeyStatus = Literal["active", "inactive", "expired"]
@@ -112,6 +122,10 @@ class ApiKeyPublic(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     expires_at: datetime | None
+
+    @field_serializer("created_at", "last_used_at", "expires_at", when_used="json")
+    def serialize_timestamp(self, value: datetime | None) -> str | None:
+        return iso_utc(value)
 
 
 class ApiKeyCreated(ApiKeyPublic):

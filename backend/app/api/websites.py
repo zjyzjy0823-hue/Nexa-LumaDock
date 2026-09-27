@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from ..utils.time import iso_utc
 from ..database import get_db
 from ..models import User, Website, WebsiteCategory
 from ..security import current_user
@@ -50,8 +51,8 @@ def website_json(item: Website) -> dict:
     return dict(id=item.id, name=item.name, url=item.url, icon=item.icon,
                 description=item.description, categoryId=item.category_id,
                 favorite=item.favorite, order=item.order,
-                createdAt=item.created_at.isoformat(), updatedAt=item.updated_at.isoformat(),
-                lastVisitedAt=item.last_visited_at.isoformat() if item.last_visited_at else None)
+                createdAt=iso_utc(item.created_at), updatedAt=iso_utc(item.updated_at),
+                lastVisitedAt=iso_utc(item.last_visited_at))
 
 
 class CategoryInput(BaseModel):

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..utils.time import iso_utc
 from ..database import get_db
 from ..models import LedgerCategory, LedgerTransaction, User
 from ..security import current_user
@@ -73,14 +74,14 @@ def transaction_or_404(db: Session, user: User, id: str) -> LedgerTransaction:
 
 
 def category_out(item: LedgerCategory) -> dict:
-    return {"id": item.id, "name": item.name, "type": item.type, "icon": item.icon, "createdAt": item.created_at}
+    return {"id": item.id, "name": item.name, "type": item.type, "icon": item.icon, "createdAt": iso_utc(item.created_at)}
 
 
 def transaction_out(item: LedgerTransaction) -> dict:
     return {"id": item.id, "categoryId": item.category_id, "categoryName": item.category.name if item.category else None,
             "type": item.type, "amount": str(item.amount), "description": item.description,
-            "occurredAt": item.occurred_at, "merchant": item.merchant, "note": item.note,
-            "createdAt": item.created_at, "updatedAt": item.updated_at}
+            "occurredAt": iso_utc(item.occurred_at), "merchant": item.merchant, "note": item.note,
+            "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
 
 
 def check_category(db: Session, user: User, category_id: str | None, kind: str):

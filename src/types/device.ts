@@ -1,4 +1,4 @@
-export type DeviceKind = 'desktop' | 'mac' | 'phone' | 'tablet' | 'server' | 'nas'
+export type DeviceKind = 'desktop' | 'laptop' | 'phone' | 'tablet' | 'server' | 'nas'
 
 export interface Device {
   id: string

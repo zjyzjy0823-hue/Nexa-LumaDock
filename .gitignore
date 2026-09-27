@@ -11,3 +11,5 @@ backend/.venv/
 backend/.env
 device-client/config.json
 device-client/__pycache__/
+device-client/**/__pycache__/
+device-client/.pytest_cache/

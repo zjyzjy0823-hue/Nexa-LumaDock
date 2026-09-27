@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from ...utils.time import iso_utc
 from ...database import get_db
 from ...models import DataCollection, DataRecord, User
 from ...security import current_user, read_user_for
@@ -72,13 +73,13 @@ def record_or_404(db: Session, user: User, id: str) -> DataRecord:
 
 def record_out(item: DataRecord) -> dict:
     return {"id": item.id, "collectionId": item.collection_id, "name": item.name, "status": item.status,
-            "category": item.category, "dataJson": item.data_json, "createdAt": item.created_at, "updatedAt": item.updated_at}
+            "category": item.category, "dataJson": item.data_json, "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
 
 
 def collection_out(item: DataCollection) -> dict:
     return {"id": item.id, "name": item.name, "description": item.description, "icon": item.icon,
             "tone": item.tone, "recordCount": len(item.records), "records": [record_out(record) for record in item.records],
-            "createdAt": item.created_at, "updatedAt": item.updated_at}
+            "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
 
 
 @router.get("")

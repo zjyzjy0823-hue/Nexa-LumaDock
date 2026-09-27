@@ -1,5 +1,6 @@
 {
   "serverUrl": "http://127.0.0.1:8000",
   "deviceToken": "nd_live_replace_with_your_device_token",
-  "intervalSeconds": 30
+  "intervalSeconds": 30,
+  "allowInsecureHttp": false
 }

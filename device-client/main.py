@@ -31,11 +31,9 @@ def run(once: bool = False) -> int:
         except DeviceTokenRejected as error:
             print(error)
             return 1
-        except HeartbeatValidationError as error:
-            print(error)
-            if once:
-                return 1
-            delay = 60
+        except HeartbeatValidationError:
+            print("Heartbeat payload rejected by server. Client/server versions may be incompatible.")
+            return 1
         except (requests.RequestException, OSError) as error:
             failures += 1
             delay = min(60, 5 * 2 ** min(failures - 1, 4))

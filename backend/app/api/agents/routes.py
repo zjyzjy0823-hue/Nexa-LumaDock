@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ...utils.time import iso_utc, aware_utc
 from ...database import get_db
 from ...models import Agent, AgentEvent, AgentTask, User
 from ...security import current_user, read_user_for
@@ -67,14 +68,10 @@ class AgentHeartbeat(BaseModel):
     status: Literal["running", "idle"] = "idle"
 
 
-def aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-
-
 def elapsed(value: datetime | None) -> str:
     if value is None:
         return "尚未连接"
-    seconds = max(0, int((datetime.now(timezone.utc) - aware(value)).total_seconds()))
+    seconds = max(0, int((datetime.now(timezone.utc) - aware_utc(value)).total_seconds()))
     if seconds < 60:
         return "刚刚"
     if seconds < 3600:
@@ -87,15 +84,15 @@ def elapsed(value: datetime | None) -> str:
 def effective_status(item: Agent) -> str:
     if not item.enabled:
         return "offline"
-    if item.last_seen_at and (datetime.now(timezone.utc) - aware(item.last_seen_at)).total_seconds() < 120:
+    if item.last_seen_at and (datetime.now(timezone.utc) - aware_utc(item.last_seen_at)).total_seconds() < 120:
         return item.runtime_status
     return "idle"
 
 
 def task_json(item: AgentTask) -> dict:
     return dict(id=item.id, title=item.title, description=item.description, status=item.status,
-                time=elapsed(item.created_at), createdAt=item.created_at.isoformat(),
-                updatedAt=item.updated_at.isoformat())
+                time=elapsed(item.created_at), createdAt=iso_utc(item.created_at),
+                updatedAt=iso_utc(item.updated_at))
 
 
 def agent_json(item: Agent, db: Session) -> dict:
@@ -108,12 +105,12 @@ def agent_json(item: Agent, db: Session) -> dict:
                 status=effective_status(item), enabled=item.enabled, avatar=item.avatar,
                 model=item.model, workspace=item.workspace,
                 successRate=f"{round(completed / len(tasks) * 100)}%" if tasks else "—",
-                callsToday=0, tasksToday=sum(aware(task.created_at).date() == datetime.now(timezone.utc).date() for task in tasks),
+                callsToday=0, tasksToday=sum(aware_utc(task.created_at).date() == datetime.now(timezone.utc).date() for task in tasks),
                 uptime=elapsed(item.last_seen_at) if item.last_seen_at else "尚未连接",
-                lastActive=elapsed(item.last_seen_at), lastSeenAt=item.last_seen_at.isoformat() if item.last_seen_at else None,
+                lastActive=elapsed(item.last_seen_at), lastSeenAt=iso_utc(item.last_seen_at),
                 capabilities=[], tasks=[task_json(task) for task in tasks],
                 logs=[dict(time=event.created_at.strftime("%H:%M"), level=event.level, message=event.message) for event in events],
-                apiCalls=[], createdAt=item.created_at.isoformat(), updatedAt=item.updated_at.isoformat())
+                apiCalls=[], createdAt=iso_utc(item.created_at), updatedAt=iso_utc(item.updated_at))
 
 
 def owned_agent(db: Session, user: User, id: str) -> Agent:
