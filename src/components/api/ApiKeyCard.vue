@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { Copy, KeyRound, MoreHorizontal, Power } from 'lucide-vue-next'
+import { KeyRound, MoreHorizontal, Power } from 'lucide-vue-next'
 import StatusBadge from '../ui/StatusBadge.vue'
-import type { ApiKey } from '../../types/api'
+import type { ApiKeyPublic } from '../../types/api'
 
-const props = defineProps<{ apiKey: ApiKey }>()
-const emit = defineEmits<{ copy: [apiKey: ApiKey]; toggleStatus: [id: string] }>()
+const props = defineProps<{ apiKey: ApiKeyPublic; busy?: boolean }>()
+const emit = defineEmits<{ toggleStatus: [id: string] }>()
 const root = ref<HTMLElement | null>(null)
 const menuOpen = ref(false)
 
@@ -16,6 +16,9 @@ function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape') menuOpen.
 function toggleStatus() {
   emit('toggleStatus', props.apiKey.id)
   menuOpen.value = false
+}
+function formatTime(value: string | null) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '尚未使用'
 }
 onMounted(() => {
   document.addEventListener('pointerdown', onPointerDown)
@@ -31,17 +34,18 @@ onUnmounted(() => {
   <article ref="root" class="api-key-card">
     <div class="api-key-card__heading">
       <span class="api-key-card__icon"><KeyRound :size="18" :stroke-width="1.8" /></span>
-      <div class="api-key-card__name"><h3>{{ apiKey.name }}</h3><StatusBadge :label="apiKey.status === 'active' ? 'Active' : 'Inactive'" :tone="apiKey.status === 'active' ? 'success' : 'neutral'" /></div>
-      <div class="api-key-card__menu-wrap">
-        <button class="icon-button api-key-card__more" type="button" :aria-label="`${apiKey.name} 更多操作`" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="17" /></button>
+      <div class="api-key-card__name"><h3>{{ apiKey.name }}</h3><StatusBadge :label="apiKey.status === 'active' ? 'Active' : apiKey.status === 'expired' ? 'Expired' : 'Inactive'" :tone="apiKey.status === 'active' ? 'success' : 'neutral'" /></div>
+      <div v-if="apiKey.status !== 'expired'" class="api-key-card__menu-wrap">
+        <button class="icon-button api-key-card__more" type="button" :disabled="busy" :aria-label="`${apiKey.name} 更多操作`" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="17" /></button>
         <div v-if="menuOpen" class="api-key-card__menu" role="menu">
-          <button type="button" role="menuitem" @click="toggleStatus"><Power :size="14" />{{ apiKey.status === 'active' ? '停用密钥' : '启用密钥' }}</button>
+          <button type="button" role="menuitem" :disabled="busy" @click="toggleStatus"><Power :size="14" />{{ apiKey.status === 'active' ? '停用密钥' : '启用密钥' }}</button>
         </div>
       </div>
     </div>
-    <div class="api-key-card__secret"><code>{{ apiKey.maskedKey }}</code><button class="icon-button" type="button" :aria-label="`复制 ${apiKey.name} 的演示 Key`" title="复制演示 Key" @click="emit('copy', apiKey)"><Copy :size="15" /></button></div>
+    <div class="api-key-card__secret"><code>{{ apiKey.masked_key }}</code></div>
     <div class="api-key-card__scopes" aria-label="权限 Scope"><span v-for="scope in apiKey.scopes" :key="scope">{{ scope }}</span></div>
-    <div class="api-key-card__footer"><span>最后使用</span><time>{{ apiKey.lastUsed }}</time></div>
+    <div class="api-key-card__footer"><span>最后使用</span><time>{{ formatTime(apiKey.last_used_at) }}</time></div>
+    <div class="api-key-card__footer"><span>到期时间</span><time>{{ apiKey.expires_at ? formatTime(apiKey.expires_at) : '永不过期' }}</time></div>
   </article>
 </template>
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -74,3 +74,50 @@ class DashboardPublic(BaseModel):
     layout_json: Layout
     created_at: datetime
     updated_at: datetime
+
+
+ApiScope = Literal["Devices", "Agents", "Data", "Automation", "Read"]
+ApiKeyStatus = Literal["active", "inactive", "expired"]
+
+
+class ApiKeyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    scopes: list[ApiScope] = Field(min_length=1)
+    expires_in_days: Literal[30, 90, 365] | None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        value = value.strip()
+        if not 1 <= len(value) <= 48:
+            raise ValueError("Name must contain 1 to 48 characters")
+        return value
+
+    @field_validator("scopes")
+    @classmethod
+    def unique_scopes(cls, value: list[ApiScope]) -> list[ApiScope]:
+        if len(value) != len(set(value)):
+            raise ValueError("Scopes must be unique")
+        return value
+
+
+class ApiKeyPublic(BaseModel):
+    id: str
+    name: str
+    status: ApiKeyStatus
+    masked_key: str
+    scopes: list[ApiScope]
+    created_at: datetime
+    last_used_at: datetime | None
+    expires_at: datetime | None
+
+
+class ApiKeyCreated(ApiKeyPublic):
+    secret: str
+
+
+class ApiKeyStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["active", "inactive"]

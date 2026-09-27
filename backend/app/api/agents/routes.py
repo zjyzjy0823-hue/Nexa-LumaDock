@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models import Agent, AgentEvent, AgentTask, User
-from ...security import current_user
+from ...security import current_user, read_user_for
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 legacy_router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -128,8 +128,16 @@ def add_event(db: Session, agent_id: str, message: str):
 
 
 @router.get("")
-@legacy_router.get("")
 def list_agents(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return agents_for_user(user, db)
+
+
+@legacy_router.get("")
+def list_agents_with_key(user: User = Depends(read_user_for("Agents")), db: Session = Depends(get_db)):
+    return agents_for_user(user, db)
+
+
+def agents_for_user(user: User, db: Session):
     return [agent_json(item, db) for item in db.scalars(select(Agent).where(
         Agent.user_id == user.id).order_by(Agent.created_at.desc(), Agent.id))]
 

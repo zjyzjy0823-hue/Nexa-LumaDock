@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import User
+from .models import ApiKey, User, utcnow
 
 
 JWT_SECRET = os.getenv("JWT_SECRET")
@@ -57,3 +58,30 @@ def current_user(
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+
+def read_user_for(scope: str):
+    def dependency(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+        db: Session = Depends(get_db),
+    ) -> User:
+        if credentials is None:
+            raise HTTPException(401, "Authentication required")
+        secret = credentials.credentials
+        if not secret.startswith("sk_live_"):
+            return current_user(credentials, db)
+        token_hash = hashlib.sha256(secret.encode()).hexdigest()
+        item = db.scalar(select(ApiKey).where(ApiKey.token_hash == token_hash))
+        if item is None or not item.is_active or (item.expires_at and
+                (item.expires_at.replace(tzinfo=timezone.utc) if item.expires_at.tzinfo is None else item.expires_at) <= utcnow()):
+            raise HTTPException(401, "Invalid or expired API Key")
+        user = db.get(User, item.user_id)
+        if user is None:
+            raise HTTPException(401, "API Key owner not found")
+        item.last_used_at = utcnow()
+        db.commit()
+        if scope not in item.scopes and "Read" not in item.scopes:
+            raise HTTPException(403, "Insufficient API Key scope")
+        return user
+
+    return dependency

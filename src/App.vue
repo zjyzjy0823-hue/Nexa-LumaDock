@@ -12,6 +12,7 @@ import LedgerPage from './pages/LedgerPage.vue'
 import AutomationPage from './pages/AutomationPage.vue'
 import ApiPage from './pages/ApiPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
+import { ApiError } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useDashboardStore } from './stores/dashboard'
 import { useWebsitesStore } from './stores/websites'
@@ -33,6 +34,7 @@ function pageFromLocation(): Page {
 const currentPage = ref<Page>(pageFromLocation())
 const auth = useAuthStore()
 const authReady = ref(false)
+const authStartupError = ref('')
 const currentComponent = computed(() => ({
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
@@ -68,6 +70,16 @@ function onLocationChange() {
   currentPage.value = pageFromLocation()
   window.scrollTo({ top: 0, behavior: 'instant' })
 }
+async function restoreSession() {
+  authReady.value = false
+  authStartupError.value = ''
+  try { if (auth.token) await auth.restore() }
+  catch (error) {
+    if (auth.token) authStartupError.value = error instanceof ApiError && (error.status === 0 || error.status >= 500)
+      ? '无法连接到 Nexa 后端，请确认服务已启动。'
+      : error instanceof Error ? error.message : '无法连接到 Nexa 后端。'
+  } finally { authReady.value = true }
+}
 async function create(kind: string) {
   const destination: Record<string, Page> = {
     website: 'Websites', device: 'Devices', agent: 'Agents',
@@ -82,9 +94,7 @@ async function create(kind: string) {
 onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
-  try { if (auth.token) await auth.restore() }
-  catch { /* The account screen allows another login attempt. */ }
-  finally { authReady.value = true }
+  await restoreSession()
 })
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
@@ -95,6 +105,7 @@ onUnmounted(() => {
 
 <template>
   <div v-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
+  <div v-else-if="authStartupError" class="auth-loading auth-loading--error" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></div>
   <AuthGate v-else-if="!auth.user" />
   <DashboardPage v-else-if="currentPage === 'Home'" @navigate="navigate" @create="create" />
   <div v-else class="workspace-shell nexa-shell">
@@ -109,6 +120,9 @@ onUnmounted(() => {
 
 <style scoped>
 .auth-loading { display:grid; min-height:100dvh; place-items:center; color:white; background:#1c2a5e url('/nexa-wallpaper.png') center/cover; font-size:14px; }
+.auth-loading--error { align-content:center; gap:14px; }
+.auth-loading--error p { margin:0; }
+.auth-loading--error button { padding:9px 16px; border:1px solid white; border-radius:9px; color:#30436c; background:white; cursor:pointer; }
 .workspace-main { min-width:0; }
 .workspace-content { min-width:0; padding-bottom:12px; }
 .workspace-toast { position:fixed; z-index:80; right:28px; bottom:25px; display:flex; gap:8px; align-items:center; max-width:min(360px,calc(100vw - 32px)); padding:12px 16px; border:1px solid rgba(255,255,255,.64); border-radius:14px; color:#314263; background:rgba(249,251,255,.9); box-shadow:0 15px 32px rgba(30,42,89,.22); backdrop-filter:blur(22px); font-size:12px; font-weight:630; }

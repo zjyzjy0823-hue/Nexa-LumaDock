@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models import Device, User
-from ...security import current_user
+from ...security import current_user, read_user_for
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 legacy_router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -90,8 +90,12 @@ def list_for_user(user: User, db: Session):
 
 
 @router.get("")
-@legacy_router.get("")
 def list_devices(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return list_for_user(user, db)
+
+
+@legacy_router.get("")
+def list_devices_with_key(user: User = Depends(read_user_for("Devices")), db: Session = Depends(get_db)):
     return list_for_user(user, db)
 
 

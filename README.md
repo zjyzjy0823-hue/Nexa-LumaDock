@@ -1,6 +1,6 @@
 # Nexa
 
-Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Websites、Devices、Agents** 已接入真实数据库；Automation 等页面仍处于演示阶段。
+Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Websites、Devices、Agents、API Keys** 已接入真实数据库；Automation 等页面仍处于演示阶段。
 
 ## 开发启动
 
@@ -51,7 +51,7 @@ Nexa/
 
 ## 数据与认证
 
-默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。`DATABASE_URL` 支持 SQLite 和 PostgreSQL；PostgreSQL 额外安装 `requirements-postgres.txt`，使用 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
+默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。`DATABASE_URL` 支持 SQLite 和 PostgreSQL；PostgreSQL 额外安装 `requirements-postgres.txt`，使用 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
 
 `.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，网站、分类、设备、智能体和任务按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
 
@@ -77,9 +77,14 @@ Nexa/
 | POST | `/api/v1/agents/{id}/heartbeat` | 更新运行时状态与在线时间 |
 | POST | `/api/v1/agents/{id}/tasks` | 创建任务 |
 | PATCH、DELETE | `/api/v1/agents/{id}/tasks/{taskId}` | 更新或删除任务 |
+| GET、POST | `/api/api-keys` | 列出、创建当前账户的 API Key（仅 JWT） |
+| PUT | `/api/api-keys/{id}/status` | 启用或停用 API Key（仅 JWT） |
+| GET | `/api/devices`、`/api/agents`、`/api/data`、`/api/automation` | JWT 或具有对应 scope 的 API Key 读取 |
 | WebSocket | `/ws` | 基础 ping/pong 连接 |
 
-网站列表支持 `categoryId`、`search`、`favorite` 和 `sort=order|name|createdAt|updatedAt|recent`。打开网站会写入最近访问时间，首页快捷访问展示最近打开的网站。添加网站时浏览器会尝试读取该站点的 `/favicon.ico` 或 `/apple-touch-icon.png`，也可手动指定图标。受保护接口须发送 `Authorization: Bearer <token>`。错误结构为 `{ "error": { "code": "...", "message": "..." } }`。旧 `/api/auth` 和 `/api/dashboard` 路径为现有 Dashboard 保留。
+网站列表支持 `categoryId`、`search`、`favorite` 和 `sort=order|name|createdAt|updatedAt|recent`。打开网站会写入最近访问时间，首页快捷访问展示最近打开的网站。添加网站时浏览器会尝试读取该站点的 `/favicon.ico` 或 `/apple-touch-icon.png`，也可手动指定图标。受保护接口须发送 `Authorization: Bearer <token>`。错误响应包含 FastAPI 风格的 `detail`，并保留现有客户端使用的 `error` 字段。旧 `/api/auth` 和 `/api/dashboard` 路径为现有 Dashboard 保留。
+
+API Key 在 API 页面创建；请求体为 `{"name":"Production App","scopes":["Devices"],"expires_in_days":90}`。名称去首尾空白后须为 1–48 个字符；可用 scope 为 `Devices`、`Agents`、`Data`、`Automation`、`Read`，期限为 30、90、365 天或 `null`（永不过期）。`Read` 允许读取上述四个 GET 接口，其他 scope 只允许相应模块。Key 的明文仅在创建成功响应和当次页面弹窗中出现；请立即复制保存，关闭或刷新后无法找回。列表仅显示掩码。停用或过期的 Key 无法调用接口，过期 Key 无法重新启用。Key 不能访问账户、Dashboard、Key 管理或其他写入接口；这些接口仍须使用 JWT。API 页面中的请求日志、用量统计和 Webhook 暂不可用。
 
 设备添加后默认离线。设备端通过带用户 JWT 的 `POST /api/v1/devices/{id}/heartbeat` 发送 `{"cpu":24,"memory":40,"disk":55,"battery":80}`；最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。当前版本未接入实际设备采集程序或 AI 任务执行器，页面不会伪造指标、模型调用或任务完成结果。
 

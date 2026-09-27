@@ -1,6 +1,8 @@
 import os
 import subprocess
 import sys
+import hashlib
+from datetime import timedelta
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = "sqlite://"
@@ -14,6 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.models import ApiKey, utcnow
 from app.main import app
 
 
@@ -205,7 +208,7 @@ def test_migration_upgrades_existing_users(tmp_path: Path):
                             cwd=Path(__file__).parents[1], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     upgraded = create_engine(f"sqlite:///{database_file}")
-    assert {"websites", "website_categories", "user_preferences", "devices", "agents", "agent_tasks", "agent_events"}.issubset(inspect(upgraded).get_table_names())
+    assert {"websites", "website_categories", "user_preferences", "devices", "agents", "agent_tasks", "agent_events", "api_keys"}.issubset(inspect(upgraded).get_table_names())
     with upgraded.connect() as connection:
         assert connection.execute(text("SELECT updated_at FROM users WHERE id = 1")).scalar() is not None
     upgraded.dispose()
@@ -220,3 +223,90 @@ def test_websocket_ping_pong():
             assert event["source"] == "nexa"
             assert event["payload"] == {"id": 1}
             assert event["timestamp"]
+
+
+def test_api_keys_lifecycle_scopes_and_isolation():
+    test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(test_engine)
+
+    def test_db():
+        with Session(test_engine) as db:
+            yield db
+
+    app.dependency_overrides[get_db] = test_db
+    try:
+        with TestClient(app) as client:
+            first = {"Authorization": f"Bearer {register(client, 'key_first')}"}
+            second = {"Authorization": f"Bearer {register(client, 'key_second')}"}
+            payload = {"name": "  Production App  ", "scopes": ["Devices"], "expires_in_days": 90}
+            assert client.get("/api/api-keys").status_code == 401
+            assert client.post("/api/api-keys", json=payload).status_code == 401
+            assert client.get("/api/api-keys", headers={"Authorization": "Bearer invalid"}).status_code == 401
+            for bad in (
+                {**payload, "name": "   "}, {**payload, "name": "x" * 49},
+                {**payload, "scopes": []}, {**payload, "scopes": ["Devices", "Devices"]},
+                {**payload, "scopes": ["Ledger"]}, {**payload, "expires_in_days": 1},
+            ):
+                assert client.post("/api/api-keys", headers=first, json=bad).status_code == 422
+            created = client.post("/api/api-keys", headers=first, json=payload)
+            assert created.status_code == 201
+            assert created.headers["cache-control"] == "no-store"
+            body = created.json()
+            secret = body["secret"]
+            assert secret.startswith("sk_live_") and len(secret) >= 51
+            assert body["name"] == "Production App"
+            assert body["masked_key"] == f"sk_live_••••{secret[-4:]}"
+            assert body["status"] == "active" and body["last_used_at"] is None
+            assert body["created_at"].endswith("Z") or "+00:00" in body["created_at"]
+            assert body["expires_at"]
+            key_id = body["id"]
+            with Session(test_engine) as db:
+                stored = db.get(ApiKey, key_id)
+                assert stored.token_hash == hashlib.sha256(secret.encode()).hexdigest()
+                assert secret not in str(stored.__dict__)
+            listing = client.get("/api/api-keys", headers=first)
+            assert listing.status_code == 200 and len(listing.json()) == 1
+            assert "secret" not in listing.text and "token_hash" not in listing.text
+            assert secret not in listing.text
+            assert client.get("/api/api-keys", headers=second).json() == []
+            assert client.put(f"/api/api-keys/{key_id}/status", headers=second, json={"status": "inactive"}).status_code == 404
+            assert client.put("/api/api-keys/missing/status", headers=first, json={"status": "inactive"}).status_code == 404
+            assert client.put(f"/api/api-keys/{key_id}/status", headers=first, json={"status": "expired"}).status_code == 422
+            key_headers = {"Authorization": f"Bearer {secret}"}
+            for route in ("devices", "agents", "data", "automation"):
+                assert client.get(f"/api/{route}", headers=first).status_code == 200
+                assert client.get(f"/api/{route}", headers=key_headers).status_code == (200 if route == "devices" else 403)
+            assert client.get("/api/api-keys", headers=key_headers).status_code == 401
+            assert client.post("/api/api-keys", headers=key_headers, json=payload).status_code == 401
+            assert client.get("/api/auth/me", headers=key_headers).status_code == 401
+            assert client.get("/api/dashboard", headers=key_headers).status_code == 401
+            assert client.get("/api/v1/devices", headers=key_headers).status_code == 401
+            assert client.get("/api/v1/agents", headers=key_headers).status_code == 401
+            assert client.get("/api/api-keys", headers=first).json()[0]["last_used_at"]
+            stopped = client.put(f"/api/api-keys/{key_id}/status", headers=first, json={"status": "inactive"})
+            assert stopped.json()["status"] == "inactive"
+            assert client.get("/api/devices", headers=key_headers).status_code == 401
+            assert client.put(f"/api/api-keys/{key_id}/status", headers=first, json={"status": "inactive"}).status_code == 200
+            assert client.put(f"/api/api-keys/{key_id}/status", headers=first, json={"status": "active"}).json()["status"] == "active"
+            assert client.get("/api/devices", headers=key_headers).status_code == 200
+            with Session(test_engine) as db:
+                stored = db.get(ApiKey, key_id)
+                stored.expires_at = utcnow() - timedelta(seconds=1)
+                db.commit()
+            assert client.get("/api/api-keys", headers=first).json()[0]["status"] == "expired"
+            assert client.get("/api/devices", headers=key_headers).status_code == 401
+            assert client.put(f"/api/api-keys/{key_id}/status", headers=first, json={"status": "active"}).status_code == 409
+            read = client.post("/api/api-keys", headers=first, json={"name": "Reader", "scopes": ["Read"], "expires_in_days": None}).json()
+            assert read["expires_at"] is None
+            for route in ("devices", "agents", "data", "automation"):
+                assert client.get(f"/api/{route}", headers={"Authorization": f"Bearer {read['secret']}"}).status_code == 200
+            for allowed_route, scope in (("agents", "Agents"), ("data", "Data"), ("automation", "Automation")):
+                scoped = client.post("/api/api-keys", headers=first, json={
+                    "name": f"{scope} client", "scopes": [scope], "expires_in_days": 30,
+                }).json()
+                scoped_headers = {"Authorization": f"Bearer {scoped['secret']}"}
+                for route in ("devices", "agents", "data", "automation"):
+                    assert client.get(f"/api/{route}", headers=scoped_headers).status_code == (200 if route == allowed_route else 403)
+    finally:
+        app.dependency_overrides.clear()
+        test_engine.dispose()

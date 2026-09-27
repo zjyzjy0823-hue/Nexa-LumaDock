@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import auth, dashboard
+from .api import api_keys, auth, dashboard
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router
 from .api.automation.routes import router as automation_router
 from .api.data.routes import router as data_router
@@ -38,7 +38,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 for router in (
-    auth.router, auth.v1_router, dashboard.router, websites_router,
+    auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, agents_router, legacy_agents_router, data_router, automation_router,
 ):
     app.include_router(router)
@@ -46,12 +46,13 @@ for router in (
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(_request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"error": {"code": "validation_error", "message": "Invalid request", "details": [{"field": ".".join(map(str, error["loc"])), "message": error["msg"]} for error in exc.errors()]}})
+    details = [{"field": ".".join(map(str, error["loc"])), "message": error["msg"]} for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": details, "error": {"code": "validation_error", "message": "Invalid request", "details": details}})
 
 
 @app.exception_handler(HTTPException)
 async def http_error(_request: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"error": {"code": "request_error", "message": str(exc.detail)}})
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "error": {"code": "request_error", "message": str(exc.detail)}})
 
 
 @app.exception_handler(Exception)

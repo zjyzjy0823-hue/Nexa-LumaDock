@@ -1,24 +1,26 @@
-export type ApiKeyStatus = 'active' | 'inactive'
-export type ApiScope = 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'Read'
-export type ApiKeyExpiration = '30 days' | '90 days' | '1 year' | 'Never'
+export type ApiKeyStatus = 'active' | 'inactive' | 'expired'
+export type ApiScope = 'Devices' | 'Agents' | 'Data' | 'Automation' | 'Read'
+export type ApiKeyExpirationDays = 30 | 90 | 365 | null
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-export interface ApiKey {
+export interface ApiKeyPublic {
   id: string
   name: string
   status: ApiKeyStatus
-  maskedKey: string
-  secret: string
+  masked_key: string
   scopes: ApiScope[]
-  lastUsed: string
-  expiration: ApiKeyExpiration
+  created_at: string
+  last_used_at: string | null
+  expires_at: string | null
 }
 
-export interface ApiKeyDraft {
+export interface ApiKeyCreate {
   name: string
   scopes: ApiScope[]
-  expiration: ApiKeyExpiration
+  expires_in_days: ApiKeyExpirationDays
 }
+
+export interface ApiKeyCreated extends ApiKeyPublic { secret: string }
 
 export interface ApiRequest {
   id: string
