@@ -1,4 +1,4 @@
-# Nexa — v0.3 No Mock Business Data
+# Nexa-LumaDock — v0.4 Real Device Runtime
 
 Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger** 已接入数据库。Dashboard widgets now use persistent user-scoped data.
 
@@ -42,9 +42,10 @@ Nexa/
 │  │  ├─ models.py     SQLAlchemy 数据模型
 │  │  ├─ database.py   数据库连接
 │  │  ├─ security.py   密码与认证
-│  │  └─ realtime/     WebSocket 事件类型
+│  │  └─ realtime/     现有 WebSocket ping/pong 事件类型
 │  ├─ migrations/      Alembic 数据库迁移
 │  └─ tests/           后端接口测试
+├─ device-client/      Windows Python 指标采集与心跳
 ├─ public/             图片与静态资源
 └─ README.md
 ```
@@ -71,7 +72,7 @@ Nexa/
 
 Automation 目前仅保存工作流与触发器配置、执行历史，并提供模拟 `test-run`。Real scheduler / action execution engine is not implemented yet. 启用状态不会自动执行动作。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
 
-Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。设备客户端与 Agent runtime 执行器仍未提供。通知尚无统一事件来源，保持空状态。
+Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。Agent runtime 执行器仍未提供。通知尚无统一事件来源，保持空状态。
 
 ## API
 
@@ -88,6 +89,8 @@ Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Da
 | GET、POST | `/api/v1/devices` | 设备列表、新建设备 |
 | GET、PATCH、DELETE | `/api/v1/devices/{id}` | 读取、修改、删除设备 |
 | POST | `/api/v1/devices/{id}/heartbeat` | 更新在线时间和 CPU、内存、磁盘、电量指标 |
+| POST、DELETE | `/api/v1/devices/{id}/token` | JWT 用户生成或撤销专属 Device Token |
+| POST | `/api/device/heartbeat` | Device Token 上报 Windows 运行指标 |
 | GET、POST | `/api/v1/agents` | 智能体列表、新建智能体 |
 | GET、PATCH、DELETE | `/api/v1/agents/{id}` | 读取、修改、删除智能体；PATCH 可设置 `enabled` |
 | POST | `/api/v1/agents/{id}/heartbeat` | 更新运行时状态与在线时间 |
@@ -116,7 +119,19 @@ Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Da
 
 API Key 在 API 页面创建；请求体为 `{"name":"Production App","scopes":["Devices"],"expires_in_days":90}`。名称去首尾空白后须为 1–48 个字符；可用 scope 为 `Devices`、`Agents`、`Data`、`Automation`、`Read`，期限为 30、90、365 天或 `null`（永不过期）。`Read` 允许读取上述四个 GET 接口，其他 scope 只允许相应模块。Key 的明文仅在创建成功响应和当次页面弹窗中出现；请立即复制保存，关闭或刷新后无法找回。列表仅显示掩码。停用或过期的 Key 无法调用接口，过期 Key 无法重新启用。Key 不能访问账户、Dashboard、Key 管理或其他写入接口；这些接口仍须使用 JWT。API 页面中的请求日志、用量统计和 Webhook 暂不可用。
 
-设备添加后默认离线。设备端通过带用户 JWT 的 `POST /api/v1/devices/{id}/heartbeat` 发送 `{"cpu":24,"memory":40,"disk":55,"battery":80}`；最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。当前版本未接入实际设备采集程序或 AI 任务执行器，页面不会伪造指标、模型调用或任务完成结果。
+设备添加后默认离线。旧 `POST /api/v1/devices/{id}/heartbeat` 仍接受用户 JWT，供兼容与开发调试；真实 Windows Client 使用下方 Device Token 接口。最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。当前版本未接入 AI 任务执行器，页面不会伪造指标、模型调用或任务完成结果。
+
+## Device Runtime
+
+Nexa-LumaDock can receive runtime metrics from the Windows Device Client. 数据链路：`Windows Client → Device Token → POST /api/device/heartbeat → FastAPI → Device DB → Devices Store / Dashboard`。客户端默认每 30 秒上报 CPU、内存、系统盘、可选电量、主机名、Windows 版本、架构、CPU 名称、开机时长和局域网 IP。服务器按最近一次心跳动态计算在线状态，超过 120 秒变为离线。页面和 Dashboard 约每 30 秒刷新，无 WebSocket 实时推送。
+
+1. 在 Devices 页面添加设备。
+2. 在设备详情生成 Device Token，立即复制；明文仅显示一次。重新生成会立即使旧 Token 失效。
+3. 在 `device-client` 目录复制 `config.example.json` 为 `config.json`，填入 `serverUrl` 与 `deviceToken`。
+4. 运行 `python -m pip install -r requirements.txt`。
+5. 运行 `python main.py`，按 Ctrl+C 停止；`python main.py --once` 可发送一次心跳用于检查。
+
+Device Token should be treated as a secret. `config.json` contains a secret. Do not commit it. 服务器仅保存 SHA-256 hash 和末四位；Token 只可调用自己的设备心跳，不能访问用户资源。客户端仅支持 Windows，第一版只统计 Windows 系统盘；无电池或无法取得局域网 IP 时字段为 `null`。没有远程控制、命令执行、进程管理、Agent Runtime、Automation Engine，也没有 WebSocket 实时推送。
 
 首页天气卡片在浏览器允许定位后，从 [BigDataCloud](https://www.bigdatacloud.com/geocoding-apis/free-reverse-geocode-to-city-api) 获取城市，并从 [Open-Meteo](https://open-meteo.com/en/docs) 获取该位置的天气。拒绝定位时会尝试按 IP 显示大致城市，卡片标注“约”。位置请求由浏览器直接发出，成功结果和失败状态均缓存 30 分钟，避免每次进入首页重复请求；点击卡片中的位置可手动重试。
 

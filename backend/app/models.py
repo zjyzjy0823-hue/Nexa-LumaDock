@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
 from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -119,6 +119,21 @@ class Device(Base):
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)
     activity_json: Mapped[list[int]] = mapped_column(JSON, default=list)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    token_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    os: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    os_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    architecture: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    cpu_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    memory_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    memory_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    disk_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    disk_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    uptime_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    local_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    client_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     user: Mapped[User] = relationship(back_populates="devices")

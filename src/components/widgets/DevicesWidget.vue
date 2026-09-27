@@ -12,7 +12,7 @@ const deviceSnapshots = computed(() => [...store.devices].sort((a, b) =>
   (b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0) - (a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0)).slice(0, 4).map(device => ({
   id: device.id, name: device.name, platform: device.system,
   icon: device.kind,
-  online: device.online, cpu: device.cpu, ram: device.memory,
+  online: device.online, cpu: device.cpu, ram: device.memory, disk: device.disk,
   battery: device.battery ?? undefined, activity: device.activity, lastSeenAt: device.lastSeenAt,
 })))
 onMounted(() => { if (auth.token) void store.load(auth.token) })
@@ -52,8 +52,7 @@ function activityPoints(values: number[]) {
 
         <span class="device-metrics">
           <span v-if="!device.lastSeenAt">等待心跳</span>
-          <span v-else-if="device.battery !== undefined">电量 <strong>{{ device.battery }}%</strong></span>
-          <template v-else><span>CPU <strong>{{ device.cpu }}%</strong></span><span>内存 <strong>{{ device.ram }}%</strong></span></template>
+          <template v-else><span>CPU <strong>{{ device.cpu }}%</strong></span><span>内存 <strong>{{ device.ram }}%</strong></span><span>磁盘 <strong>{{ device.disk }}%</strong></span></template>
         </span>
 
         <span class="device-visual" aria-hidden="true">

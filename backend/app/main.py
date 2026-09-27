@@ -15,7 +15,7 @@ from .api import api_keys, auth, dashboard, settings, ledger
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router
 from .api.automation.routes import router as automation_router, v1_router as v1_automation_router
 from .api.data.routes import router as data_router, v1_router as v1_data_router
-from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router
+from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router, runtime_router as device_runtime_router
 from .api.websites import router as websites_router
 from .realtime.events import Event
 
@@ -28,7 +28,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Nexa API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Nexa API", version="0.4.0", lifespan=lifespan)
 origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -39,7 +39,7 @@ app.add_middleware(
 )
 for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
-    devices_router, legacy_devices_router, agents_router, legacy_agents_router, data_router, automation_router,
+    devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, data_router, automation_router,
     v1_data_router, v1_automation_router, settings.router, ledger.router,
 ):
     app.include_router(router)

@@ -47,7 +47,7 @@ function selectNav(item: string) {
 onMounted(async () => {
   statusRefresh = setInterval(() => {
     if (!auth.token) return
-    void devices.load(auth.token)
+    void devices.load(auth.token, true)
     void agents.load(auth.token)
   }, 30_000)
   try {

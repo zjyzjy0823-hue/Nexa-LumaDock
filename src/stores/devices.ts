@@ -39,6 +39,17 @@ export const useDevicesStore = defineStore('devices', () => {
     await deviceService.remove(token, id)
     if (current === sequence) devices.value = devices.value.filter(item => item.id !== id)
   }
+  async function generateToken(token: string, id: string) {
+    const result = await deviceService.generateToken(token, id)
+    devices.value = devices.value.map(item => item.id === id
+      ? { ...item, tokenLast4: result.last4, tokenCreatedAt: result.createdAt } : item)
+    return result
+  }
+  async function revokeToken(token: string, id: string) {
+    await deviceService.revokeToken(token, id)
+    devices.value = devices.value.map(item => item.id === id
+      ? { ...item, tokenLast4: null, tokenCreatedAt: null } : item)
+  }
   function reset() { ++sequence; devices.value = []; loading.value = false; error.value = ''; loadedAt.value = null }
-  return { devices, loading, error, loadedAt, load, create, update, remove, reset }
+  return { devices, loading, error, loadedAt, load, create, update, remove, generateToken, revokeToken, reset }
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity, Battery, Check, ChevronDown, CircleAlert, Clock3, Cpu,
   HardDrive, Laptop, MemoryStick, Monitor, MonitorSmartphone, Network,
@@ -27,6 +27,11 @@ const dialogMode = ref<'add' | 'edit'>('add')
 const justUpdated = ref(false)
 const saving = ref(false)
 const formError = ref('')
+const tokenDialog = ref(false)
+const generatedToken = ref('')
+const tokenBusy = ref(false)
+const tokenError = ref('')
+let statusRefresh: ReturnType<typeof setInterval> | undefined
 const draft = ref({ name: '', system: '', ip: '', location: '', kind: 'desktop' as DeviceKind })
 
 function openCreate() {
@@ -47,7 +52,11 @@ defineExpose({ openCreate })
 watch(devices, items => {
   if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
 }, { immediate: true })
-onMounted(() => { if (auth.token) void store.load(auth.token) })
+onMounted(() => {
+  if (auth.token) void store.load(auth.token, true)
+  statusRefresh = setInterval(() => { if (auth.token) void store.load(auth.token, true) }, 30_000)
+})
+onUnmounted(() => { if (statusRefresh) clearInterval(statusRefresh) })
 
 const onlineDevices = computed(() => devices.value.filter(device => device.online))
 const offlineCount = computed(() => devices.value.length - onlineDevices.value.length)
@@ -61,7 +70,7 @@ const selectedMetrics = computed(() => selectedDevice.value ? [
   { label: 'CPU', value: selectedDevice.value.cpu, display: `${selectedDevice.value.cpu}%`, icon: Cpu, tone: 'blue' },
   { label: '内存', value: selectedDevice.value.memory, display: `${selectedDevice.value.memory}%`, icon: MemoryStick, tone: 'violet' },
   { label: '磁盘', value: selectedDevice.value.disk, display: `${selectedDevice.value.disk}%`, icon: HardDrive, tone: 'cyan' },
-  { label: '电量', value: selectedDevice.value.battery ?? 100, display: selectedDevice.value.battery === null ? '外接电源' : `${selectedDevice.value.battery}%`, icon: Battery, tone: 'mint' },
+  { label: '电量', value: selectedDevice.value.battery ?? 0, display: selectedDevice.value.battery === null ? '—' : `${selectedDevice.value.battery}%`, icon: Battery, tone: 'mint' },
 ] : [])
 
 const filters: { label: string; value: DeviceFilter }[] = [
@@ -81,7 +90,7 @@ function sparkline(values: number[], width = 130, height = 35) {
 
 async function refreshDevices() {
   if (!auth.token) return
-  await store.load(auth.token)
+  await store.load(auth.token, true)
   if (!store.error) {
     justUpdated.value = true
     window.setTimeout(() => { justUpdated.value = false }, 2200)
@@ -120,6 +129,21 @@ async function removeDevice() {
   if (!auth.token || !item || !window.confirm(`删除「${item.name}」？`)) return
   try { await store.remove(auth.token, item.id); emit('action', '设备已删除。') }
   catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
+}
+
+function closeTokenDialog() { tokenDialog.value = false; generatedToken.value = ''; tokenError.value = '' }
+function openTokenDialog() { generatedToken.value = ''; tokenError.value = ''; tokenDialog.value = true }
+async function generateToken() {
+  if (!auth.token || !selectedDevice.value || tokenBusy.value) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  try { generatedToken.value = (await store.generateToken(auth.token, selectedDevice.value.id)).token }
+  catch (error) { tokenError.value = error instanceof Error ? error.message : '生成失败' }
+  finally { tokenBusy.value = false }
+}
+async function copyToken() {
+  try { await navigator.clipboard.writeText(generatedToken.value); emit('action', 'Device Token 已复制。') }
+  catch { tokenError.value = '复制失败，请手动复制。' }
 }
 </script>
 
@@ -178,7 +202,7 @@ async function removeDevice() {
           </div>
           <div class="device-card__identity">
             <h3>{{ device.name }}</h3>
-            <p>{{ device.system }}</p>
+            <p>{{ device.hostname || device.system }}</p>
           </div>
           <div class="device-card__ip"><Network :size="13" /><span>{{ device.ip }}</span></div>
           <div class="device-card__divider" />
@@ -186,7 +210,7 @@ async function removeDevice() {
             <div><span>CPU</span><strong>{{ device.lastSeenAt ? `${device.cpu}%` : '—' }}</strong></div>
             <div><span>内存</span><strong>{{ device.lastSeenAt ? `${device.memory}%` : '—' }}</strong></div>
             <div><span>磁盘</span><strong>{{ device.lastSeenAt ? `${device.disk}%` : '—' }}</strong></div>
-            <div><span>电量</span><strong>{{ device.lastSeenAt ? (device.battery === null ? '电源' : `${device.battery}%`) : '—' }}</strong></div>
+            <div><span>电量</span><strong>{{ device.lastSeenAt && device.battery !== null ? `${device.battery}%` : '—' }}</strong></div>
           </div>
           <div class="device-card__activity">
             <span>{{ device.online ? '最近心跳' : `最后在线 · ${device.lastSeen}` }}</span>
@@ -204,9 +228,10 @@ async function removeDevice() {
       <div class="detail-panel">
         <div class="detail-panel__identity">
           <span class="detail-icon" :class="`device-glyph--${selectedDevice.kind}`"><component :is="deviceIcon(selectedDevice.kind)" :size="31" :stroke-width="1.7" /></span>
-          <div class="detail-name"><div class="detail-name__title"><h3>{{ selectedDevice.name }}</h3><StatusBadge :label="selectedDevice.online ? '在线' : '离线'" :tone="selectedDevice.online ? 'success' : 'neutral'" /></div><p>{{ selectedDevice.system }}</p></div>
-          <div class="detail-meta"><div><span>IP 地址</span><strong>{{ selectedDevice.ip }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location || '未设置' }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div></div>
-          <div class="device-detail-actions"><ActionButton variant="secondary" size="sm" @click="openEdit">编辑设备</ActionButton><ActionButton variant="secondary" size="sm" @click="removeDevice">删除设备</ActionButton></div>
+          <div class="detail-name"><div class="detail-name__title"><h3>{{ selectedDevice.name }}</h3><StatusBadge :label="selectedDevice.online ? '在线' : '离线'" :tone="selectedDevice.online ? 'success' : 'neutral'" /></div><p>{{ selectedDevice.hostname || '等待设备上报主机名' }}</p></div>
+          <div class="detail-meta"><div><span>Windows</span><strong>{{ selectedDevice.osVersion || selectedDevice.system }}</strong></div><div><span>架构</span><strong>{{ selectedDevice.architecture || '—' }}</strong></div><div><span>局域网 IP</span><strong>{{ selectedDevice.localIp || '—' }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location || '未设置' }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div><div><span>Client</span><strong>{{ selectedDevice.clientVersion || '—' }}</strong></div></div>
+          <div class="device-detail-actions"><ActionButton variant="secondary" size="sm" @click="openEdit">编辑设备</ActionButton><ActionButton variant="secondary" size="sm" @click="openTokenDialog">{{ selectedDevice.tokenLast4 ? '重新生成 Device Token' : '生成 Device Token' }}</ActionButton><ActionButton variant="secondary" size="sm" @click="removeDevice">删除设备</ActionButton></div>
+          <p class="device-token-mask">{{ selectedDevice.tokenLast4 ? `当前 Token：nd_live_••••${selectedDevice.tokenLast4}` : '尚未生成 Device Token' }}</p>
         </div>
         <div class="detail-panel__resources">
           <div class="detail-resources__head"><span>资源使用</span><span>{{ selectedDevice.lastSeenAt ? '最近一次心跳' : '等待首次心跳' }}</span></div>
@@ -220,6 +245,15 @@ async function removeDevice() {
         </div>
       </div>
     </SectionContainer>
+
+    <div v-if="tokenDialog" class="device-dialog-backdrop" @click.self="closeTokenDialog">
+      <div class="device-dialog" role="dialog" aria-modal="true" aria-labelledby="device-token-title" @keydown.esc="closeTokenDialog">
+        <div class="device-dialog__header"><div><span>DEVICE TOKEN</span><h2 id="device-token-title">{{ selectedDevice?.tokenLast4 ? '管理 Device Token' : '生成 Device Token' }}</h2><p>此令牌只允许这台设备发送心跳。</p></div><button type="button" class="device-dialog__close" aria-label="关闭" @click="closeTokenDialog"><X :size="18" /></button></div>
+        <template v-if="generatedToken"><p class="device-token-warning">该 Token 仅显示一次，请立即保存。重新生成后旧 Token 立即失效。</p><input class="device-token-value" :value="generatedToken" readonly aria-label="新生成的 Device Token" @focus="($event.target as HTMLInputElement).select()" /><div class="device-dialog__actions"><ActionButton variant="secondary" type="button" @click="copyToken">复制</ActionButton><ActionButton variant="primary" type="button" @click="closeTokenDialog">完成</ActionButton></div></template>
+        <template v-else><p class="device-token-warning">{{ selectedDevice?.tokenLast4 ? `当前 Token：nd_live_••••${selectedDevice.tokenLast4}。重新生成会立即停用旧 Token。` : '生成后请将 Token 保存到 Windows Client 的 config.json。' }}</p><div class="device-dialog__actions"><ActionButton variant="secondary" type="button" @click="closeTokenDialog">取消</ActionButton><ActionButton variant="primary" type="button" :disabled="tokenBusy" @click="generateToken">{{ tokenBusy ? '生成中…' : selectedDevice?.tokenLast4 ? '重新生成' : '生成 Token' }}</ActionButton></div></template>
+        <p v-if="tokenError" class="device-form-error" role="alert">{{ tokenError }}</p>
+      </div>
+    </div>
 
     <div v-if="showAddDialog" class="device-dialog-backdrop" @click.self="showAddDialog = false">
       <form class="device-dialog" role="dialog" aria-modal="true" aria-labelledby="add-device-title" @submit.prevent="saveDevice" @keydown.esc="showAddDialog = false">
@@ -323,6 +357,9 @@ async function removeDevice() {
 .device-dialog__select svg { position: absolute; right: 12px; top: 12px; color: #8b99b0; pointer-events: none; }
 .device-dialog__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 27px; }
 .device-form-error { margin: 14px 0 0; color: #b73e55; font-size: 12px; }
+.device-token-mask { margin: 10px 0 0; color: #586781; font-size: 11px; }
+.device-token-warning { margin: 20px 0 8px; color: #53627e; font-size: 12px; line-height: 1.5; }
+.device-token-value { width: 100%; padding: 10px; border: 1px solid rgba(131,151,197,.35); border-radius: 10px; background: white; color: #263653; font-size: 12px; }
 @media (max-width: 1180px) { .device-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .sync-note { display: none; } }
 @media (max-width: 850px) { .device-stats { grid-template-columns: repeat(2, minmax(0,1fr)); } .detail-panel { grid-template-columns: 1fr; } .detail-panel__resources { padding: 20px 0 0; border-left: 0; border-top: 1px solid rgba(130,150,190,.17); } }
 @media (max-width: 610px) { .devices-page { gap: 18px; } .device-grid { grid-template-columns: 1fr; } .detail-meta { grid-template-columns: repeat(2, minmax(0,1fr)); } .device-dialog__fields { grid-template-columns: 1fr; } }

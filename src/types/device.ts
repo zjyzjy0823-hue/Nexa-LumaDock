@@ -15,8 +15,29 @@ export interface Device {
   activity: number[]
   lastSeen: string
   lastSeenAt: string | null
+  tokenLast4: string | null
+  tokenCreatedAt: string | null
+  hostname: string | null
+  os: string | null
+  osVersion: string | null
+  architecture: string | null
+  cpuName: string | null
+  memoryTotal: number | null
+  memoryUsed: number | null
+  diskTotal: number | null
+  diskUsed: number | null
+  uptimeSeconds: number | null
+  localIp: string | null
+  clientVersion: string | null
   createdAt: string
   updatedAt: string
 }
 
 export type DeviceInput = Pick<Device, 'name' | 'system' | 'kind' | 'ip' | 'location'>
+
+export interface DeviceTokenResult {
+  deviceId: string
+  token: string
+  last4: string
+  createdAt: string
+}

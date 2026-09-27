@@ -1,18 +1,21 @@
 from datetime import datetime, timezone
+import hashlib
+import secrets
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models import Device, User
-from ...security import current_user, read_user_for
+from ...security import current_user, device_from_token, read_user_for
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 legacy_router = APIRouter(prefix="/api/devices", tags=["devices"])
+runtime_router = APIRouter(prefix="/api/device", tags=["device-runtime"])
 
 DeviceKind = Literal["desktop", "mac", "phone", "tablet", "server", "nas"]
 
@@ -48,6 +51,27 @@ class DeviceHeartbeat(BaseModel):
     battery: int | None = Field(default=None, ge=0, le=100)
 
 
+class RuntimeHeartbeat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hostname: str | None = Field(default=None, min_length=1, max_length=120)
+    os: str | None = Field(default=None, min_length=1, max_length=40)
+    osVersion: str | None = Field(default=None, min_length=1, max_length=120)
+    architecture: str | None = Field(default=None, min_length=1, max_length=40)
+    cpuName: str | None = Field(default=None, min_length=1, max_length=160)
+    cpu: float = Field(ge=0, le=100)
+    memory: float = Field(ge=0, le=100)
+    memoryTotal: int | None = Field(default=None, strict=True, ge=0, le=2**63-1)
+    memoryUsed: int | None = Field(default=None, strict=True, ge=0, le=2**63-1)
+    disk: float = Field(ge=0, le=100)
+    diskTotal: int | None = Field(default=None, strict=True, ge=0, le=2**63-1)
+    diskUsed: int | None = Field(default=None, strict=True, ge=0, le=2**63-1)
+    battery: float | None = Field(default=None, ge=0, le=100)
+    uptimeSeconds: int | None = Field(default=None, strict=True, ge=0, le=2**63-1)
+    localIp: str | None = Field(default=None, min_length=1, max_length=45)
+    clientVersion: str | None = Field(default=None, min_length=1, max_length=40)
+
+
 def aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -74,6 +98,11 @@ def device_json(item: Device) -> dict:
                 location=item.location, online=online(item), cpu=item.cpu, memory=item.memory,
                 disk=item.disk, battery=item.battery, activity=item.activity_json or [],
                 lastSeen=last_seen(item), lastSeenAt=item.last_seen_at.isoformat() if item.last_seen_at else None,
+                tokenLast4=item.token_last4, tokenCreatedAt=item.token_created_at.isoformat() if item.token_created_at else None,
+                hostname=item.hostname, os=item.os, osVersion=item.os_version, architecture=item.architecture,
+                cpuName=item.cpu_name, memoryTotal=item.memory_total, memoryUsed=item.memory_used,
+                diskTotal=item.disk_total, diskUsed=item.disk_used, uptimeSeconds=item.uptime_seconds,
+                localIp=item.local_ip, clientVersion=item.client_version,
                 createdAt=item.created_at.isoformat(), updatedAt=item.updated_at.isoformat())
 
 
@@ -133,6 +162,53 @@ def update_device(id: str, payload: DevicePatch, user: User = Depends(current_us
 def delete_device(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     db.delete(owned_device(db, user, id))
     db.commit()
+
+
+@router.post("/{id}/token", status_code=201)
+def generate_token(id: str, response: Response, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item = owned_device(db, user, id)
+    token = f"nd_live_{secrets.token_urlsafe(32)}"
+    item.token_hash = hashlib.sha256(token.encode()).hexdigest()
+    item.token_last4 = token[-4:]
+    item.token_created_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"deviceId": item.id, "token": token, "last4": item.token_last4,
+            "createdAt": item.token_created_at.isoformat()}
+
+
+@router.delete("/{id}/token", status_code=204)
+def revoke_token(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    item = owned_device(db, user, id)
+    item.token_hash = None
+    item.token_last4 = None
+    item.token_created_at = None
+    db.commit()
+
+
+@runtime_router.post("/heartbeat")
+def runtime_heartbeat(payload: RuntimeHeartbeat, item: Device = Depends(device_from_token),
+                      db: Session = Depends(get_db)):
+    item.hostname = payload.hostname
+    item.os = payload.os
+    item.os_version = payload.osVersion
+    item.architecture = payload.architecture
+    item.cpu_name = payload.cpuName
+    item.cpu = round(payload.cpu)
+    item.memory = round(payload.memory)
+    item.memory_total = payload.memoryTotal
+    item.memory_used = payload.memoryUsed
+    item.disk = round(payload.disk)
+    item.disk_total = payload.diskTotal
+    item.disk_used = payload.diskUsed
+    item.battery = round(payload.battery) if payload.battery is not None else None
+    item.uptime_seconds = payload.uptimeSeconds
+    item.local_ip = payload.localIp
+    item.client_version = payload.clientVersion
+    item.activity_json = [*(item.activity_json or []), item.cpu][-14:]
+    item.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "deviceId": item.id, "lastSeenAt": item.last_seen_at.isoformat(), "online": online(item)}
 
 
 @router.post("/{id}/heartbeat")
