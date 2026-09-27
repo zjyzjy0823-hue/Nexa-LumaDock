@@ -61,3 +61,13 @@ export interface AboutInfo {
   version: string
   build: string
 }
+
+export interface SettingsPayload {
+  theme: 'light' | 'dark' | 'system'
+  language: string
+  timezone: string
+  notifications: NotificationConfig
+  appearance: Partial<AppearanceConfig>
+  sync: Partial<SyncConfig>
+  security: Partial<SecurityConfig>
+}

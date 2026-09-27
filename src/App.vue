@@ -18,6 +18,10 @@ import { useDashboardStore } from './stores/dashboard'
 import { useWebsitesStore } from './stores/websites'
 import { useDevicesStore } from './stores/devices'
 import { useAgentsStore } from './stores/agents'
+import { useSettingsStore } from './stores/settings'
+import { useDataStore } from './stores/data'
+import { useAutomationStore } from './stores/automation'
+import { useLedgerStore } from './stores/ledger'
 
 type Page = 'Home' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings'
 const pagePaths: Record<Page, string> = {
@@ -49,6 +53,10 @@ watch(() => auth.user?.id, (current, previous) => {
     useWebsitesStore().reset()
     useDevicesStore().reset()
     useAgentsStore().reset()
+    useSettingsStore().reset()
+    useDataStore().reset()
+    useAutomationStore().reset()
+    useLedgerStore().reset()
   }
 })
 

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, type Component } from 'vue'
-import { ArrowUpRight, Bell, Check, Plus, Sparkles } from 'lucide-vue-next'
-import { demoNotifications } from '../../data/overview'
+import { ArrowUpRight, Bell, Plus } from 'lucide-vue-next'
 
 interface CreateAction {
   label: string
@@ -44,14 +43,11 @@ defineExpose({ closeMenus })
   <div ref="root" class="top-action-controls">
     <div class="tool-wrap">
       <button class="topbar__icon-button" :aria-expanded="openMenu === 'notifications'" aria-label="通知" type="button" @click="toggleMenu('notifications')">
-        <Bell :size="27" :stroke-width="1.65" /><span class="notification-dot" />
+        <Bell :size="27" :stroke-width="1.65" />
       </button>
       <div v-if="openMenu === 'notifications'" class="toolbar-popover notifications-panel">
-        <div class="popover-heading">通知 <span>{{ demoNotifications.length }} 条新消息</span></div>
-        <div v-for="item in demoNotifications" :key="item.id" class="notification-item">
-          <span class="notification-icon" :class="`notification-icon--${item.kind}`"><Check v-if="item.kind === 'success'" :size="15" /><Sparkles v-else :size="15" /></span>
-          <div><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></div>
-        </div>
+        <div class="popover-heading">通知</div>
+        <div class="notification-item">暂无通知</div>
       </div>
     </div>
 

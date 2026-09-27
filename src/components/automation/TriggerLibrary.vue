@@ -14,7 +14,7 @@ const icons: Partial<Record<AutomationIcon, Component>> = {
 
 <template>
   <GlassCard class="trigger-library">
-    <div class="trigger-library__heading"><span class="trigger-library__eyebrow">TRIGGER LIBRARY</span><h2>触发器库</h2><p>选择事件，快速定义工作流的起点</p></div>
+    <div class="trigger-library__heading"><span class="trigger-library__eyebrow">TRIGGER LIBRARY</span><h2>触发器库</h2><p>选择触发配置；事件监听尚未启用</p></div>
     <div class="trigger-library__grid">
       <button v-for="trigger in triggers" :key="trigger.id" class="trigger-tile" :class="{ 'trigger-tile--selected': trigger.id === selectedId }" type="button" :aria-pressed="trigger.id === selectedId" @click="emit('select', trigger.id)">
         <span class="trigger-tile__icon"><component :is="icons[trigger.icon]" :size="17" :stroke-width="1.8" /></span>

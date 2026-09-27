@@ -3,10 +3,10 @@ import { ref } from 'vue'
 import type { Component } from 'vue'
 import { AppWindow, ArrowUpRight, Copy, FolderKanban, Globe2, HardDrive, Layers3, MoreHorizontal, Repeat2, Server } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { CollectionIcon, DataCollection } from '../../mock/data'
+import type { CollectionIcon, DataCollection } from '../../types/data'
 
 defineProps<{ collection: DataCollection; selected: boolean }>()
-const emit = defineEmits<{ select: []; copy: [] }>()
+const emit = defineEmits<{ select: []; copy: []; edit: []; remove: [] }>()
 const menuOpen = ref(false)
 
 const icons: Record<CollectionIcon, Component> = {
@@ -43,6 +43,8 @@ function copyName() {
       <div v-if="menuOpen" class="collection-card__menu" role="menu">
         <button type="button" role="menuitem" @click="selectCollection"><ArrowUpRight :size="14" />查看记录</button>
         <button type="button" role="menuitem" @click="copyName"><Copy :size="14" />复制名称</button>
+        <button type="button" role="menuitem" @click="menuOpen = false; emit('edit')">编辑集合</button>
+        <button type="button" role="menuitem" @click="menuOpen = false; emit('remove')">删除集合</button>
       </div>
     </div>
   </GlassCard>

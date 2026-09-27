@@ -1,20 +1,33 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { Activity, DatabaseBackup, RefreshCw, Send } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { Workflow } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { automationItems } from '../../data/operations'
+import { useAuthStore } from '../../stores/auth'
+import { useAutomationStore } from '../../stores/automation'
 
-const icons = { backup: DatabaseBackup, sync: RefreshCw, health: Activity, telegram: Send }
-const items = ref(automationItems.map((item) => ({ ...item })))
+const auth = useAuthStore()
+const store = useAutomationStore()
+const items = computed(() => store.items.slice(0, 3))
+const enabledCount = computed(() => store.items.filter(item => item.enabled).length)
+const failedCount = computed(() => store.executions.filter(item => item.status === 'failed').length)
+const recentExecution = computed(() => [...store.executions].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0])
+onMounted(() => { if (auth.token) void store.load(auth.token).catch(() => {}) })
+async function toggle(id: string, enabled: boolean) {
+  if (!auth.token) return
+  try { await store.update(auth.token, id, { enabled: !enabled }) } catch { /* Store exposes the error. */ }
+}
 </script>
 
 <template>
   <GlassCard title="自动化" class="automation-card">
-    <template #action><span class="see-all">查看全部 (5)</span></template>
+    <template #action><span class="see-all">{{ store.loaded ? `${store.items.length} 个 · 已启用 ${enabledCount}` : '—' }}</span></template>
 
     <div class="automation-list">
-      <div v-for="item in items" :key="item.id" class="automation-row">
-        <component :is="icons[item.id]" class="automation-icon" :size="17" :stroke-width="1.8" />
+      <p v-if="store.error" class="automation-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+      <p v-else-if="!store.loaded" class="automation-state">正在加载自动化…</p>
+      <p v-else-if="!items.length" class="automation-state">暂无自动化</p>
+      <div v-for="item in store.error ? [] : items" :key="item.id" class="automation-row">
+        <Workflow class="automation-icon" :size="17" :stroke-width="1.8" />
         <span class="automation-name">{{ item.name }}</span>
         <button
           type="button"
@@ -23,9 +36,10 @@ const items = ref(automationItems.map((item) => ({ ...item })))
           role="switch"
           :aria-label="item.name"
           :aria-checked="item.enabled"
-          @click="item.enabled = !item.enabled"
+          @click="toggle(item.id, item.enabled)"
         ><span /></button>
       </div>
+      <p v-if="store.loaded && !store.error && store.items.length" class="execution-summary">执行 {{ store.executions.length }} 次 · 失败 {{ failedCount }} 次<br />{{ recentExecution ? `最近执行：${recentExecution.status === 'failed' ? '失败' : recentExecution.status === 'success' ? '成功' : '进行中'}` : '暂无执行记录' }}</p>
     </div>
   </GlassCard>
 </template>
@@ -37,6 +51,9 @@ const items = ref(automationItems.map((item) => ({ ...item })))
 .automation-card :deep(.glass-card__title)::after{content:'›';display:inline-block;margin-left:12px;font-size:26px;font-weight:300;line-height:.5;vertical-align:-1px}
 .see-all{color:rgba(255,255,255,.88);font-size:13px;white-space:nowrap}
 .automation-list{display:flex;flex-direction:column}
+.automation-state,.execution-summary{margin:7px 0;color:rgba(255,255,255,.9);font-size:12px}
+.automation-state button{margin-left:5px;border:0;background:none;color:white;text-decoration:underline;cursor:pointer}
+.execution-summary{line-height:1.5}
 .automation-row{min-height:32px;display:flex;align-items:center;gap:11px;border-bottom:1px solid rgba(255,255,255,.13)}
 .automation-row:last-child{border-bottom:0}
 .automation-icon{flex:none;color:rgba(255,255,255,.97)}

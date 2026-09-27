@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { Activity, CheckCircle2, Clock3, Database, TrendingUp } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { DataOverview } from '../../mock/data'
+import type { DataOverview } from '../../types/data'
 
 const props = defineProps<{ totalRecords: number; overview: DataOverview }>()
 
@@ -10,7 +10,7 @@ const stats = computed(() => [
   { label: 'Total Records', value: props.totalRecords, detail: '全部数据条目', icon: Database, tone: 'blue' },
   { label: 'Active', value: props.overview.active, detail: '正在进行', icon: Activity, tone: 'mint' },
   { label: 'Completed', value: props.overview.completed, detail: '已完成事项', icon: CheckCircle2, tone: 'violet' },
-  { label: 'Recent Activity', value: props.overview.recentActivity, detail: '本周更新', icon: Clock3, tone: 'amber' },
+  { label: 'Recent Activity', value: props.overview.recentActivity, detail: '最近更新', icon: Clock3, tone: 'amber' },
 ])
 
 const chartPoints = computed(() => {
@@ -32,7 +32,7 @@ const lastPoint = computed(() => chartPoints.value.at(-1))
 
 <template>
   <GlassCard class="data-stats" title="数据概览">
-    <template #action><span class="data-stats__period">最近 30 天</span></template>
+    <template #action><span class="data-stats__period">{{ overview.trend.length ? '最近 30 天' : '暂无趋势数据' }}</span></template>
     <div class="data-stats__grid">
       <div v-for="item in stats" :key="item.label" class="data-stats__metric" :class="`data-stats__metric--${item.tone}`">
         <span class="data-stats__metric-icon"><component :is="item.icon" :size="15" :stroke-width="1.9" /></span>
@@ -41,16 +41,17 @@ const lastPoint = computed(() => chartPoints.value.at(-1))
         <small>{{ item.detail }}</small>
       </div>
     </div>
-    <div class="data-stats__chart-head"><div><span>记录增长趋势</span><strong>持续增长 <TrendingUp :size="13" /></strong></div><span>+12.4%</span></div>
-    <svg class="data-stats__chart" viewBox="0 0 300 90" preserveAspectRatio="none" role="img" aria-label="最近 30 天记录数量呈增长趋势">
+    <div class="data-stats__chart-head"><div><span>记录增长趋势</span><strong>已保存记录 <TrendingUp :size="13" /></strong></div><span>{{ totalRecords }}</span></div>
+    <svg v-if="overview.trend.length" class="data-stats__chart" viewBox="0 0 300 90" preserveAspectRatio="none" role="img" aria-label="最近 30 天记录数量趋势">
       <defs><linearGradient id="data-stats-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#788fee" stop-opacity=".3" /><stop offset="1" stop-color="#788fee" stop-opacity="0" /></linearGradient></defs>
       <path v-for="y in [22, 48, 74]" :key="y" :d="`M 0 ${y} H 300`" class="data-stats__gridline" />
       <path :d="areaPath" fill="url(#data-stats-fill)" />
       <polyline :points="linePoints" fill="none" stroke="#708aea" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
       <circle v-if="lastPoint" :cx="lastPoint.x" :cy="lastPoint.y" r="4.5" fill="#fff" stroke="#708aea" stroke-width="2.4" />
     </svg>
+    <div v-else class="data-stats__chart">暂无历史趋势数据</div>
     <div class="data-stats__chart-labels"><span v-for="label in overview.trendLabels" :key="label">{{ label }}</span></div>
-    <div class="data-stats__activity-head"><h3>最近动态</h3><span>实时同步</span></div>
+    <div class="data-stats__activity-head"><h3>最近动态</h3><span>已保存记录</span></div>
     <div class="data-stats__activity-list">
       <div v-for="activity in overview.activities" :key="activity.id" class="data-stats__activity" :class="`data-stats__activity--${activity.tone}`">
         <span class="data-stats__activity-dot" />

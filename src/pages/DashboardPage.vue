@@ -7,14 +7,19 @@ import DashboardRenderer from '../components/dashboard/DashboardRenderer.vue'
 import { useWidgetLayout } from '../composables/useWidgetLayout'
 import { useAuthStore } from '../stores/auth'
 import { useDashboardStore } from '../stores/dashboard'
+import { useDevicesStore } from '../stores/devices'
+import { useAgentsStore } from '../stores/agents'
 
 const emit = defineEmits<{ navigate: [page: string]; create: [kind: string] }>()
 const auth = useAuthStore()
 const dashboard = useDashboardStore()
+const devices = useDevicesStore()
+const agents = useAgentsStore()
 const activeItem = ref('Home')
 const toast = ref('')
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 let focusTimeout: ReturnType<typeof setTimeout> | undefined
+let statusRefresh: ReturnType<typeof setInterval> | undefined
 
 function showToast(message: string) {
   toast.value = message
@@ -40,6 +45,11 @@ function selectNav(item: string) {
   else if (destinationPages.includes(item)) emit('navigate', item)
 }
 onMounted(async () => {
+  statusRefresh = setInterval(() => {
+    if (!auth.token) return
+    void devices.load(auth.token)
+    void agents.load(auth.token)
+  }, 30_000)
   try {
     if (!auth.token) return
     await dashboard.load(auth.token)
@@ -50,6 +60,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (toastTimeout) clearTimeout(toastTimeout)
   if (focusTimeout) clearTimeout(focusTimeout)
+  if (statusRefresh) clearInterval(statusRefresh)
 })
 </script>
 

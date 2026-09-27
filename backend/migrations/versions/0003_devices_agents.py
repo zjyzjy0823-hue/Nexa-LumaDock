@@ -13,7 +13,8 @@ depends_on = None
 
 
 def upgrade():
-    Base.metadata.create_all(bind=op.get_bind(), checkfirst=True)
+    for name in ("devices", "agents", "agent_tasks", "agent_events"):
+        Base.metadata.tables[name].create(bind=op.get_bind(), checkfirst=True)
 
 
 def downgrade():

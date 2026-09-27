@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import GlassCard from '../ui/GlassCard.vue'
-import type { ExpensePeriod, ExpenseTrend } from '../../mock/ledger'
+import type { ExpensePeriod, ExpenseTrend } from '../../types/ledger'
 
 const props = defineProps<{ trends: ExpenseTrend[] }>()
 const period = ref<ExpensePeriod>(props.trends[0]?.id ?? '30d')

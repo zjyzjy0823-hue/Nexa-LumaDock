@@ -8,17 +8,14 @@ import type { UserProfile } from '../../types/settings'
 const props = defineProps<{ profile: UserProfile; avatarUrl?: string }>()
 const emit = defineEmits<{
   'update:profile': [profile: UserProfile]
-  avatar: [file: File]
+  avatar: [url: string]
   password: []
 }>()
 
 function update(field: keyof UserProfile, value: string) {
   emit('update:profile', { ...props.profile, [field]: value })
 }
-function onAvatar(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (file) emit('avatar', file)
-}
+function onAvatar(event: Event) { emit('avatar', (event.target as HTMLInputElement).value) }
 </script>
 
 <template>
@@ -32,11 +29,11 @@ function onAvatar(event: Event) {
         <div class="profile-card__identity"><span>PERSONAL ACCOUNT</span><strong>{{ profile.username }}</strong></div>
         <label class="profile-avatar-picker">
           <Camera :size="15" />更换头像
-          <input type="file" accept="image/*" aria-label="更换头像" @change="onAvatar" />
+          <input type="url" :value="avatarUrl" aria-label="头像 URL" placeholder="https://..." @change="onAvatar" />
         </label>
       </div>
       <div class="settings-field-grid profile-fields">
-        <div class="settings-field"><span>用户名</span><strong class="profile-username">{{ profile.username }}</strong></div>
+        <label class="settings-field"><span>用户名</span><input :value="profile.username" maxlength="80" aria-label="用户名" @change="update('username', ($event.target as HTMLInputElement).value)" /></label>
         <label class="settings-field"><span>时区</span><select :value="profile.timezone" @change="update('timezone', ($event.target as HTMLSelectElement).value)"><option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</option></select></label>
         <label class="settings-field"><span>语言</span><select :value="profile.language" @change="update('language', ($event.target as HTMLSelectElement).value)"><option v-for="language in languageOptions" :key="language" :value="language">{{ language }}</option></select></label>
       </div>
@@ -57,7 +54,7 @@ function onAvatar(event: Event) {
 .profile-card__identity small { overflow: hidden; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .profile-avatar-picker { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: auto; padding: 8px 10px; border: 1px solid rgba(150,172,214,.4); border-radius: 10px; color: #506a9a; background: rgba(255,255,255,.6); cursor: pointer; font-size: 11px; font-weight: 670; transition: transform .2s, background .2s; }
 .profile-avatar-picker:hover { transform: translateY(-2px); background: rgba(255,255,255,.88); }
-.profile-avatar-picker input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.profile-avatar-picker input { width: 120px; min-width: 0; border: 0; background: transparent; font-size: 10px; }
 .profile-fields { margin-top: 24px; padding-top: 19px; border-top: 1px solid var(--line); }
 .profile-username { display:flex; align-items:center; min-height:40px; color:var(--text-primary); font-size:13px; font-weight:650; }
 @media (max-width: 560px) { .profile-card__top { flex-wrap: wrap; } .profile-avatar-picker { width: 100%; justify-content: center; margin: 4px 0 0; } }

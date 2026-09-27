@@ -15,7 +15,7 @@ const emit = defineEmits<{ action: [message: string] }>()
     <div class="settings-card">
       <SettingRow label="Version"><strong class="about-value">{{ info.version }}</strong></SettingRow>
       <SettingRow label="Build"><strong class="about-value">{{ info.build }}</strong></SettingRow>
-      <SettingRow label="Check for Updates" description="检查是否有可用的新版本"><ActionButton variant="secondary" size="sm" @click="emit('action', '当前已是演示版本 0.1.0。')"><RefreshCw :size="14" />检查更新</ActionButton></SettingRow>
+      <SettingRow label="Check for Updates" description="检查是否有可用的新版本"><ActionButton variant="secondary" size="sm" @click="emit('action', '自动检查更新尚未实现。')"><RefreshCw :size="14" />检查更新</ActionButton></SettingRow>
     </div>
     <div class="settings-card about-links">
       <button type="button" @click="emit('action', 'GitHub 链接将在正式发布时提供。')"><Github :size="17" /><span>GitHub</span><ArrowUpRight :size="14" /></button>

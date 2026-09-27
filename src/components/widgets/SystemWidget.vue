@@ -1,29 +1,43 @@
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { ChevronRight } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { systemSnapshot } from '../../data/operations'
+import { useAuthStore } from '../../stores/auth'
+import { useDevicesStore } from '../../stores/devices'
+const auth = useAuthStore()
+const store = useDevicesStore()
+const device = computed(() => [...store.devices].filter(item => item.online && item.lastSeenAt)
+  .sort((a, b) => Date.parse(b.lastSeenAt!) - Date.parse(a.lastSeenAt!))[0])
+const metrics = computed(() => device.value ? [
+  { id: 'cpu', label: 'CPU', value: device.value.cpu },
+  { id: 'memory', label: '内存', value: device.value.memory },
+  { id: 'disk', label: '磁盘', value: device.value.disk },
+] : [])
+onMounted(() => { if (auth.token) void store.load(auth.token) })
 </script>
 
 <template>
   <GlassCard title="系统" class="system-card">
     <template #action><ChevronRight class="system-action-arrow" :size="20" aria-hidden="true" /></template>
 
-    <div class="system-layout">
+    <p v-if="store.error" class="system-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true)">重试</button></p>
+    <p v-else-if="!store.loadedAt" class="system-state">正在加载设备指标…</p>
+    <p v-else-if="!device" class="system-state">暂无在线设备指标</p>
+    <div v-else class="system-layout">
       <div class="system-metrics">
-        <div v-for="metric in systemSnapshot.metrics.slice(0, 3)" :key="metric.id" class="metric" :data-type="metric.id">
+        <div v-for="metric in metrics" :key="metric.id" class="metric" :data-type="metric.id">
           <span class="metric-name">{{ metric.label }}</span>
-          <span class="metric-track"><span :style="{ width: `${metric.percent}%` }" /></span>
-          <strong>{{ metric.value }}</strong>
+          <span class="metric-track"><span :style="{ width: `${metric.value}%` }" /></span>
+          <strong>{{ metric.value }}%</strong>
         </div>
         <div class="network-row">
-          <span>网络</span>
-          <span><ArrowDown :size="13" />{{ systemSnapshot.networkDown }}</span>
-          <span><ArrowUp :size="13" />{{ systemSnapshot.networkUp }}</span>
+          <span>{{ device.name }}</span>
+          <span>最近心跳：{{ device.lastSeen }}</span>
         </div>
       </div>
 
       <div class="memory-overview">
-        <div class="ring" :aria-label="`内存使用率 ${systemSnapshot.memoryPercent}%`" role="img">
+        <div class="ring" :aria-label="`内存使用率 ${device.memory}%`" role="img">
           <svg viewBox="0 0 120 120" aria-hidden="true">
             <defs>
               <linearGradient id="memory-ring" x1="0" y1="1" x2="1" y2="0">
@@ -33,12 +47,12 @@ import { systemSnapshot } from '../../data/operations'
               </linearGradient>
             </defs>
             <circle class="ring-track" cx="60" cy="60" r="48" />
-            <circle class="ring-fill" cx="60" cy="60" r="48" pathLength="100" :stroke-dasharray="`${systemSnapshot.memoryPercent} 100`" />
+            <circle class="ring-fill" cx="60" cy="60" r="48" pathLength="100" :stroke-dasharray="`${device.memory} 100`" />
           </svg>
-          <strong>{{ systemSnapshot.memoryPercent }}<small>%</small></strong>
+          <strong>{{ device.memory }}<small>%</small></strong>
         </div>
         <span class="memory-label">内存</span>
-        <span class="memory-detail">{{ systemSnapshot.memoryUsed }}</span>
+        <span class="memory-detail">{{ device.name }}</span>
       </div>
     </div>
   </GlassCard>
@@ -46,6 +60,7 @@ import { systemSnapshot } from '../../data/operations'
 
 <style scoped>
 .system-card{padding:17px 30px 14px 28px}
+.system-state{margin:52px 0;color:white;text-align:center;font-size:12px}.system-state button{border:0;background:none;color:white;text-decoration:underline;cursor:pointer}
 .system-card :deep(.glass-card__header){margin-bottom:10px}
 .system-card :deep(.glass-card__title){color:#fff;font-size:20px;font-weight:500}
 .system-card :deep(.glass-card__title)::before{content:'✧';display:inline-block;margin-right:12px;font-size:26px;line-height:.4;vertical-align:-2px}

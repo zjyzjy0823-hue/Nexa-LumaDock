@@ -1,6 +1,6 @@
-# Nexa
+# Nexa — v0.3 No Mock Business Data
 
-Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Websites、Devices、Agents、API Keys** 已接入真实数据库；Automation 等页面仍处于演示阶段。
+Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger** 已接入数据库。Dashboard widgets now use persistent user-scoped data.
 
 ## 开发启动
 
@@ -21,7 +21,7 @@ npm ci
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173/`。首次进入会显示登录与注册页，只需设置用户名和密码。登录后可从侧边栏头像菜单退出；首页问候语使用当前用户名。网站、设备、智能体与任务的更改在刷新浏览器后仍会保留。前端将 `/api` 代理到本地后端。接口文档位于 `http://127.0.0.1:8000/docs`。
+打开 `http://127.0.0.1:5173/`。首次进入会显示登录与注册页，只需设置用户名和密码。登录后可从侧边栏头像菜单退出；首页问候语使用当前用户名。网站、设备、智能体、设置、数据集合、工作流和账本的更改在刷新浏览器后仍会保留。前端将 `/api` 代理到本地后端。接口文档位于 `http://127.0.0.1:8000/docs`。
 
 ## 项目结构
 
@@ -34,7 +34,7 @@ Nexa/
 │  ├─ services/        前端业务 API 封装
 │  ├─ api/             HTTP 客户端
 │  ├─ types/           TypeScript 数据类型
-│  ├─ mock/            尚未接入后端的页面演示数据
+│  ├─ mock/            静态选项与触发器模板
 │  └─ styles/          全局样式与设计变量
 ├─ backend/
 │  ├─ app/
@@ -53,9 +53,25 @@ Nexa/
 
 默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。`DATABASE_URL` 支持 SQLite 和 PostgreSQL；PostgreSQL 额外安装 `requirements-postgres.txt`，使用 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
 
-`.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，网站、分类、设备、智能体和任务按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
+`.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，业务资源按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
 
-前端数据链路：`页面 → Pinia store → service → /api/v1 → SQLAlchemy → 数据库`。三个真实数据页面都通过服务层调用 API，不直接请求网络。
+前端数据链路：`页面 → Pinia store → service → /api/v1 → SQLAlchemy → 数据库`。四个新后端化页面通过服务层调用 API，不直接请求网络。
+
+| 页面 | 状态 |
+| --- | --- |
+| Dashboard | Persistent user-scoped widgets and layout |
+| Websites | Persistent |
+| Devices | Persistent |
+| Agents | Persistent |
+| Data | Persistent |
+| Automation | Persistent workflows / test execution only |
+| Ledger | Persistent local ledger |
+| API Keys | Persistent |
+| Settings | Persistent |
+
+Automation 目前仅保存工作流与触发器配置、执行历史，并提供模拟 `test-run`。Real scheduler / action execution engine is not implemented yet. 启用状态不会自动执行动作。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
+
+Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。设备客户端与 Agent runtime 执行器仍未提供。通知尚无统一事件来源，保持空状态。
 
 ## API
 
@@ -80,6 +96,20 @@ Nexa/
 | GET、POST | `/api/api-keys` | 列出、创建当前账户的 API Key（仅 JWT） |
 | PUT | `/api/api-keys/{id}/status` | 启用或停用 API Key（仅 JWT） |
 | GET | `/api/devices`、`/api/agents`、`/api/data`、`/api/automation` | JWT 或具有对应 scope 的 API Key 读取 |
+| GET、PATCH | `/api/v1/settings` | 读取与保存当前用户设置 |
+| PATCH | `/api/v1/account` | 修改当前用户名称与头像 URL |
+| POST | `/api/v1/account/password` | 验证原密码后修改密码 |
+| GET、POST | `/api/v1/data/collections` | 集合列表与创建 |
+| GET、PATCH、DELETE | `/api/v1/data/collections/{id}` | 集合读取、修改、删除 |
+| GET、POST | `/api/v1/data/collections/{id}/records` | 集合记录列表与创建 |
+| GET、PATCH、DELETE | `/api/v1/data/records/{id}` | 记录读取、修改、删除 |
+| GET、POST | `/api/v1/automations` | 工作流列表与创建 |
+| GET、PATCH、DELETE | `/api/v1/automations/{id}` | 工作流读取、修改、删除 |
+| GET | `/api/v1/automations/{id}/executions` | 执行历史 |
+| POST | `/api/v1/automations/{id}/test-run` | 写入模拟成功的执行记录，不运行真实动作 |
+| GET、POST | `/api/v1/ledger/categories`、`/api/v1/ledger/transactions` | 分类与交易列表、创建 |
+| GET、PATCH、DELETE | `/api/v1/ledger/categories/{id}`、`/api/v1/ledger/transactions/{id}` | 分类与交易读取、修改、删除 |
+| GET | `/api/v1/ledger/summary?month=YYYY-MM` | 月度收支、趋势与分类统计 |
 | WebSocket | `/ws` | 基础 ping/pong 连接 |
 
 网站列表支持 `categoryId`、`search`、`favorite` 和 `sort=order|name|createdAt|updatedAt|recent`。打开网站会写入最近访问时间，首页快捷访问展示最近打开的网站。添加网站时浏览器会尝试读取该站点的 `/favicon.ico` 或 `/apple-touch-icon.png`，也可手动指定图标。受保护接口须发送 `Authorization: Bearer <token>`。错误响应包含 FastAPI 风格的 `detail`，并保留现有客户端使用的 `error` 字段。旧 `/api/auth` 和 `/api/dashboard` 路径为现有 Dashboard 保留。

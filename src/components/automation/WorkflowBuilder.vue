@@ -36,7 +36,7 @@ function save() { emit('update:nodes', draft.value.map(node => ({ ...node }))); 
         <span v-if="index < draft.length - 1" class="workflow-builder__connector" aria-hidden="true"><i /><ArrowDown :size="14" /></span>
       </template>
     </div>
-    <p class="workflow-builder__hint">示例流程 · {{ draft[0]?.text }} → {{ draft[1]?.text }} → {{ draft[2]?.text }}</p>
+    <p class="workflow-builder__hint">当前流程配置 · {{ draft[0]?.text }} → {{ draft[1]?.text }} → {{ draft[2]?.text }}</p>
   </GlassCard>
 </template>
 

@@ -1,45 +1,32 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ChevronRight, FileText, Folder, Lightbulb, List, Plus, SquareCheck, X } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { ChevronRight, FileText } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { recentNotes } from '../../data/operations'
+import { useAuthStore } from '../../stores/auth'
+import { useDataStore } from '../../stores/data'
 
-const noteIcons = {
-  'project-ideas': Folder,
-  'shopping-list': SquareCheck,
-  'server-tasks': List,
-  ideas: Lightbulb,
-}
-const iconFor = (id: string) => noteIcons[id as keyof typeof noteIcons] ?? FileText
-const notes = ref(recentNotes.map((note) => ({ ...note })))
-const isAdding = ref(false)
-const newTitle = ref('')
-
-function addNote() {
-  const title = newTitle.value.trim()
-  if (!title) return
-  notes.value.unshift({ id: `note-${Date.now()}`, title, preview: '', updatedAt: '今天', color: 'blue' })
-  isAdding.value = false
-  newTitle.value = ''
-}
+const auth = useAuthStore()
+const store = useDataStore()
+const records = computed(() => store.items.flatMap(collection => collection.records.map(record => ({
+  id: record.id, title: record.name, collection: collection.name, updatedAt: record.updatedAt,
+}))).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 4))
+onMounted(() => { if (auth.token) void store.load(auth.token).catch(() => {}) })
 </script>
 
 <template>
-  <GlassCard title="便签" class="notes-card">
+  <GlassCard title="最近记录" class="notes-card">
     <template #action><ChevronRight class="notes-action-arrow" :size="20" aria-hidden="true" /></template>
     <div class="notes-list">
-      <article v-for="note in notes.slice(0, 4)" :key="note.id" class="note-row" :title="note.preview">
-        <component :is="iconFor(note.id)" class="note-icon" :size="16" :stroke-width="1.9" />
-        <strong>{{ note.title }}</strong>
-        <time>{{ note.updatedAt }}</time>
+      <p v-if="store.error" class="records-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+      <p v-else-if="!store.loaded" class="records-state">正在加载记录…</p>
+      <p v-else-if="!records.length" class="records-state">暂无最近记录</p>
+      <article v-for="record in records" :key="record.id" class="note-row" :title="record.collection">
+        <FileText class="note-icon" :size="16" :stroke-width="1.9" />
+        <strong>{{ record.title }}</strong>
+        <time>{{ record.collection }}</time>
       </article>
     </div>
-    <form v-if="isAdding" class="new-note-form" @submit.prevent="addNote" @keydown.esc="isAdding = false">
-      <input v-model="newTitle" autofocus aria-label="新便签标题" placeholder="便签标题" maxlength="40" />
-      <button type="submit" :disabled="!newTitle.trim()" aria-label="保存便签"><Plus :size="14" /></button>
-      <button type="button" aria-label="取消" @click="isAdding = false; newTitle = ''"><X :size="14" /></button>
-    </form>
-    <button v-else class="new-note" type="button" @click="isAdding = true"><Plus :size="15" /> 新建便签</button>
+    <a class="new-note" href="/data">查看数据集</a>
   </GlassCard>
 </template>
 
@@ -50,6 +37,7 @@ function addNote() {
 .notes-card :deep(.glass-card__title)::after{content:'›';display:inline-block;margin-left:10px;font-size:26px;font-weight:300;line-height:.5;vertical-align:-1px}
 .notes-action-arrow{color:#fff}
 .notes-list{display:flex;flex-direction:column}
+.records-state{margin:15px 0;color:white;font-size:12px;text-align:center}.records-state button{border:0;background:none;color:white;text-decoration:underline;cursor:pointer}
 .note-row{min-width:0;min-height:29px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,.13)}
 .note-row:last-child{border-bottom:0}
 .note-icon{flex:none;color:rgba(255,255,255,.98)}

@@ -1,44 +1,55 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ChevronRight, CreditCard, Folder, Globe2, JapaneseYen, Plus, X } from 'lucide-vue-next'
+import { computed, onMounted, ref } from 'vue'
+import { ChevronRight, CreditCard, Folder, Globe2, Plus, X } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { collectionItems, type CollectionItem } from '../../data/operations'
+import { useAuthStore } from '../../stores/auth'
+import { useDataStore } from '../../stores/data'
+import type { CollectionIcon } from '../../types/data'
 
-const icons = {
-  transactions: JapaneseYen,
+const auth = useAuthStore()
+const store = useDataStore()
+const icons: Partial<Record<CollectionIcon, typeof Folder>> = {
   subscriptions: CreditCard,
   domains: Globe2,
   projects: Folder,
 }
-
-const items = ref<{ id: string; name: string; count: number; unit: string }[]>(collectionItems.map((item) => ({ ...item })))
+const items = computed(() => [...store.items].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 4))
+const recordCount = computed(() => store.items.reduce((total, item) => total + item.recordCount, 0))
 const selectedId = ref<string | null>(null)
 const isAdding = ref(false)
 const newName = ref('')
+const addError = ref('')
 
-const iconFor = (id: string) => icons[id as CollectionItem['id']] ?? Folder
+const iconFor = (icon: CollectionIcon) => icons[icon] ?? Folder
+onMounted(() => { if (auth.token) void store.load(auth.token).catch(() => {}) })
 
-function addCollection() {
+async function addCollection() {
   const name = newName.value.trim()
-  if (!name) return
-  const id = `custom-${Date.now()}`
-  items.value.push({ id, name, count: 0, unit: '条' })
-  selectedId.value = id
-  newName.value = ''
-  isAdding.value = false
+  if (!name || !auth.token) return
+  addError.value = ''
+  try {
+    const item = await store.create(auth.token, { name, description: '', icon: 'custom', tone: 'blue' })
+    selectedId.value = item.id
+    newName.value = ''
+    isAdding.value = false
+  } catch (cause) { addError.value = cause instanceof Error ? cause.message : '创建失败' }
 }
 
 function cancelAdd() {
   isAdding.value = false
   newName.value = ''
+  addError.value = ''
 }
 </script>
 
 <template>
   <GlassCard title="数据集" class="collections-card">
-    <template #action><ChevronRight class="collections-action-arrow" :size="20" aria-hidden="true" /></template>
+    <template #action><span class="collection-summary">{{ store.loaded ? `${store.items.length} 个集合 · ${recordCount} 条记录` : '—' }}</span><ChevronRight class="collections-action-arrow" :size="20" aria-hidden="true" /></template>
     <div class="collection-content">
-      <div class="collection-grid">
+      <p v-if="store.error" class="collection-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+      <p v-else-if="!store.loaded" class="collection-state">正在加载数据集…</p>
+      <p v-else-if="!items.length" class="collection-state">暂无数据集合</p>
+      <div v-if="store.loaded && !store.error" class="collection-grid">
         <button
           v-for="item in items"
           :key="item.id"
@@ -46,12 +57,12 @@ function cancelAdd() {
           class="collection-tile"
           :class="{ selected: selectedId === item.id }"
           :aria-pressed="selectedId === item.id"
-          :title="`${item.name}: ${item.count} ${item.unit}`"
+          :title="`${item.name}: ${item.recordCount} 条记录`"
           @click="selectedId = item.id"
         >
-          <span class="collection-icon" :data-type="item.id"><component :is="iconFor(item.id)" :size="28" :stroke-width="1.8" /></span>
+          <span class="collection-icon" :data-type="item.icon"><component :is="iconFor(item.icon)" :size="28" :stroke-width="1.8" /></span>
           <span class="collection-name">{{ item.name }}</span>
-          <strong>{{ item.count }}</strong>
+          <strong>{{ item.recordCount }}</strong>
         </button>
         <button type="button" class="collection-tile add-tile" aria-label="添加数据集" @click="isAdding = true">
           <span class="collection-icon add-icon"><Plus :size="31" :stroke-width="1.7" /></span>
@@ -61,6 +72,7 @@ function cancelAdd() {
 
       <form v-if="isAdding" class="add-popover" @submit.prevent="addCollection" @keydown.esc="cancelAdd">
         <label for="collection-name">新建数据集</label>
+        <p v-if="addError" role="alert">{{ addError }}</p>
         <div class="add-controls">
           <input id="collection-name" v-model="newName" autofocus placeholder="数据集名称" maxlength="32" />
           <button type="submit" :disabled="!newName.trim()" aria-label="保存数据集"><Plus :size="18" /></button>
@@ -78,6 +90,7 @@ function cancelAdd() {
 .collections-card :deep(.glass-card__title)::after{content:'›';display:inline-block;margin-left:12px;font-size:26px;font-weight:300;line-height:.5;vertical-align:-1px}
 .collections-action-arrow{color:#fff}
 .collection-content{position:relative;height:100%;display:flex;align-items:safe center}
+.collection-state{width:100%;margin:0;color:white;font-size:12px;text-align:center}.collection-state button{border:0;background:none;color:white;text-decoration:underline;cursor:pointer}.collection-summary{color:white;font-size:12px;white-space:nowrap}
 .collection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));grid-auto-flow:row;gap:clamp(6px,1.3cqw,15px);width:100%}
 .collection-tile{min-width:0;min-height:111px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:6px 3px;border:1px solid rgba(255,255,255,.56);border-radius:17px;background:linear-gradient(145deg,rgba(255,255,255,.51),rgba(255,255,255,.30));box-shadow:inset 0 1px rgba(255,255,255,.42);color:#161b26;font:inherit;cursor:pointer;transition:transform .2s ease,background .2s ease,box-shadow .2s ease}
 .collection-tile:hover{transform:translateY(-3px);background:rgba(255,255,255,.68);box-shadow:0 7px 19px rgba(46,65,132,.13),inset 0 1px rgba(255,255,255,.52)}

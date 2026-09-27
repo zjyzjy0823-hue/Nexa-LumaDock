@@ -46,7 +46,7 @@ function openEdit() {
 defineExpose({ openCreate })
 watch(devices, items => {
   if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
-})
+}, { immediate: true })
 onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 const onlineDevices = computed(() => devices.value.filter(device => device.online))

@@ -2,12 +2,13 @@
 import { FileText, Layers3 } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
 import StatusBadge from '../ui/StatusBadge.vue'
-import type { CollectionRecord, DataCollection } from '../../mock/data'
+import type { CollectionRecord, DataCollection } from '../../types/data'
 
 defineProps<{
   collection: DataCollection | null
   records: CollectionRecord[]
 }>()
+const emit = defineEmits<{ edit: [record: CollectionRecord]; remove: [record: CollectionRecord] }>()
 </script>
 
 <template>
@@ -16,13 +17,14 @@ defineProps<{
     <div class="data-table__intro"><span class="data-table__live" /><span>{{ collection?.description ?? '选择一个集合，查看其中的记录' }}</span><span class="data-table__view">表格视图</span></div>
     <div class="data-table__scroll">
       <table>
-        <thead><tr><th scope="col">名称</th><th scope="col">状态</th><th scope="col">分类</th><th scope="col">更新时间</th></tr></thead>
+        <thead><tr><th scope="col">名称</th><th scope="col">状态</th><th scope="col">分类</th><th scope="col">更新时间</th><th scope="col">操作</th></tr></thead>
         <tbody v-if="records.length">
           <tr v-for="record in records" :key="record.id">
             <td><span class="data-table__name"><span class="data-table__file"><FileText :size="15" :stroke-width="1.8" /></span><strong>{{ record.name }}</strong></span></td>
             <td><StatusBadge :label="record.status" :tone="record.statusTone" /></td>
             <td><span class="data-table__category">{{ record.category }}</span></td>
             <td><time>{{ record.updatedAt }}</time></td>
+            <td><button type="button" @click="emit('edit', record)">编辑</button> <button type="button" @click="emit('remove', record)">删除</button></td>
           </tr>
         </tbody>
       </table>

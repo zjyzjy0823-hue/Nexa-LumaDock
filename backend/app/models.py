@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
+from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -166,3 +167,83 @@ class AgentEvent(Base):
     message: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     agent: Mapped[Agent] = relationship(back_populates="events")
+
+
+class DataCollection(Base):
+    __tablename__ = "data_collections"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    icon: Mapped[str] = mapped_column(String(30), default="custom")
+    tone: Mapped[str] = mapped_column(String(30), default="blue")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    records: Mapped[list["DataRecord"]] = relationship(back_populates="collection", cascade="all, delete-orphan")
+
+
+class DataRecord(Base):
+    __tablename__ = "data_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(ForeignKey("data_collections.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(40), default="active")
+    category: Mapped[str] = mapped_column(String(80), default="")
+    data_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    collection: Mapped[DataCollection] = relationship(back_populates="records")
+
+
+class AutomationWorkflow(Base):
+    __tablename__ = "automation_workflows"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    trigger_type: Mapped[str] = mapped_column(String(30), default="manual")
+    trigger_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    workflow_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    executions: Mapped[list["AutomationExecution"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+
+
+class AutomationExecution(Base):
+    __tablename__ = "automation_executions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("automation_workflows.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    message: Mapped[str] = mapped_column(String(500), default="")
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    workflow: Mapped[AutomationWorkflow] = relationship(back_populates="executions")
+
+
+class LedgerCategory(Base):
+    __tablename__ = "ledger_categories"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    type: Mapped[str] = mapped_column(String(10))
+    icon: Mapped[str] = mapped_column(String(30), default="shopping")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    transactions: Mapped[list["LedgerTransaction"]] = relationship(back_populates="category")
+
+
+class LedgerTransaction(Base):
+    __tablename__ = "ledger_transactions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    category_id: Mapped[str | None] = mapped_column(ForeignKey("ledger_categories.id", ondelete="SET NULL"), nullable=True, index=True)
+    type: Mapped[str] = mapped_column(String(10))
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    description: Mapped[str] = mapped_column(String(200))
+    merchant: Mapped[str] = mapped_column(String(120), default="")
+    note: Mapped[str] = mapped_column(String(500), default="")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    category: Mapped[LedgerCategory | None] = relationship(back_populates="transactions")

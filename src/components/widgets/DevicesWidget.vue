@@ -7,7 +7,9 @@ import { useDevicesStore } from '../../stores/devices'
 
 const auth = useAuthStore()
 const store = useDevicesStore()
-const deviceSnapshots = computed(() => store.devices.slice(0, 4).map(device => ({
+const onlineCount = computed(() => store.devices.filter(device => device.online).length)
+const deviceSnapshots = computed(() => [...store.devices].sort((a, b) =>
+  (b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0) - (a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0)).slice(0, 4).map(device => ({
   id: device.id, name: device.name, platform: device.system,
   icon: device.kind,
   online: device.online, cpu: device.cpu, ram: device.memory,
@@ -22,10 +24,11 @@ function activityPoints(values: number[]) {
 
 <template>
   <GlassCard title="设备" class="devices-card">
-    <template #action><span class="view-all">查看全部 ({{ store.devices.length }})</span></template>
+    <template #action><span class="view-all">{{ store.loadedAt ? `${store.devices.length} 台 · 在线 ${onlineCount} · 离线 ${store.devices.length - onlineCount}` : '—' }}</span></template>
 
     <div class="device-list">
-      <p v-if="!deviceSnapshots.length" class="widget-empty">{{ store.loading ? '正在加载设备…' : store.error || '暂无设备，前往设备页添加。' }}</p>
+      <p v-if="store.error" class="widget-empty" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true)">重试</button></p>
+      <p v-else-if="!deviceSnapshots.length" class="widget-empty">{{ !store.loadedAt ? '正在加载设备…' : '还没有设备' }}</p>
       <div v-for="device in deviceSnapshots" :key="device.id" class="device-row">
         <span class="device-icon" :class="`device-icon--${device.icon}`" aria-hidden="true">
           <span v-if="device.icon === 'desktop'" class="windows-mark"><i /><i /><i /><i /></span>
@@ -54,8 +57,8 @@ function activityPoints(values: number[]) {
         </span>
 
         <span class="device-visual" aria-hidden="true">
-          <span v-if="device.battery !== undefined" class="battery"><i :style="{ width: `${device.battery}%` }" /></span>
-          <svg v-else class="device-sparkline" viewBox="0 0 72 28" preserveAspectRatio="none"><polyline :points="activityPoints(device.activity)" /></svg>
+          <span v-if="device.lastSeenAt && device.battery !== undefined" class="battery"><i :style="{ width: `${device.battery}%` }" /></span>
+          <svg v-else-if="device.lastSeenAt && device.activity.length > 1" class="device-sparkline" viewBox="0 0 72 28" preserveAspectRatio="none"><polyline :points="activityPoints(device.activity)" /></svg>
         </span>
       </div>
     </div>

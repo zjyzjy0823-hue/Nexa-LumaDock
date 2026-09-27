@@ -8,7 +8,7 @@ import GlassCard from '../ui/GlassCard.vue'
 import type { AutomationIcon, AutomationItem } from '../../mock/automation'
 
 defineProps<{ automation: AutomationItem }>()
-const emit = defineEmits<{ toggle: [id: string] }>()
+const emit = defineEmits<{ toggle: [id: string]; select: [id: string]; edit: [id: string]; remove: [id: string]; test: [id: string] }>()
 
 const icons: Record<AutomationIcon, Component> = {
   backup: HardDrive, nas: RefreshCw, notification: BellRing, agent: Bot,
@@ -35,13 +35,14 @@ const icons: Record<AutomationIcon, Component> = {
     </div>
     <div class="automation-card__heading">
       <h3>{{ automation.title }}</h3>
-      <span class="automation-card__status" :class="{ 'automation-card__status--on': automation.enabled }"><i />{{ automation.enabled ? '运行中' : '已暂停' }}</span>
+      <span class="automation-card__status" :class="{ 'automation-card__status--on': automation.enabled }"><i />{{ automation.enabled ? '已启用' : '已停用' }}</span>
     </div>
     <p class="automation-card__description">{{ automation.description }}</p>
     <div class="automation-card__footer">
       <span><MonitorUp :size="13" :stroke-width="1.8" />{{ automation.trigger }}</span>
       <span>上次执行 · {{ automation.lastExecution }}</span>
     </div>
+    <div class="automation-card__footer"><button type="button" @click="emit('select', automation.id)">查看</button><button type="button" @click="emit('edit', automation.id)">编辑</button><button type="button" @click="emit('test', automation.id)">试运行</button><button type="button" @click="emit('remove', automation.id)">删除</button></div>
   </GlassCard>
 </template>
 

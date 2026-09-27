@@ -208,7 +208,7 @@ def test_migration_upgrades_existing_users(tmp_path: Path):
                             cwd=Path(__file__).parents[1], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     upgraded = create_engine(f"sqlite:///{database_file}")
-    assert {"websites", "website_categories", "user_preferences", "devices", "agents", "agent_tasks", "agent_events", "api_keys"}.issubset(inspect(upgraded).get_table_names())
+    assert {"websites", "website_categories", "user_preferences", "devices", "agents", "agent_tasks", "agent_events", "api_keys", "data_collections", "data_records", "automation_workflows", "automation_executions", "ledger_categories", "ledger_transactions"}.issubset(inspect(upgraded).get_table_names())
     with upgraded.connect() as connection:
         assert connection.execute(text("SELECT updated_at FROM users WHERE id = 1")).scalar() is not None
     upgraded.dispose()

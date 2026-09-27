@@ -8,6 +8,6 @@
     { "id": "system", "type": "system", "title": "系统", "icon": "activity", "position": { "x": 828, "y": 318 }, "size": { "width": 456, "height": 246 }, "config": {}, "datasource": "/api/devices" },
     { "id": "collections", "type": "collections", "title": "数据集", "icon": "database", "position": { "x": 0, "y": 587 }, "size": { "width": 572, "height": 198 }, "config": {}, "datasource": "/api/data" },
     { "id": "automation", "type": "automation", "title": "自动化", "icon": "zap", "position": { "x": 590, "y": 587 }, "size": { "width": 325, "height": 198 }, "config": {}, "datasource": "/api/automation" },
-    { "id": "notes", "type": "notes", "title": "便签", "icon": "sticky-note", "position": { "x": 1036, "y": 587 }, "size": { "width": 248, "height": 216 }, "config": {}, "datasource": "/api/data" }
+    { "id": "notes", "type": "notes", "title": "最近记录", "icon": "sticky-note", "position": { "x": 1036, "y": 587 }, "size": { "width": 248, "height": 216 }, "config": {}, "datasource": "/api/v1/data/collections" }
   ]
 }

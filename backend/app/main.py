@@ -11,10 +11,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import api_keys, auth, dashboard
+from .api import api_keys, auth, dashboard, settings, ledger
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router
-from .api.automation.routes import router as automation_router
-from .api.data.routes import router as data_router
+from .api.automation.routes import router as automation_router, v1_router as v1_automation_router
+from .api.data.routes import router as data_router, v1_router as v1_data_router
 from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router
 from .api.websites import router as websites_router
 from .realtime.events import Event
@@ -40,6 +40,7 @@ app.add_middleware(
 for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, agents_router, legacy_agents_router, data_router, automation_router,
+    v1_data_router, v1_automation_router, settings.router, ledger.router,
 ):
     app.include_router(router)
 

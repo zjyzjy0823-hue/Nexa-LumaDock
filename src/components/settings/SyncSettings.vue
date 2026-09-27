@@ -31,9 +31,9 @@ function update<K extends keyof SyncConfig>(key: K, value: SyncConfig[K]) {
     <div class="settings-card">
       <SettingRow label="自动同步" description="有更新时自动保持数据一致"><Toggle :model-value="config.automatic" aria-label="自动同步" @update:model-value="update('automatic', $event)" /></SettingRow>
       <SettingRow label="移动网络同步" description="使用移动网络时继续同步"><Toggle :model-value="config.cellular" aria-label="移动网络同步" @update:model-value="update('cellular', $event)" /></SettingRow>
-      <SettingRow label="最后同步时间" :description="config.lastSynced"><span class="sync-status"><span />已同步</span></SettingRow>
+      <SettingRow label="同步状态" description="自动同步服务尚未启用"><span class="sync-status">未启用</span></SettingRow>
     </div>
-    <div class="settings-button-row"><ActionButton :disabled="syncing" @click="emit('sync')"><RefreshCw :size="15" :class="{ 'sync-spin': syncing }" />{{ syncing ? '同步中…' : '立即同步' }}</ActionButton></div>
+    <div class="settings-button-row"><ActionButton :disabled="syncing" @click="emit('sync')"><RefreshCw :size="15" :class="{ 'sync-spin': syncing }" />{{ syncing ? '刷新中…' : '刷新设置' }}</ActionButton></div>
   </SettingsSection>
 </template>
 

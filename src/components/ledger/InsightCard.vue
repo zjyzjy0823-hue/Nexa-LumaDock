@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Gauge, Lightbulb, Sparkles, TrendingUp } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { InsightTone, LedgerInsight } from '../../mock/ledger'
+import type { InsightTone, LedgerInsight } from '../../types/ledger'
 
 defineProps<{ insights: LedgerInsight[] }>()
 
@@ -9,8 +9,8 @@ const icons = { violet: TrendingUp, blue: Lightbulb, amber: Gauge } satisfies Re
 </script>
 
 <template>
-  <GlassCard class="insight-card" title="AI 洞察">
-    <template #action><span class="insight-card__spark"><Sparkles :size="15" />NEXA INSIGHT</span></template>
+  <GlassCard class="insight-card" title="账本洞察">
+    <template #action><span class="insight-card__spark"><Sparkles :size="15" />LOCAL INSIGHT</span></template>
     <p class="insight-card__intro">根据本月账本，为你整理值得关注的变化。</p>
     <div class="insight-card__items">
       <div v-for="insight in insights" :key="insight.id" class="insight-card__item" :class="`insight-card__item--${insight.tone}`">

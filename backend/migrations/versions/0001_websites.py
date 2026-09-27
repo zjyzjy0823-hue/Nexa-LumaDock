@@ -21,7 +21,8 @@ def upgrade():
         with op.batch_alter_table("users") as batch:
             batch.add_column(__import__("sqlalchemy").Column("updated_at", __import__("sqlalchemy").DateTime(timezone=True), nullable=True))
         bind.execute(text("UPDATE users SET updated_at = created_at WHERE updated_at IS NULL"))
-    Base.metadata.create_all(bind=bind)
+    for name in ("users", "dashboards", "website_categories", "websites", "user_preferences"):
+        Base.metadata.tables[name].create(bind=bind, checkfirst=True)
 
 
 def downgrade():

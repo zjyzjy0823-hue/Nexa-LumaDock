@@ -37,7 +37,8 @@ function markIconFailed(id: string) { failedIcons.value.add(id) }
         <span class="access-label">添加</span>
       </a>
     </div>
-    <p v-if="!recent.length" class="access-hint">打开网站后，这里会显示最近使用。</p>
+    <p v-if="websites.recentError" class="access-hint" role="alert">数据加载失败 <button type="button" @click="auth.token && websites.loadRecent(auth.token)">重试</button></p>
+    <p v-else-if="!recent.length" class="access-hint">{{ websites.recentLoading ? '正在加载网站…' : '暂无快捷网站，打开网站后会显示在这里。' }}</p>
   </GlassCard>
 </template>
 

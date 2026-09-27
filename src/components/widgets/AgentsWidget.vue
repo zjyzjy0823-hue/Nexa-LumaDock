@@ -7,9 +7,15 @@ import { useAgentsStore } from '../../stores/agents'
 
 const auth = useAuthStore()
 const store = useAgentsStore()
+const counts = computed(() => ({ running: store.agents.filter(item => item.status === 'running').length,
+  idle: store.agents.filter(item => item.status === 'idle').length,
+  offline: store.agents.filter(item => item.status === 'offline').length,
+  enabled: store.agents.filter(item => item.enabled).length }))
 const agentSnapshots = computed(() => store.agents.slice(0, 3).map(agent => ({
   id: agent.id, name: agent.name, model: agent.model,
-  status: agent.status === 'running' ? '运行中' : agent.status === 'offline' ? '已暂停' : '待连接',
+  status: agent.status === 'running' ? '运行中' : agent.status === 'offline' ? '已停用' : '空闲',
+  enabled: agent.enabled,
+  latestTask: agent.tasks[0]?.title,
   activity: Array.from({ length: 7 }, (_, index) => {
     const day = new Date(); day.setHours(0, 0, 0, 0); day.setDate(day.getDate() - (6 - index))
     return Math.min(100, agent.tasks.filter(task => new Date(task.createdAt).toDateString() === day.toDateString()).length * 25)
@@ -24,18 +30,19 @@ function activityPoints(values: number[]) {
 
 <template>
   <GlassCard title="智能体" class="agents-card">
-    <template #action><span class="view-all">查看全部 ({{ store.agents.length }})</span></template>
+    <template #action><span class="view-all">{{ store.loadedAt ? `${store.agents.length} 个 · 运行 ${counts.running} · 空闲 ${counts.idle} · 离线 ${counts.offline} · 启用 ${counts.enabled}` : '—' }}</span></template>
 
     <div class="agent-list">
-      <p v-if="!agentSnapshots.length" class="widget-empty">{{ store.loading ? '正在加载智能体…' : store.error || '暂无智能体，前往智能体页添加。' }}</p>
+      <p v-if="store.error" class="widget-empty" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true)">重试</button></p>
+      <p v-else-if="!agentSnapshots.length" class="widget-empty">{{ !store.loadedAt ? '正在加载智能体…' : '还没有智能体' }}</p>
       <div v-for="agent in agentSnapshots" :key="agent.id" class="agent-row" :class="{ 'agent-row--running': agent.status === '运行中' }">
         <span class="agent-avatar agent-avatar--browser" aria-hidden="true"><Sparkles :size="23" :stroke-width="1.8" /></span>
         <span class="agent-identity">
           <strong>{{ agent.name }}</strong>
-          <small>{{ agent.model }} <span aria-hidden="true">·</span> <em :class="{ 'running-text': agent.status === '运行中' }">{{ agent.status }}</em></small>
+          <small>{{ agent.latestTask || agent.model }} <span aria-hidden="true">·</span> <em :class="{ 'running-text': agent.status === '运行中' }">{{ agent.status }}</em></small>
         </span>
         <i class="agent-status-dot" :class="{ 'agent-status-dot--running': agent.status === '运行中' }" :aria-label="agent.status" />
-        <svg class="agent-sparkline" viewBox="0 0 88 27" preserveAspectRatio="none" :aria-label="`${agent.name} 最近的活动`" role="img"><polyline :points="activityPoints(agent.activity)" /></svg>
+        <svg v-if="agent.activity.some(value => value > 0)" class="agent-sparkline" viewBox="0 0 88 27" preserveAspectRatio="none" :aria-label="`${agent.name} 最近的任务`" role="img"><polyline :points="activityPoints(agent.activity)" /></svg>
       </div>
     </div>
   </GlassCard>

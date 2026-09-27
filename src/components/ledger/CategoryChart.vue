@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import GlassCard from '../ui/GlassCard.vue'
-import type { SpendingCategory } from '../../mock/ledger'
+import type { SpendingCategory } from '../../types/ledger'
 
 const props = defineProps<{ categories: SpendingCategory[] }>()
 const total = computed(() => props.categories.reduce((sum, category) => sum + category.amount, 0))

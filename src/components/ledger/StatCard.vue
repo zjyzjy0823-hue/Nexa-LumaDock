@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowDownLeft, ArrowUpRight, ChartNoAxesCombined, Wallet } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { LedgerStat, LedgerStatIcon } from '../../mock/ledger'
+import type { LedgerStat, LedgerStatIcon } from '../../types/ledger'
 
 defineProps<{ stat: LedgerStat }>()
 

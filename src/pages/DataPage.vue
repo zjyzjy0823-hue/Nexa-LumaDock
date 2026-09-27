@@ -6,20 +6,26 @@ import DataStats from '../components/data/DataStats.vue'
 import DataTable from '../components/data/DataTable.vue'
 import ActionButton from '../components/ui/ActionButton.vue'
 import GlassCard from '../components/ui/GlassCard.vue'
-import { dataOverview, initialCollections, type DataCollection } from '../mock/data'
+import { useDataStore } from '../stores/data'
+import { useAuthStore } from '../stores/auth'
+import type { DataCollection, CollectionRecord, DataOverview } from '../types/data'
 
 const emit = defineEmits<{ action: [message: string] }>()
 
-const collections = ref<DataCollection[]>(initialCollections.map(collection => ({
-  ...collection,
-  records: collection.records.map(record => ({ ...record })),
-})))
-const selectedId = ref(initialCollections[0]?.id ?? '')
+const store = useDataStore()
+const auth = useAuthStore()
+const collections = computed(() => store.items)
+const selectedId = ref('')
 const query = ref('')
 const notificationsOpen = ref(false)
 const createOpen = ref(false)
 const draftName = ref('')
 const draftDescription = ref('')
+const draftStatus = ref('active')
+const draftCategory = ref('')
+const editingCollection = ref<DataCollection | null>(null)
+const editingRecord = ref<CollectionRecord | null>(null)
+const dialogKind = ref<'collection' | 'record'>('collection')
 const formError = ref('')
 const nameInput = ref<HTMLInputElement | null>(null)
 
@@ -39,8 +45,16 @@ const visibleRecords = computed(() => {
   return collection.records.filter(record => `${record.name} ${record.status} ${record.category}`.toLocaleLowerCase().includes(search))
 })
 const totalRecords = computed(() => collections.value.reduce((sum, collection) => sum + collection.recordCount, 0))
+const dataOverview = computed<DataOverview>(() => {
+  const records = collections.value.flatMap(collection => collection.records)
+  const recent = records.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 3)
+  return { active: records.filter(record => !['done', 'completed', '完成'].includes(record.status)).length,
+    completed: records.filter(record => ['done', 'completed', '完成'].includes(record.status)).length,
+    recentActivity: recent.length, trend: [], trendLabels: [], activities: recent.map(record => ({ id: record.id, title: record.name, detail: record.status, time: record.updatedAt.slice(0, 10), tone: 'blue' })) }
+})
 
 async function openCreate() {
+  dialogKind.value = 'collection'; editingCollection.value = null; draftName.value = ''; draftDescription.value = ''
   notificationsOpen.value = false
   formError.value = ''
   createOpen.value = true
@@ -54,34 +68,27 @@ function closeCreate() {
   formError.value = ''
 }
 
-function createCollection() {
+async function createCollection() {
   const name = draftName.value.trim()
   const description = draftDescription.value.trim()
   if (!name) {
     formError.value = '请输入集合名称。'
     return
   }
-  if (collections.value.some(collection => collection.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-    formError.value = '这个集合名称已经存在。'
-    return
-  }
-  const collection: DataCollection = {
-    id: `collection-${Date.now()}`,
-    name,
-    description: description || '自定义数据集合',
-    recordCount: 0,
-    icon: 'custom',
-    tone: 'blue',
-    records: [],
-  }
-  collections.value.unshift(collection)
-  selectedId.value = collection.id
-  query.value = ''
-  draftName.value = ''
-  draftDescription.value = ''
-  closeCreate()
-  emit('action', `已创建「${name}」集合。`)
+  if (!auth.token) return
+  try {
+    if (dialogKind.value === 'record') {
+      if (editingRecord.value) await store.updateRecord(auth.token, editingRecord.value.id, { name, status: draftStatus.value, category: draftCategory.value })
+      else if (selectedCollection.value) await store.createRecord(auth.token, selectedCollection.value.id, { name, status: draftStatus.value, category: draftCategory.value, data_json: {} })
+    } else if (editingCollection.value) await store.update(auth.token, editingCollection.value.id, { name, description })
+    else { const item = await store.create(auth.token, { name, description, icon: 'custom', tone: 'blue' }); selectedId.value = item.id }
+    closeCreate(); emit('action', '已保存。')
+  } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
+function openEditCollection(item: DataCollection) { dialogKind.value = 'collection'; editingCollection.value = item; draftName.value = item.name; draftDescription.value = item.description; createOpen.value = true }
+function openRecord(item?: CollectionRecord) { dialogKind.value = 'record'; editingRecord.value = item ?? null; draftName.value = item?.name ?? ''; draftStatus.value = item?.status ?? 'active'; draftCategory.value = item?.category ?? ''; createOpen.value = true }
+async function removeCollection(item: DataCollection) { if (!auth.token || !confirm(`删除集合「${item.name}」及其记录？`)) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeRecord(item: CollectionRecord) { if (!auth.token || !confirm(`删除记录「${item.name}」？`)) return; try { await store.removeRecord(auth.token, item.id); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 
 async function copyCollectionName(collection: DataCollection) {
   try {
@@ -102,6 +109,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
   }
 }
 onMounted(() => {
+  if (auth.token) store.load(auth.token).catch(() => {})
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDocumentKeydown)
 })
@@ -124,30 +132,34 @@ onUnmounted(() => {
         </div>
       </div>
       <ActionButton size="md" @click="openCreate"><Plus :size="16" />新建集合</ActionButton>
+      <ActionButton v-if="selectedCollection" size="md" @click="openRecord()"><Plus :size="16" />新增记录</ActionButton>
     </div>
+    <p v-if="store.loading" role="status">正在加载数据…</p>
+    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
 
-    <section class="data-page__collections" aria-labelledby="data-collections-heading">
+    <section v-if="store.loaded" class="data-page__collections" aria-labelledby="data-collections-heading">
       <div class="data-page__section-heading"><div><span>COLLECTION OVERVIEW</span><h2 id="data-collections-heading">集合概览</h2></div><p>{{ visibleCollections.length }} 个集合 <span>·</span> {{ totalRecords }} 条记录</p></div>
       <div v-if="visibleCollections.length" class="data-page__collection-grid">
-        <CollectionCard v-for="collection in visibleCollections" :key="collection.id" :collection="collection" :selected="selectedCollection?.id === collection.id" @select="selectedId = collection.id" @copy="copyCollectionName(collection)" />
+        <CollectionCard v-for="collection in visibleCollections" :key="collection.id" :collection="collection" :selected="selectedCollection?.id === collection.id" @select="selectedId = collection.id" @copy="copyCollectionName(collection)" @edit="openEditCollection(collection)" @remove="removeCollection(collection)" />
       </div>
-      <GlassCard v-else class="data-page__no-results"><Search :size="26" /><strong>没有找到匹配的集合</strong><span>试试其他关键词，或新建一个集合。</span></GlassCard>
+      <GlassCard v-else class="data-page__no-results"><Search :size="26" /><strong>{{ query ? '没有找到匹配的集合' : '还没有集合' }}</strong><span>新建一个集合开始管理数据。</span></GlassCard>
     </section>
 
-    <section class="data-page__details" aria-label="数据库与统计">
-      <DataTable :collection="selectedCollection" :records="visibleRecords" />
+    <section v-if="store.loaded" class="data-page__details" aria-label="数据库与统计">
+      <DataTable :collection="selectedCollection" :records="visibleRecords" @edit="openRecord" @remove="removeRecord" />
       <DataStats :total-records="totalRecords" :overview="dataOverview" />
     </section>
 
     <Teleport to="body">
       <div v-if="createOpen" class="data-page__dialog-backdrop" @click="closeCreate">
         <GlassCard class="data-page__dialog" role="dialog" aria-modal="true" aria-labelledby="data-create-title" @click.stop>
-          <div class="data-page__dialog-heading"><div><span>NEW COLLECTION</span><h2 id="data-create-title">新建集合</h2><p>为项目、资源或想法创建专属数据空间。</p></div><button class="data-page__dialog-close" type="button" aria-label="关闭" @click="closeCreate"><X :size="18" /></button></div>
+          <div class="data-page__dialog-heading"><div><span>{{ dialogKind === 'record' ? 'RECORD' : 'COLLECTION' }}</span><h2 id="data-create-title">{{ editingCollection || editingRecord ? '编辑' : '新建' }}{{ dialogKind === 'record' ? '记录' : '集合' }}</h2><p>保存到当前账户。</p></div><button class="data-page__dialog-close" type="button" aria-label="关闭" @click="closeCreate"><X :size="18" /></button></div>
           <form @submit.prevent="createCollection">
-            <label>集合名称<input ref="nameInput" v-model="draftName" type="text" maxlength="32" placeholder="例如：Books" /></label>
-            <label>描述<input v-model="draftDescription" type="text" maxlength="80" placeholder="这个集合用于管理什么？" /></label>
+            <label>名称<input ref="nameInput" v-model="draftName" type="text" maxlength="120" placeholder="名称" /></label>
+            <label v-if="dialogKind === 'collection'">描述<input v-model="draftDescription" type="text" maxlength="500" placeholder="描述" /></label>
+            <template v-else><label>状态<input v-model="draftStatus" type="text" maxlength="40" /></label><label>分类<input v-model="draftCategory" type="text" maxlength="80" /></label></template>
             <p v-if="formError" class="data-page__form-error" role="alert">{{ formError }}</p>
-            <div class="data-page__dialog-actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Plus :size="15" />创建集合</ActionButton></div>
+            <div class="data-page__dialog-actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Plus :size="15" />保存</ActionButton></div>
           </form>
         </GlassCard>
       </div>

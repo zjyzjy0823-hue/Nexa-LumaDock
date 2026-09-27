@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Search, ChevronRight, Globe2, StickyNote, Workflow, Database } from 'lucide-vue-next'
+import { Search, ChevronRight, Globe2, Workflow, Database } from 'lucide-vue-next'
 import { useDashboardStore } from '../../stores/dashboard'
 import { useAuthStore } from '../../stores/auth'
 import TopActionControls from './TopActionControls.vue'
@@ -22,7 +22,6 @@ const homeCreateItems = [
   { label: '网站快捷方式', kind: '网站快捷方式', icon: Globe2 },
   { label: '数据集', kind: '数据集', icon: Database },
   { label: '自动化', kind: '自动化', icon: Workflow },
-  { label: '便签', kind: '便签', icon: StickyNote },
 ]
 
 const greeting = computed(() => {
@@ -32,7 +31,7 @@ const greeting = computed(() => {
 const date = computed(() => new Intl.DateTimeFormat('zh-CN', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now.value))
 const details: Record<string, string> = {
   'quick-access': '网站与快捷方式', clock: '时钟与天气', device: '已连接的设备', agent: 'AI 活动',
-  ledger: '余额与收支', system: '性能概览', collections: '结构化数据', automation: '定时流程', notes: '最近记录',
+  ledger: '本月收支', system: '在线设备指标', collections: '结构化数据', automation: '工作流配置', notes: '最近记录',
 }
 const sections = computed(() => dashboard.widgets.map(widget => ({
   label: widget.title, detail: details[widget.type] ?? '仪表盘组件', id: widget.id,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, AlertCircle, CheckCircle2, Plus, Sparkles, X, Zap } from 'lucide-vue-next'
 import ActionButton from '../components/ui/ActionButton.vue'
 import GlassCard from '../components/ui/GlassCard.vue'
@@ -7,32 +7,52 @@ import AutomationCard from '../components/automation/AutomationCard.vue'
 import ExecutionList from '../components/automation/ExecutionList.vue'
 import TriggerLibrary from '../components/automation/TriggerLibrary.vue'
 import WorkflowBuilder from '../components/automation/WorkflowBuilder.vue'
-import {
-  automationSummary, automations, executions, triggerLibrary, workflowExample,
-  type AutomationItem, type WorkflowNode,
-} from '../mock/automation'
+import { triggerLibrary } from '../mock/automation'
+import { useAutomationStore } from '../stores/automation'
+import { useAuthStore } from '../stores/auth'
+import type { AutomationItem, WorkflowNode, ExecutionItem, Workflow } from '../types/automation'
 
 const emit = defineEmits<{ action: [message: string] }>()
-const automationItems = ref<AutomationItem[]>(automations.map(item => ({ ...item })))
-const workflowNodes = ref<WorkflowNode[]>(workflowExample.map(node => ({ ...node })))
+const store = useAutomationStore(), auth = useAuthStore()
+const selectedId = ref('')
+const selectedWorkflow = computed(() => store.items.find(item => item.id === selectedId.value) ?? store.items[0] ?? null)
+const workflowNodes = computed<WorkflowNode[]>(() => selectedWorkflow.value?.workflowJson?.length ? selectedWorkflow.value.workflowJson : [
+  { kind: 'WHEN', label: '触发条件', text: '电脑上线', detail: '设备事件' },
+  { kind: 'IF', label: '判断条件', text: '始终执行', detail: '' },
+  { kind: 'DO', label: '执行动作', text: '发送通知', detail: '' },
+])
+const automationItems = computed<AutomationItem[]>(() => store.items.map(item => {
+  const last = store.executions.find(execution => execution.workflowId === item.id)
+  const trigger = triggerLibrary.find(entry => triggerType(entry.id) === item.triggerType)
+  return { id: item.id, title: item.name, description: item.description, icon: trigger?.icon ?? 'workflow', enabled: item.enabled,
+    trigger: String(item.triggerConfigJson.label ?? trigger?.example ?? item.triggerType), lastExecution: last?.startedAt.slice(0, 16) ?? '尚未执行', lastExecutionStatus: last?.status === 'failed' ? 'failed' : last ? 'success' : 'never' }
+}))
+const executions = computed<ExecutionItem[]>(() => store.executions.map(item => ({ id: item.id,
+  title: store.items.find(workflow => workflow.id === item.workflowId)?.name ?? '已删除工作流', description: item.message,
+  time: item.startedAt.slice(0, 16), status: item.status === 'failed' ? 'failed' : 'success' })))
+function triggerType(id: string): Workflow['triggerType'] { return ({ device: 'device_status', schedule: 'schedule', webhook: 'webhook', agent: 'agent_event' } as Record<string, Workflow['triggerType']>)[id] ?? 'manual' }
+onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
 const selectedTriggerId = ref('device')
+watch(selectedWorkflow, item => { selectedTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item?.triggerType)?.id ?? 'device' })
 const expanded = ref(false)
 const createOpen = ref(false)
 const newName = ref('')
 const newDescription = ref('')
 const newTriggerId = ref('device')
+const editingId = ref('')
 const firstField = ref<HTMLInputElement | null>(null)
 
 const runningCount = computed(() => automationItems.value.filter(item => item.enabled).length)
 const visibleAutomations = computed(() => expanded.value ? automationItems.value : automationItems.value.slice(0, 4))
 const stats = computed(() => [
-  { label: '运行中自动化', value: `${runningCount.value} / ${automationItems.value.length}`, detail: '已启用的工作流', icon: Zap, tone: 'blue' },
-  { label: '今日执行次数', value: String(automationSummary.todayExecutions), detail: '自动完成的任务', icon: Activity, tone: 'violet' },
-  { label: '成功率', value: `${automationSummary.successRate}%`, detail: '近 30 天运行表现', icon: CheckCircle2, tone: 'mint' },
-  { label: '错误次数', value: String(automationSummary.errorCount), detail: '需要关注的执行', icon: AlertCircle, tone: 'amber' },
+  { label: '已启用工作流', value: `${runningCount.value} / ${automationItems.value.length}`, detail: '仅保存启用状态', icon: Zap, tone: 'blue' },
+  { label: '今日执行次数', value: String(store.executions.filter(item => item.startedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)).length), detail: '测试执行记录', icon: Activity, tone: 'violet' },
+  { label: '成功率', value: `${store.executions.length ? Math.round(store.executions.filter(item => item.status === 'success').length / store.executions.length * 100) : 0}%`, detail: '测试执行成功率', icon: CheckCircle2, tone: 'mint' },
+  { label: '错误次数', value: String(store.executions.filter(item => item.status === 'failed').length), detail: '需要关注的执行', icon: AlertCircle, tone: 'amber' },
 ])
 
 function openCreate() {
+  editingId.value = ''; newName.value = ''; newDescription.value = ''
   createOpen.value = true
   nextTick(() => firstField.value?.focus())
 }
@@ -40,48 +60,44 @@ defineExpose({ openCreate })
 
 function closeCreate() { createOpen.value = false }
 
-function toggleAutomation(id: string) {
-  const item = automationItems.value.find(entry => entry.id === id)
-  if (!item) return
-  item.enabled = !item.enabled
-  emit('action', `「${item.title}」已${item.enabled ? '启动' : '暂停'}。`)
-}
+async function toggleAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (item && auth.token) { try { await store.update(auth.token, id, { enabled: !item.enabled }) } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') } } }
+function editAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (!item) return; editingId.value = id; newName.value = item.name; newDescription.value = item.description; newTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item.triggerType)?.id ?? 'device'; createOpen.value = true }
+async function removeAutomation(id: string) { if (!auth.token || !confirm('删除此工作流及其执行历史？')) return; try { await store.remove(auth.token, id); emit('action', '工作流已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function runTest(id: string) { if (!auth.token) return; try { await store.testRun(auth.token, id); emit('action', '测试执行已记录，未运行任何动作。') } catch (error) { emit('action', error instanceof Error ? error.message : '试运行失败') } }
 
 function selectTrigger(id: string) {
   const trigger = triggerLibrary.find(item => item.id === id)
   if (!trigger) return
   selectedTriggerId.value = id
-  workflowNodes.value = workflowNodes.value.map(node => node.kind === 'WHEN'
-    ? { ...node, text: trigger.example, detail: trigger.title }
-    : node)
-  emit('action', `已选择「${trigger.title}」作为触发器。`)
+  newTriggerId.value = id
+  if (selectedWorkflow.value && auth.token) store.update(auth.token, selectedWorkflow.value.id, {
+    trigger_type: triggerType(id), trigger_config_json: { label: trigger.example },
+    workflow_json: workflowNodes.value.map(node => node.kind === 'WHEN' ? { ...node, text: trigger.example, detail: trigger.title } : node),
+  }).catch(error => emit('action', error instanceof Error ? error.message : '保存失败'))
 }
 
-function updateWorkflow(nodes: WorkflowNode[]) {
-  workflowNodes.value = nodes
-  emit('action', '示例工作流已更新。')
-}
+async function updateWorkflow(nodes: WorkflowNode[]) { if (selectedWorkflow.value && auth.token) try { await store.update(auth.token, selectedWorkflow.value.id, { workflow_json: nodes }); emit('action', '工作流节点已保存。') } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') } }
 
-function createAutomation() {
+async function createAutomation() {
   const title = newName.value.trim()
   if (!title) return
   const trigger = triggerLibrary.find(item => item.id === newTriggerId.value) ?? triggerLibrary[0]!
-  automationItems.value.unshift({
-    id: `automation-${Date.now()}`,
-    title,
-    description: newDescription.value.trim() || '新的自动化工作流',
-    icon: trigger.icon,
-    enabled: true,
-    trigger: trigger.example,
-    lastExecution: '尚未执行',
-    lastExecutionStatus: 'never',
-  })
+  if (!auth.token) return
+  try {
+    if (editingId.value) await store.update(auth.token, editingId.value, { name: title, description: newDescription.value.trim(), trigger_type: triggerType(newTriggerId.value), trigger_config_json: { label: trigger.example },
+      workflow_json: (store.items.find(item => item.id === editingId.value)?.workflowJson ?? workflowNodes.value).map(node => node.kind === 'WHEN' ? { ...node, text: trigger.example, detail: trigger.title } : node) })
+    else { const item = await store.create(auth.token, { name: title, description: newDescription.value.trim(), enabled: true, trigger_type: triggerType(newTriggerId.value), trigger_config_json: { label: trigger.example }, workflow_json: [
+      { kind: 'WHEN', label: '触发条件', text: trigger.example, detail: trigger.title },
+      { kind: 'IF', label: '判断条件', text: '始终执行', detail: '' },
+      { kind: 'DO', label: '执行动作', text: '发送通知', detail: '' },
+    ] }); selectedId.value = item.id }
+  } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败'); return }
   expanded.value = true
   closeCreate()
   newName.value = ''
   newDescription.value = ''
   newTriggerId.value = 'device'
-  emit('action', `「${title}」已创建并启动。`)
+  emit('action', `「${title}」已保存。`)
 }
 
 function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && createOpen.value) closeCreate() }
@@ -93,23 +109,26 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   <div class="automation-page">
     <h1 class="automation-visually-hidden">自动化</h1>
     <div class="automation-page-actions" aria-label="自动化操作"><ActionButton size="sm" @click="openCreate"><Plus :size="16" />新建自动化</ActionButton></div>
+    <p v-if="store.loading" role="status">正在加载工作流…</p>
+    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
 
-    <section class="automation-stats" aria-label="自动化概览">
+    <section v-if="store.loaded" class="automation-stats" aria-label="自动化概览">
       <GlassCard v-for="stat in stats" :key="stat.label" class="automation-stat" :class="`automation-stat--${stat.tone}`">
         <div class="automation-stat__top"><span>{{ stat.label }}</span><span class="automation-stat__icon"><component :is="stat.icon" :size="18" :stroke-width="1.8" /></span></div>
         <strong>{{ stat.value }}</strong><small>{{ stat.detail }}</small>
       </GlassCard>
     </section>
 
-    <div class="automation-main-grid">
+    <div v-if="store.loaded" class="automation-main-grid">
       <section class="automation-flows" aria-labelledby="automation-flows-title">
         <div class="automation-section-heading"><div><span>ACTIVE WORKFLOWS</span><h2 id="automation-flows-title">我的自动化 <small>{{ automationItems.length }}</small></h2></div><button type="button" @click="expanded = !expanded">{{ expanded ? '收起列表' : '查看全部' }}<span aria-hidden="true">→</span></button></div>
-        <div class="automation-card-grid"><AutomationCard v-for="item in visibleAutomations" :key="item.id" :automation="item" @toggle="toggleAutomation" /></div>
+        <div v-if="!automationItems.length">还没有工作流，请创建一个。</div>
+        <div class="automation-card-grid"><AutomationCard v-for="item in visibleAutomations" :key="item.id" :automation="item" @toggle="toggleAutomation" @select="selectedId = $event" @edit="editAutomation" @remove="removeAutomation" @test="runTest" /></div>
       </section>
-      <WorkflowBuilder :nodes="workflowNodes" @update:nodes="updateWorkflow" />
+      <WorkflowBuilder v-if="selectedWorkflow" :nodes="workflowNodes" @update:nodes="updateWorkflow" />
     </div>
 
-    <div class="automation-secondary-grid">
+    <div v-if="store.loaded" class="automation-secondary-grid">
       <ExecutionList :executions="executions" />
       <TriggerLibrary :triggers="triggerLibrary" :selected-id="selectedTriggerId" @select="selectTrigger" />
     </div>
@@ -117,12 +136,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
     <Teleport to="body">
       <div v-if="createOpen" class="automation-modal-backdrop" @click.self="closeCreate">
         <GlassCard class="automation-modal" role="dialog" aria-modal="true" aria-labelledby="automation-modal-title">
-          <div class="automation-modal__heading"><div><span>NEW WORKFLOW</span><h2 id="automation-modal-title">新建自动化</h2><p>定义一个自动运行的任务。</p></div><button type="button" aria-label="关闭" @click="closeCreate"><X :size="17" /></button></div>
+          <div class="automation-modal__heading"><div><span>WORKFLOW</span><h2 id="automation-modal-title">{{ editingId ? '编辑' : '新建' }}自动化</h2><p>保存工作流配置；真实调度尚未启用。</p></div><button type="button" aria-label="关闭" @click="closeCreate"><X :size="17" /></button></div>
           <form class="automation-modal__form" @submit.prevent="createAutomation">
             <label>名称<input ref="firstField" v-model="newName" type="text" placeholder="例如：夜间同步" maxlength="40" required /></label>
             <label>描述<textarea v-model="newDescription" placeholder="这个自动化会做什么？" rows="3" maxlength="120" /></label>
             <label>触发器<select v-model="newTriggerId"><option v-for="trigger in triggerLibrary" :key="trigger.id" :value="trigger.id">{{ trigger.title }}</option></select></label>
-            <div class="automation-modal__actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Sparkles :size="15" />创建自动化</ActionButton></div>
+            <div class="automation-modal__actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Sparkles :size="15" />保存工作流</ActionButton></div>
           </form>
         </GlassCard>
       </div>

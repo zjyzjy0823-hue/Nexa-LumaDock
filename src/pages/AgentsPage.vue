@@ -66,7 +66,7 @@ function openEdit() {
 defineExpose({ openCreate })
 watch(agents, items => {
   if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
-})
+}, { immediate: true })
 onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 const tabs: { id: AgentTab; label: string }[] = [

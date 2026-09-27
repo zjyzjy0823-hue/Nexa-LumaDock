@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Bot, Cloud, Coffee, Download, Laptop, ShoppingBag } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { Transaction, TransactionIcon } from '../../mock/ledger'
+import type { Transaction, TransactionIcon } from '../../types/ledger'
 
 defineProps<{ transactions: Transaction[] }>()
+const emit = defineEmits<{ edit: [id: string]; remove: [id: string] }>()
 
 const icons = {
   software: Bot,
@@ -28,12 +29,13 @@ function shortDate(date: string) {
   <GlassCard class="transaction-list" title="最近交易">
     <template #action><span class="transaction-list__count">{{ transactions.length }} 笔记录</span></template>
     <div class="transaction-list__table" role="table" aria-label="最近交易列表">
-      <div class="transaction-list__head" role="row"><span role="columnheader">描述</span><span role="columnheader">分类</span><span role="columnheader">日期</span><span role="columnheader">金额</span></div>
+      <div class="transaction-list__head" role="row"><span role="columnheader">描述</span><span role="columnheader">分类</span><span role="columnheader">日期</span><span role="columnheader">金额</span><span role="columnheader">操作</span></div>
       <div v-for="transaction in transactions" :key="transaction.id" class="transaction-list__row" role="row">
         <div class="transaction-list__description" role="cell"><span class="transaction-list__icon" :class="{ 'transaction-list__icon--income': transaction.amount > 0 }"><component :is="icons[transaction.icon]" :size="17" :stroke-width="1.8" /></span><span><strong>{{ transaction.description }}</strong><small>{{ transaction.detail }}</small></span></div>
         <span class="transaction-list__category" role="cell">{{ transaction.category }}</span>
         <time class="transaction-list__date" role="cell" :datetime="transaction.date">{{ shortDate(transaction.date) }}</time>
         <strong class="transaction-list__amount" :class="{ 'transaction-list__amount--income': transaction.amount > 0 }" role="cell">{{ money(transaction.amount) }}</strong>
+        <span><button type="button" @click="emit('edit', transaction.id)">编辑</button> <button type="button" @click="emit('remove', transaction.id)">删除</button></span>
       </div>
     </div>
   </GlassCard>
@@ -44,7 +46,7 @@ function shortDate(date: string) {
 .transaction-list :deep(.glass-card__body) { overflow:visible; }
 .transaction-list__count { color:rgba(255,255,255,.78); font-size:11px; font-weight:600; }
 .transaction-list__table { display:grid; gap:6px; }
-.transaction-list__head,.transaction-list__row { display:grid; grid-template-columns:minmax(180px,1.8fr) minmax(72px,.75fr) minmax(86px,.8fr) minmax(96px,.75fr); align-items:center; gap:10px; }
+.transaction-list__head,.transaction-list__row { display:grid; grid-template-columns:minmax(150px,1.8fr) minmax(65px,.75fr) minmax(75px,.8fr) minmax(90px,.75fr) 65px; align-items:center; gap:10px; }
 .transaction-list__head { min-height:28px; padding:0 15px; color:rgba(255,255,255,.86); font-size:10px; font-weight:730; text-shadow:0 1px 8px rgba(25,38,76,.24); }
 .transaction-list__head span:last-child { text-align:right; }
 .transaction-list__row { min-height:55px; padding:6px 15px; border:var(--glass-tile-border); border-radius:12px; background:var(--ledger-tile-background,var(--glass-tile-background)); box-shadow:var(--glass-tile-shadow); backdrop-filter:blur(12px) saturate(120%); -webkit-backdrop-filter:blur(12px) saturate(120%); color:#415978; font-size:11px; transition:background .18s,transform .18s; }

@@ -24,7 +24,7 @@ function update<K extends keyof SecurityConfig>(key: K, value: SecurityConfig[K]
     <div class="settings-card security-hero"><div class="settings-icon-tile"><ShieldCheck :size="20" /></div><div><strong>账户安全</strong><p>关键操作在你的掌控之中。</p></div><span>PROTECTED</span></div>
     <div class="settings-card">
       <SettingRow label="修改密码" description="定期更新密码可保护账户"><ActionButton variant="secondary" size="sm" @click="emit('password')"><KeyRound :size="14" />修改</ActionButton></SettingRow>
-      <SettingRow label="Two-Factor Authentication" description="登录时增加一道安全验证"><Toggle :model-value="config.twoFactor" aria-label="双重身份验证" @update:model-value="update('twoFactor', $event)" /></SettingRow>
+      <SettingRow label="Two-Factor Authentication" description="双重身份验证尚未提供"><Toggle :model-value="false" disabled aria-label="双重身份验证尚未提供" /></SettingRow>
       <SettingRow label="登录 Session" :description="`${config.activeSessions} 个活跃会话`"><button type="button" class="security-row-link" @click="emit('action', '会话管理将在连接服务后开放。')"><MonitorSmartphone :size="15" />查看<ArrowUpRight :size="13" /></button></SettingRow>
       <SettingRow label="Trusted Devices" :description="`${config.trustedDevices} 台受信任设备`"><button type="button" class="security-row-link" @click="emit('action', '受信任设备管理将在连接服务后开放。')"><Laptop :size="15" />管理<ArrowUpRight :size="13" /></button></SettingRow>
       <SettingRow label="API Tokens" :description="`${config.apiTokens} 个活跃密钥`"><button type="button" class="security-row-link" @click="emit('navigate', 'API')"><Fingerprint :size="15" />前往 API<ArrowUpRight :size="13" /></button></SettingRow>

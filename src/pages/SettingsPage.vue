@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RotateCcw } from 'lucide-vue-next'
 import ActionButton from '../components/ui/ActionButton.vue'
 import Input from '../components/ui/Input.vue'
@@ -15,10 +15,9 @@ import NotificationSettings from '../components/settings/NotificationSettings.vu
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import SettingsNav from '../components/settings/SettingsNav.vue'
 import { useAuthStore } from '../stores/auth'
-import {
-  aboutInfo, appearanceInitial, notificationInitial, profileInitial, securityInitial,
-  settingsNavigation, storageInitial, syncInitial,
-} from '../mock/settings'
+import { useSettingsStore, defaultSettings } from '../stores/settings'
+import { settingsService } from '../services/settings'
+import { aboutInfo, settingsNavigation } from '../mock/settings'
 import type {
   AppearanceConfig, NotificationConfig, SecurityConfig, SettingsSectionId,
   StorageInfo, SyncConfig, UserProfile,
@@ -30,17 +29,38 @@ const emit = defineEmits<{ action: [message: string]; navigate: [page: string] }
 const activeSection = ref<SettingsSectionId>('account')
 const searchQuery = ref('')
 const auth = useAuthStore()
-const profile = ref<UserProfile>({ ...profileInitial, username: auth.user?.username ?? profileInitial.username })
-const appearance = ref<AppearanceConfig>({ ...appearanceInitial })
-const syncConfig = ref<SyncConfig>({ ...syncInitial })
-const storage = ref<StorageInfo>({ ...storageInitial, segments: storageInitial.segments.map(item => ({ ...item })) })
-const security = ref<SecurityConfig>({ ...securityInitial })
-const notifications = ref<NotificationConfig>({ events: { ...notificationInitial.events }, channels: { ...notificationInitial.channels } })
-const avatarUrl = ref('')
+const store = useSettingsStore()
+const profile = computed<UserProfile>(() => ({ username: auth.user?.username ?? '', email: '', timezone: store.settings.timezone, language: store.settings.language }))
+const appearance = computed<AppearanceConfig>(() => ({ ...defaultSettings.appearance, ...store.settings.appearance } as AppearanceConfig))
+const syncConfig = computed<SyncConfig>(() => ({ ...defaultSettings.sync, ...store.settings.sync } as SyncConfig))
+const security = computed<SecurityConfig>(() => ({ ...defaultSettings.security, ...store.settings.security } as SecurityConfig))
+const notifications = computed<NotificationConfig>(() => store.settings.notifications)
+const storage = ref<StorageInfo>({ usedGb: 0, totalGb: 0, segments: [] })
+const avatarUrl = computed(() => auth.user?.avatar ?? '')
 const passwordOpen = ref(false)
 const syncing = ref(false)
 const passwordDraft = ref({ current: '', next: '', confirm: '' })
-let syncTimer: ReturnType<typeof setTimeout> | undefined
+const saving = ref(false)
+onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
+async function saveSettings(payload: Parameters<typeof store.update>[1]) {
+  if (!auth.token) return
+  saving.value = true
+  try { await store.update(auth.token, payload); emit('action', '设置已保存。') }
+  catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') }
+  finally { saving.value = false }
+}
+async function updateProfile(value: UserProfile) {
+  if (!auth.token) return
+  try {
+    if (value.username !== profile.value.username) auth.user = await settingsService.account(auth.token, { username: value.username })
+    await saveSettings({ timezone: value.timezone, language: value.language })
+  } catch (error) { emit('action', error instanceof Error ? error.message : '账户保存失败') }
+}
+async function updateAvatar(url: string) {
+  if (!auth.token) return
+  try { auth.user = await settingsService.account(auth.token, { avatar: url.trim() || null }); emit('action', '头像已保存。') }
+  catch (error) { emit('action', error instanceof Error ? error.message : '头像保存失败') }
+}
 
 function selectSection(id: SettingsSectionId) {
   activeSection.value = id
@@ -50,50 +70,22 @@ function selectFirstSearchResult() {
   const match = settingsNavigation.find(item => item.label.includes(searchQuery.value.trim()))
   if (match) selectSection(match.id)
 }
-function resetSettings() {
-  profile.value = { ...profileInitial, username: auth.user?.username ?? profileInitial.username }
-  appearance.value = { ...appearanceInitial }
-  syncConfig.value = { ...syncInitial }
-  storage.value = { ...storageInitial, segments: storageInitial.segments.map(item => ({ ...item })) }
-  security.value = { ...securityInitial }
-  notifications.value = { events: { ...notificationInitial.events }, channels: { ...notificationInitial.channels } }
-  if (avatarUrl.value) URL.revokeObjectURL(avatarUrl.value)
-  avatarUrl.value = ''
-  emit('action', '设置已恢复为演示默认值。')
-}
-function updateAvatar(file: File) {
-  if (avatarUrl.value) URL.revokeObjectURL(avatarUrl.value)
-  avatarUrl.value = URL.createObjectURL(file)
-  emit('action', '头像预览已更新。')
-}
-function updatePassword() {
+function resetSettings() { saveSettings(structuredClone(defaultSettings)) }
+async function updatePassword() {
   if (!passwordDraft.value.current || passwordDraft.value.next.length < 8 || passwordDraft.value.next !== passwordDraft.value.confirm) {
     emit('action', '请输入原密码，并确认至少 8 位的新密码。')
     return
   }
-  passwordOpen.value = false
-  passwordDraft.value = { current: '', next: '', confirm: '' }
-  emit('action', '密码修改演示已完成，尚未连接账户服务。')
+  if (!auth.token) return
+  try {
+    await settingsService.password(auth.token, passwordDraft.value.current, passwordDraft.value.next)
+    passwordOpen.value = false
+    passwordDraft.value = { current: '', next: '', confirm: '' }
+    emit('action', '密码已修改。')
+  } catch (error) { emit('action', error instanceof Error ? error.message : '密码修改失败') }
 }
-function syncNow() {
-  if (syncing.value) return
-  syncing.value = true
-  syncTimer = setTimeout(() => {
-    syncConfig.value = { ...syncConfig.value, lastSynced: '刚刚' }
-    syncing.value = false
-    emit('action', '演示数据已同步。')
-  }, 600)
-}
-function clearCache() {
-  const cache = storage.value.segments.find(item => item.id === 'cache')
-  if (!cache?.bytes) { emit('action', '缓存已经清理。'); return }
-  storage.value = {
-    ...storage.value,
-    usedGb: Math.max(0, Number((storage.value.usedGb - cache.bytes).toFixed(1))),
-    segments: storage.value.segments.map(item => item.id === 'cache' ? { ...item, bytes: 0, display: '0 MB' } : item),
-  }
-  emit('action', '本地演示缓存已清理。')
-}
+async function syncNow() { if (auth.token) { syncing.value = true; try { await store.load(auth.token, true); emit('action', '设置已刷新。') } catch {} finally { syncing.value = false } } }
+function clearCache() { emit('action', '没有可清理的缓存。') }
 function snapshot() {
   return {
     product: 'Nexa', version: aboutInfo.version, exportedAt: new Date().toISOString(),
@@ -117,22 +109,15 @@ async function importData(file: File) {
   try {
     const data = JSON.parse(await file.text()) as Record<string, unknown>
     if (data.product !== 'Nexa' || !data.profile || !data.appearance || !data.sync || !data.security || !data.notifications) throw new Error('Invalid settings file')
-    profile.value = { ...profileInitial, ...(data.profile as UserProfile) }
-    appearance.value = { ...appearanceInitial, ...(data.appearance as AppearanceConfig) }
-    syncConfig.value = { ...syncInitial, ...(data.sync as SyncConfig) }
-    security.value = { ...securityInitial, ...(data.security as SecurityConfig) }
-    const incoming = data.notifications as NotificationConfig
-    notifications.value = { events: { ...notificationInitial.events, ...incoming.events }, channels: { ...notificationInitial.channels, ...incoming.channels } }
-    emit('action', '设置数据已导入到当前会话。')
+    await updateProfile(data.profile as UserProfile)
+    await saveSettings({ appearance: data.appearance as AppearanceConfig, sync: data.sync as SyncConfig,
+      security: data.security as SecurityConfig, notifications: data.notifications as NotificationConfig })
+    emit('action', '设置已导入并保存。')
   } catch {
     emit('action', '无法读取设置文件，请使用 Nexa 导出的 JSON 文件。')
   }
 }
 
-onUnmounted(() => {
-  if (syncTimer) clearTimeout(syncTimer)
-  if (avatarUrl.value) URL.revokeObjectURL(avatarUrl.value)
-})
 </script>
 
 <template>
@@ -147,20 +132,23 @@ onUnmounted(() => {
       </template>
     </PageHeader>
 
-    <div class="settings-layout">
+    <p v-if="store.loading" role="status">正在加载设置…</p>
+    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+
+    <div v-if="store.loaded" class="settings-layout">
       <SettingsNav :active="activeSection" :query="searchQuery" @select="selectSection" />
       <div class="settings-content" :key="activeSection">
-        <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="profile = $event" @avatar="updateAvatar" @password="passwordOpen = true" />
-        <AppearanceSettings v-else-if="activeSection === 'appearance'" :config="appearance" @update:config="appearance = $event" />
-        <SyncSettings v-else-if="activeSection === 'sync'" :config="syncConfig" :syncing="syncing" @update:config="syncConfig = $event" @sync="syncNow" />
+        <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="updateProfile" @avatar="updateAvatar" @password="passwordOpen = true" />
+        <AppearanceSettings v-else-if="activeSection === 'appearance'" :config="appearance" @update:config="saveSettings({ theme: $event.theme === 'auto' ? 'system' : $event.theme, appearance: $event })" />
+        <SyncSettings v-else-if="activeSection === 'sync'" :config="syncConfig" :syncing="syncing" @update:config="saveSettings({ sync: $event })" @sync="syncNow" />
         <StorageSettings v-else-if="activeSection === 'storage'" :info="storage" @clear="clearCache" @export="exportData" @import="importData" @backup="backupData" />
-        <SecuritySettings v-else-if="activeSection === 'security'" :config="security" @update:config="security = $event" @password="passwordOpen = true" @action="emit('action', $event)" @navigate="emit('navigate', $event)" />
-        <NotificationSettings v-else-if="activeSection === 'notifications'" :config="notifications" @update:config="notifications = $event" />
+        <SecuritySettings v-else-if="activeSection === 'security'" :config="security" @update:config="saveSettings({ security: $event })" @password="passwordOpen = true" @action="emit('action', $event)" @navigate="emit('navigate', $event)" />
+        <NotificationSettings v-else-if="activeSection === 'notifications'" :config="notifications" @update:config="saveSettings({ notifications: $event })" />
         <AboutSettings v-else :info="aboutInfo" @action="emit('action', $event)" />
       </div>
     </div>
 
-    <Modal :open="passwordOpen" title="修改密码" description="输入当前密码并设置新密码。演示模式不会修改真实账户。" @close="passwordOpen = false">
+    <Modal :open="passwordOpen" title="修改密码" description="输入当前密码并设置新密码。" @close="passwordOpen = false">
       <form id="settings-password-form" class="settings-password-form" @submit.prevent="updatePassword">
         <label class="settings-field"><span>当前密码</span><Input v-model="passwordDraft.current" type="password" autocomplete="current-password" aria-label="当前密码" required /></label>
         <label class="settings-field"><span>新密码</span><Input v-model="passwordDraft.next" type="password" autocomplete="new-password" aria-label="新密码" required :maxlength="72" /></label>
