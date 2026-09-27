@@ -22,7 +22,6 @@ export interface DashboardRecord {
 export interface User {
   id: number
   username: string
-  email: string
   avatar: string | null
   created_at: string
 }

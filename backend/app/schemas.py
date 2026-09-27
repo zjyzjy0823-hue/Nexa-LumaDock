@@ -6,20 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=80, pattern=r"^[\w-]+$")
-    email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=8, max_length=256)
 
-    @field_validator("email")
+    @field_validator("username")
     @classmethod
-    def normalize_email(cls, value: str) -> str:
-        value = value.strip().lower()
-        if "@" not in value or "." not in value.split("@")[-1]:
-            raise ValueError("Invalid email address")
-        return value
+    def normalize_username(cls, value: str) -> str:
+        return value.strip()
 
 
 class UserLogin(BaseModel):
-    email: str
+    username: str
     password: str
 
 
@@ -28,7 +24,6 @@ class UserPublic(BaseModel):
 
     id: int
     username: str
-    email: str
     avatar: str | None
     created_at: datetime
 

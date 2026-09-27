@@ -1,18 +1,31 @@
 <script setup lang="ts">
-import { Apple } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { Apple, HardDrive, Server, Tablet } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { deviceSnapshots } from '../../data/overview'
+import { useAuthStore } from '../../stores/auth'
+import { useDevicesStore } from '../../stores/devices'
+
+const auth = useAuthStore()
+const store = useDevicesStore()
+const deviceSnapshots = computed(() => store.devices.slice(0, 4).map(device => ({
+  id: device.id, name: device.name, platform: device.system,
+  icon: device.kind,
+  online: device.online, cpu: device.cpu, ram: device.memory,
+  battery: device.battery ?? undefined, activity: device.activity, lastSeenAt: device.lastSeenAt,
+})))
+onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 function activityPoints(values: number[]) {
-  return values.map((value, index) => `${(index * 72) / (values.length - 1)},${26 - value * .23}`).join(' ')
+  return values.map((value, index) => `${(index * 72) / Math.max(values.length - 1, 1)},${26 - value * .23}`).join(' ')
 }
 </script>
 
 <template>
   <GlassCard title="设备" class="devices-card">
-    <template #action><span class="view-all">查看全部 ({{ deviceSnapshots.length }})</span></template>
+    <template #action><span class="view-all">查看全部 ({{ store.devices.length }})</span></template>
 
     <div class="device-list">
+      <p v-if="!deviceSnapshots.length" class="widget-empty">{{ store.loading ? '正在加载设备…' : store.error || '暂无设备，前往设备页添加。' }}</p>
       <div v-for="device in deviceSnapshots" :key="device.id" class="device-row">
         <span class="device-icon" :class="`device-icon--${device.icon}`" aria-hidden="true">
           <span v-if="device.icon === 'desktop'" class="windows-mark"><i /><i /><i /><i /></span>
@@ -25,7 +38,9 @@ function activityPoints(values: number[]) {
             <rect x="10" y="27" width="3" height="6" rx="1.5" fill="currentColor" /><rect x="23" y="27" width="3" height="6" rx="1.5" fill="currentColor" />
             <circle cx="13" cy="12" r=".9" fill="#e7f5da" /><circle cx="23" cy="12" r=".9" fill="#e7f5da" />
           </svg>
-          <svg v-else class="minecraft-mark" viewBox="0 0 36 36"><path d="m18 3 15 7-15 7L3 10Z" fill="#81b64e" /><path d="M3 10 18 17v16L3 26Z" fill="#725236" /><path d="m33 10-15 7v16l15-7Z" fill="#59432e" /><path d="m3 10 15 7 15-7v5l-15 7-15-7Z" fill="#68a847" /><path d="m7 19 4 2v5l-4-2Zm17 2 4-2v5l-4 2Z" fill="#a48157" /></svg>
+          <Tablet v-else-if="device.icon === 'tablet'" :size="27" :stroke-width="1.6" />
+          <HardDrive v-else-if="device.icon === 'nas'" :size="27" :stroke-width="1.6" />
+          <Server v-else :size="27" :stroke-width="1.6" />
         </span>
 
         <span class="device-identity"><strong>{{ device.name }}</strong><small>{{ device.platform }}</small></span>
@@ -33,7 +48,8 @@ function activityPoints(values: number[]) {
         <span class="connection-status" :class="{ 'connection-status--offline': !device.online }"><i />{{ device.online ? '在线' : '离线' }}</span>
 
         <span class="device-metrics">
-          <span v-if="device.battery !== undefined">电量 <strong>{{ device.battery }}%</strong></span>
+          <span v-if="!device.lastSeenAt">等待心跳</span>
+          <span v-else-if="device.battery !== undefined">电量 <strong>{{ device.battery }}%</strong></span>
           <template v-else><span>CPU <strong>{{ device.cpu }}%</strong></span><span>内存 <strong>{{ device.ram }}%</strong></span></template>
         </span>
 
@@ -54,6 +70,7 @@ function activityPoints(values: number[]) {
 .view-all { color: rgba(255,255,255,.96); font-size: 14px; font-weight: 450; white-space: nowrap; }
 .devices-card :deep(.glass-card__body) { min-height: 0; }
 .device-list { display: grid; height: 100%; grid-template-rows: repeat(4, minmax(42px, 1fr)); gap: 4px; }
+.widget-empty { grid-row: 1 / -1; align-self: center; margin: 0; color: rgba(255,255,255,.9); font-size: 12px; text-align: center; }
 .device-row { display: grid; grid-template-columns: 37px minmax(0,1fr) 62px 72px 60px; align-items: center; gap: 7px; min-width: 0; min-height: 0; padding: 5px 11px; border: 1px solid rgba(255,255,255,.5); border-radius: 15px; background: linear-gradient(110deg, rgba(247,249,255,.76), rgba(231,238,255,.64)); box-shadow: inset 0 1px 0 rgba(255,255,255,.58); transition: transform .2s ease, background .2s ease; }
 .device-row:hover { transform: translateX(2px); background: rgba(255,255,255,.85); }
 .device-icon { display: grid; width: 34px; height: 34px; place-items: center; }

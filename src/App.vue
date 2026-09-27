@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import AuthGate from './components/auth/AuthGate.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import TopSearchBar from './components/layout/TopSearchBar.vue'
 import DashboardPage from './pages/DashboardPage.vue'
@@ -11,6 +12,11 @@ import LedgerPage from './pages/LedgerPage.vue'
 import AutomationPage from './pages/AutomationPage.vue'
 import ApiPage from './pages/ApiPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
+import { useAuthStore } from './stores/auth'
+import { useDashboardStore } from './stores/dashboard'
+import { useWebsitesStore } from './stores/websites'
+import { useDevicesStore } from './stores/devices'
+import { useAgentsStore } from './stores/agents'
 
 type Page = 'Home' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings'
 const pagePaths: Record<Page, string> = {
@@ -25,6 +31,8 @@ function pageFromLocation(): Page {
 }
 
 const currentPage = ref<Page>(pageFromLocation())
+const auth = useAuthStore()
+const authReady = ref(false)
 const currentComponent = computed(() => ({
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
@@ -33,6 +41,14 @@ const currentComponent = computed(() => ({
 const pageRef = ref<{ openCreate: () => void } | null>(null)
 const toast = ref('')
 let toastTimer: ReturnType<typeof setTimeout> | undefined
+watch(() => auth.user?.id, (current, previous) => {
+  if (previous !== undefined && current !== previous) {
+    useDashboardStore().reset()
+    useWebsitesStore().reset()
+    useDevicesStore().reset()
+    useAgentsStore().reset()
+  }
+})
 
 function showToast(message: string) {
   toast.value = message
@@ -63,9 +79,12 @@ async function create(kind: string) {
   await nextTick()
   pageRef.value?.openCreate?.()
 }
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
+  try { if (auth.token) await auth.restore() }
+  catch { /* The account screen allows another login attempt. */ }
+  finally { authReady.value = true }
 })
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
@@ -75,7 +94,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <DashboardPage v-if="currentPage === 'Home'" @navigate="navigate" @create="create" />
+  <div v-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
+  <AuthGate v-else-if="!auth.user" />
+  <DashboardPage v-else-if="currentPage === 'Home'" @navigate="navigate" @create="create" />
   <div v-else class="workspace-shell nexa-shell">
     <Sidebar :active-item="currentPage" @select="navigate" />
     <main class="workspace-main">
@@ -87,6 +108,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.auth-loading { display:grid; min-height:100dvh; place-items:center; color:white; background:#1c2a5e url('/nexa-wallpaper.png') center/cover; font-size:14px; }
 .workspace-main { min-width:0; }
 .workspace-content { min-width:0; padding-bottom:12px; }
 .workspace-toast { position:fixed; z-index:80; right:28px; bottom:25px; display:flex; gap:8px; align-items:center; max-width:min(360px,calc(100vw - 32px)); padding:12px 16px; border:1px solid rgba(255,255,255,.64); border-radius:14px; color:#314263; background:rgba(249,251,255,.9); box-shadow:0 15px 32px rgba(30,42,89,.22); backdrop-filter:blur(22px); font-size:12px; font-weight:630; }

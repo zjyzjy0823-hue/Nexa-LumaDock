@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { Camera, KeyRound, LogOut, UserRound } from 'lucide-vue-next'
+import { Camera, KeyRound, UserRound } from 'lucide-vue-next'
 import ActionButton from '../ui/ActionButton.vue'
-import Input from '../ui/Input.vue'
 import SettingsSection from './SettingsSection.vue'
 import { languageOptions, timezoneOptions } from '../../mock/settings'
 import type { UserProfile } from '../../types/settings'
@@ -11,7 +10,6 @@ const emit = defineEmits<{
   'update:profile': [profile: UserProfile]
   avatar: [file: File]
   password: []
-  logout: []
 }>()
 
 function update(field: keyof UserProfile, value: string) {
@@ -31,22 +29,20 @@ function onAvatar(event: Event) {
           <img v-if="avatarUrl" :src="avatarUrl" alt="账户头像" />
           <UserRound v-else :size="34" :stroke-width="1.5" />
         </div>
-        <div class="profile-card__identity"><span>PERSONAL ACCOUNT</span><strong>{{ profile.username }}</strong><small>{{ profile.email }}</small></div>
+        <div class="profile-card__identity"><span>PERSONAL ACCOUNT</span><strong>{{ profile.username }}</strong></div>
         <label class="profile-avatar-picker">
           <Camera :size="15" />更换头像
           <input type="file" accept="image/*" aria-label="更换头像" @change="onAvatar" />
         </label>
       </div>
       <div class="settings-field-grid profile-fields">
-        <label class="settings-field"><span>用户名</span><Input :model-value="profile.username" aria-label="用户名" @update:model-value="update('username', $event)" /></label>
-        <label class="settings-field"><span>邮箱</span><Input :model-value="profile.email" type="email" aria-label="邮箱" @update:model-value="update('email', $event)" /></label>
+        <div class="settings-field"><span>用户名</span><strong class="profile-username">{{ profile.username }}</strong></div>
         <label class="settings-field"><span>时区</span><select :value="profile.timezone" @change="update('timezone', ($event.target as HTMLSelectElement).value)"><option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</option></select></label>
         <label class="settings-field"><span>语言</span><select :value="profile.language" @change="update('language', ($event.target as HTMLSelectElement).value)"><option v-for="language in languageOptions" :key="language" :value="language">{{ language }}</option></select></label>
       </div>
     </div>
     <div class="settings-button-row">
       <ActionButton variant="secondary" @click="emit('password')"><KeyRound :size="15" />修改密码</ActionButton>
-      <ActionButton variant="ghost" class="profile-logout" @click="emit('logout')"><LogOut :size="15" />退出登录</ActionButton>
     </div>
   </SettingsSection>
 </template>
@@ -63,6 +59,6 @@ function onAvatar(event: Event) {
 .profile-avatar-picker:hover { transform: translateY(-2px); background: rgba(255,255,255,.88); }
 .profile-avatar-picker input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .profile-fields { margin-top: 24px; padding-top: 19px; border-top: 1px solid var(--line); }
-.profile-logout { color: #b86872 !important; }
+.profile-username { display:flex; align-items:center; min-height:40px; color:var(--text-primary); font-size:13px; font-weight:650; }
 @media (max-width: 560px) { .profile-card__top { flex-wrap: wrap; } .profile-avatar-picker { width: 100%; justify-content: center; margin: 4px 0 0; } }
 </style>

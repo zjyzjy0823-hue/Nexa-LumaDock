@@ -1,10 +1,12 @@
 import os
+from dotenv import load_dotenv
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
+load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./nexa.db")
 engine = create_engine(
     DATABASE_URL,

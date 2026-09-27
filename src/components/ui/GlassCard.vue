@@ -58,7 +58,7 @@ defineProps<{
 .glass-card:hover {
   transform: translateY(-3px) scale(1.02);
   border-color: rgba(255,255,255,.72);
-  box-shadow: var(--glass-card-hover-shadow);
+  box-shadow: var(--shadow-card-hover);
 }
 .glass-card__header, .glass-card__body { position: relative; z-index: 1; }
 .glass-card__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }

@@ -22,7 +22,7 @@ function showToast(message: string) {
   toastTimeout = setTimeout(() => { toast.value = '' }, 3200)
 }
 
-const { board, desktop, editing, activeWidget, scale, begin, keyAdjust, finish, resetWidget, resetAll, loadGuest } = useWidgetLayout(showToast)
+const { board, desktop, editing, activeWidget, scale, begin, keyAdjust, finish, resetWidget, resetAll } = useWidgetLayout(showToast)
 const destinationPages = ['Websites', 'Devices', 'Agents', 'Data', 'Ledger', 'Automation', 'API', 'Settings']
 
 function focusSection(id: string) {
@@ -41,13 +41,8 @@ function selectNav(item: string) {
 }
 onMounted(async () => {
   try {
-    const created = await auth.ensureLocalAccount()
     if (!auth.token) return
     await dashboard.load(auth.token)
-    if (created) {
-      loadGuest()
-      await dashboard.save(auth.token)
-    }
   } catch {
     showToast('暂时无法同步，布局将保存在此浏览器。')
   }

@@ -70,7 +70,7 @@ onUnmounted(() => mediaQuery?.removeEventListener('change', updateDesktop))
 
 <style scoped>
 /* The size container lets each card adapt to its own dimensions. It also isolates
-   the child card's backdrop, so sample the wallpaper on this outer frame. */
+   the child card's backdrop, so sample and scale the wallpaper on this outer frame. */
 .resizable-widget {
   position: relative;
   min-width: 0;
@@ -78,7 +78,10 @@ onUnmounted(() => mediaQuery?.removeEventListener('change', updateDesktop))
   container-type: size;
   backdrop-filter: blur(var(--glass-blur)) saturate(125%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(125%);
+  transition: transform .22s ease;
 }
+.resizable-widget:not(.resizable-widget--editing):hover { transform: translateY(-3px) scale(1.02); }
+.resizable-widget :deep(.glass-card:hover) { transform: none; }
 .resizable-widget__content { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .resizable-widget--editing { outline: 2px dashed rgba(255,255,255,.85); outline-offset: 3px; }
 .widget-control { position: absolute; z-index: 8; display: flex; align-items: center; justify-content: center; gap: 3px; height: 26px; padding: 0 8px; border: 1px solid rgba(255,255,255,.8); border-radius: 9px; background: rgba(63,93,162,.9); box-shadow: 0 4px 12px rgba(28,42,86,.25); color: white; font-size: 11px; font-weight: 600; touch-action: none; user-select: none; }
@@ -88,4 +91,5 @@ onUnmounted(() => mediaQuery?.removeEventListener('change', updateDesktop))
 .widget-control--move:active { cursor: grabbing; }
 .widget-control--resize { right: -8px; bottom: -8px; width: 30px; height: 30px; padding: 0; cursor: nwse-resize; }
 @media (max-width: 1279px) { .resizable-widget { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .resizable-widget { transition: none; } .resizable-widget:not(.resizable-widget--editing):hover { transform: none; } }
 </style>

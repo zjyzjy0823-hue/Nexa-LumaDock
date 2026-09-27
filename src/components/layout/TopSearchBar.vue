@@ -26,7 +26,7 @@ const createItems = [
 </template>
 
 <style scoped>
-.workspace-topbar { position: relative; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 68px; margin-bottom: 12px; color: white; }
+.workspace-topbar { position: relative; z-index: 70; display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 68px; margin-bottom: 12px; color: white; }
 .workspace-topbar__location { display: flex; align-items: center; gap: 9px; color: rgba(245,249,255,.67); font-size: 12px; font-weight: 580; white-space: nowrap; }
 .workspace-topbar__location strong { color: #fff; font-weight: 690; }
 .workspace-topbar__dot { width: 8px; height: 8px; border: 2px solid rgba(255,255,255,.85); border-radius: 50%; box-shadow: 0 0 0 4px rgba(255,255,255,.1); }

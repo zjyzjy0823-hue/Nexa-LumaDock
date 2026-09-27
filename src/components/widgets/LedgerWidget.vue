@@ -48,7 +48,7 @@ const money = (amount: number, digits = 0) =>
 .ledger-card{padding:17px 15px 10px}
 .ledger-card :deep(.glass-card__header){margin-bottom:10px}
 .ledger-card :deep(.glass-card__title){color:#fff;font-size:20px;font-weight:500}
-.ledger-card :deep(.glass-card__title)::before{content:'▧';display:inline-grid;place-items:center;width:23px;height:23px;margin-right:12px;border:2px solid rgba(255,255,255,.92);border-radius:4px;font-size:16px;line-height:1;vertical-align:1px}
+.ledger-card :deep(.glass-card__title)::before{content:'';display:inline-block;width:28px;height:28px;margin-right:9px;background:url('/ledger-icon.png') center / contain no-repeat;vertical-align:-7px;filter:drop-shadow(0 1px 3px rgba(41,69,134,.34))}
 .ledger-card :deep(.glass-card__title)::after{content:'›';display:inline-block;margin-left:12px;font-size:26px;font-weight:300;line-height:.5;vertical-align:-1px}
 .period{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid rgba(255,255,255,.37);border-radius:10px;background:rgba(255,255,255,.15);box-shadow:inset 0 1px rgba(255,255,255,.22);color:rgba(255,255,255,.94);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
 .period:hover{background:rgba(255,255,255,.27)}

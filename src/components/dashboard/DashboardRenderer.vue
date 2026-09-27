@@ -74,7 +74,8 @@ function actionFor(id: string, event: string, value?: string) {
 <style scoped>
 .dashboard-grid { position: relative; width: 100%; }
 .dashboard-grid > .widget { position: absolute; min-width: 0; scroll-margin-top: 24px; border-radius: var(--radius-card); }
-.widget--active { z-index: 12; }
+.dashboard-grid > .widget:hover { z-index: 11; }
+.dashboard-grid > .widget.widget--active { z-index: 12; }
 .widget--focused { outline: 2px solid rgba(211,231,255,.9); outline-offset: 3px; }
 @media (max-width: 1279px) {
   .dashboard-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; align-items: stretch; }

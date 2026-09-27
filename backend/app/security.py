@@ -13,9 +13,9 @@ from .database import get_db
 from .models import User
 
 
-if os.getenv("NEXA_ENV") == "production" and not os.getenv("JWT_SECRET"):
-    raise RuntimeError("JWT_SECRET is required in production")
-JWT_SECRET = os.getenv("JWT_SECRET", "nexa-local-development-only-change-me")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET) < 16:
+    raise RuntimeError("JWT_SECRET must be set to a secret of at least 16 characters")
 JWT_ALGORITHM = "HS256"
 bearer = HTTPBearer(auto_error=False)
 

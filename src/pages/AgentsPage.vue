@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import {
   Activity, ArrowRight, ArrowUpRight, AudioLines, BarChart3, Bot, CalendarDays,
@@ -13,34 +13,61 @@ import ListItemCard from '../components/ui/ListItemCard.vue'
 import SectionContainer from '../components/ui/SectionContainer.vue'
 import StatCard from '../components/ui/StatCard.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
-import { agents as seedAgents } from '../data/agents'
-import type { Agent, AgentCapabilityIcon, AgentStatus, AgentTaskStatus } from '../data/agents'
+import { useAuthStore } from '../stores/auth'
+import { useAgentsStore } from '../stores/agents'
+import type { Agent, AgentCapabilityIcon, AgentStatus, AgentTaskStatus, AgentTask } from '../types/agent'
 
 type AgentTab = 'overview' | 'tasks' | 'logs' | 'capabilities' | 'api' | 'usage'
 type DirectoryFilter = 'all' | AgentStatus
 type TaskFilter = 'all' | AgentTaskStatus
 
-const agents = ref<Agent[]>(seedAgents.map(agent => ({
-  ...agent,
-  capabilities: [...agent.capabilities],
-  tasks: [...agent.tasks],
-  logs: [...agent.logs],
-  apiCalls: [...agent.apiCalls],
-})))
-const selectedId = ref('nora')
+const auth = useAuthStore()
+const store = useAgentsStore()
+const agents = computed(() => store.agents)
+const selectedId = ref('')
 const activeTab = ref<AgentTab>('overview')
 const directoryFilter = ref<DirectoryFilter>('all')
 const taskFilter = ref<TaskFilter>('all')
 const searchQuery = ref('')
 const createAgentOpen = ref(false)
+const agentDialogMode = ref<'add' | 'edit'>('add')
 const createTaskOpen = ref(false)
 const newAgentName = ref('')
 const newAgentRole = ref('')
+const newAgentDescription = ref('')
+const newAgentModel = ref('未配置')
 const newTaskTitle = ref('')
+const newTaskDescription = ref('')
+const saving = ref(false)
+const formError = ref('')
 const toast = ref('')
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 
-defineExpose({ openCreate: () => { createAgentOpen.value = true } })
+function openCreate() {
+  agentDialogMode.value = 'add'
+  newAgentName.value = ''
+  newAgentRole.value = ''
+  newAgentDescription.value = ''
+  newAgentModel.value = '未配置'
+  formError.value = ''
+  createAgentOpen.value = true
+}
+function openEdit() {
+  const item = selectedAgent.value
+  if (!item) return
+  agentDialogMode.value = 'edit'
+  newAgentName.value = item.name
+  newAgentRole.value = item.role
+  newAgentDescription.value = item.description
+  newAgentModel.value = item.model
+  formError.value = ''
+  createAgentOpen.value = true
+}
+defineExpose({ openCreate })
+watch(agents, items => {
+  if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
+})
+onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 const tabs: { id: AgentTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -58,7 +85,7 @@ const capabilityIcons: Record<AgentCapabilityIcon, Component> = {
   search: Search, file: FileText, globe: Globe2, database: Database, code: Code2, calendar: CalendarDays,
 }
 
-const selectedAgent = computed<Agent>(() => agents.value.find(agent => agent.id === selectedId.value) ?? agents.value[0]!)
+const selectedAgent = computed<Agent | undefined>(() => agents.value.find(agent => agent.id === selectedId.value) ?? agents.value[0])
 const visibleAgents = computed(() => agents.value.filter(agent => {
   const matchesFilter = directoryFilter.value === 'all' || agent.status === directoryFilter.value
   const query = searchQuery.value.trim().toLocaleLowerCase()
@@ -67,13 +94,22 @@ const visibleAgents = computed(() => agents.value.filter(agent => {
 }))
 const runningCount = computed(() => agents.value.filter(agent => agent.status === 'running').length)
 const todayTasks = computed(() => agents.value.reduce((total, agent) => total + agent.tasksToday, 0))
-const currentTask = computed(() => selectedAgent.value.tasks.find(task => task.status === 'running') ?? selectedAgent.value.tasks.find(task => task.status === 'queued'))
-const recentTasks = computed(() => selectedAgent.value.tasks.filter(task => task.status !== 'running').slice(0, 3))
-const visibleTasks = computed(() => selectedAgent.value.tasks.filter(task => taskFilter.value === 'all' || task.status === taskFilter.value))
+const completedCount = computed(() => agents.value.reduce((total, agent) => total + agent.tasks.filter(task => task.status === 'completed').length, 0))
+const currentTask = computed(() => selectedAgent.value?.tasks.find(task => task.status === 'running') ?? selectedAgent.value?.tasks.find(task => task.status === 'queued'))
+const recentTasks = computed(() => selectedAgent.value?.tasks.filter(task => task.status !== 'running').slice(0, 3) ?? [])
+const visibleTasks = computed(() => selectedAgent.value?.tasks.filter(task => taskFilter.value === 'all' || task.status === taskFilter.value) ?? [])
+const activityByDay = computed(() => {
+  const tasks = selectedAgent.value?.tasks ?? []
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(); day.setHours(0, 0, 0, 0); day.setDate(day.getDate() - (6 - index))
+    const count = tasks.filter(task => new Date(task.createdAt).toDateString() === day.toDateString()).length
+    return { label: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][day.getDay()], count }
+  })
+})
 
 function agentStatus(status: AgentStatus) {
   if (status === 'running') return { label: '运行中', tone: 'success' as const }
-  if (status === 'idle') return { label: '待命中', tone: 'warning' as const }
+  if (status === 'idle') return { label: '待连接', tone: 'warning' as const }
   return { label: '已暂停', tone: 'neutral' as const }
 }
 
@@ -89,9 +125,13 @@ function selectAgent(id: string) {
   taskFilter.value = 'all'
 }
 
-function toggleAgentStatus() {
-  selectedAgent.value.status = selectedAgent.value.status === 'running' ? 'offline' : 'running'
-  showToast(selectedAgent.value.status === 'running' ? `${selectedAgent.value.name} 已恢复运行` : `${selectedAgent.value.name} 已暂停`)
+async function toggleAgentStatus() {
+  const item = selectedAgent.value
+  if (!auth.token || !item) return
+  try {
+    await store.update(auth.token, item.id, { enabled: !item.enabled })
+    showToast(item.enabled ? `${item.name} 已暂停` : `${item.name} 已启用，等待运行时连接`)
+  } catch (error) { showToast(error instanceof Error ? error.message : '操作失败') }
 }
 
 function showToast(message: string) {
@@ -100,42 +140,63 @@ function showToast(message: string) {
   toastTimer = setTimeout(() => { toast.value = '' }, 3000)
 }
 
-function createAgent() {
+async function saveAgent() {
   const name = newAgentName.value.trim()
-  if (!name) return
-  const agent: Agent = {
-    id: `agent-${Date.now()}`,
-    name,
-    role: newAgentRole.value.trim() || '自定义助理',
-    description: '新的智能体已准备就绪。您可以继续配置能力，并开始安排任务。',
-    status: 'idle', avatar: 'spark', model: 'GPT-4o', workspace: '个人工作区',
-    successRate: '—', callsToday: 0, tasksToday: 0, uptime: '待命中', lastActive: '刚刚创建',
-    capabilities: [], tasks: [], logs: [], apiCalls: [],
-  }
-  agents.value.unshift(agent)
-  selectedId.value = agent.id
-  activeTab.value = 'overview'
-  createAgentOpen.value = false
-  newAgentName.value = ''
-  newAgentRole.value = ''
-  showToast(`${name} 已添加到智能体列表`)
+  if (!auth.token || !name || saving.value) { formError.value = '请输入智能体名称。'; return }
+  saving.value = true
+  formError.value = ''
+  try {
+    const existing = agentDialogMode.value === 'edit' ? selectedAgent.value : undefined
+    const data = { name, role: newAgentRole.value.trim() || '自定义助理', description: newAgentDescription.value.trim(),
+      model: newAgentModel.value.trim() || '未配置', workspace: existing?.workspace ?? '个人工作区',
+      avatar: existing?.avatar ?? 'spark' as const }
+    const item = agentDialogMode.value === 'edit' && selectedId.value
+      ? await store.update(auth.token, selectedId.value, data)
+      : await store.create(auth.token, data)
+    selectedId.value = item.id
+    activeTab.value = 'overview'
+    createAgentOpen.value = false
+    showToast(agentDialogMode.value === 'edit' ? '智能体已更新。' : '智能体已创建，等待运行时连接。')
+  } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
+  finally { saving.value = false }
 }
 
-function createTask() {
+async function removeAgent() {
+  const item = selectedAgent.value
+  if (!auth.token || !item || !window.confirm(`删除「${item.name}」及其任务？`)) return
+  try { await store.remove(auth.token, item.id); showToast('智能体已删除。') }
+  catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
+}
+
+async function createTask() {
   const title = newTaskTitle.value.trim()
-  if (!title) return
-  selectedAgent.value.tasks.unshift({
-    id: `${selectedAgent.value.id.slice(0, 2).toUpperCase()}-${Math.floor(Math.random() * 9000 + 1000)}`,
-    title,
-    description: '任务已加入等待队列',
-    time: '刚刚创建',
-    status: 'queued',
-  })
-  selectedAgent.value.tasksToday += 1
-  newTaskTitle.value = ''
-  createTaskOpen.value = false
-  activeTab.value = 'tasks'
-  showToast('任务已创建并加入队列')
+  const item = selectedAgent.value
+  if (!auth.token || !item || !title || saving.value) { formError.value = '请输入任务名称。'; return }
+  saving.value = true
+  formError.value = ''
+  try {
+    await store.createTask(auth.token, item.id, title, newTaskDescription.value.trim())
+    newTaskTitle.value = ''
+    newTaskDescription.value = ''
+    createTaskOpen.value = false
+    activeTab.value = 'tasks'
+    showToast('任务已加入队列。')
+  } catch (error) { formError.value = error instanceof Error ? error.message : '创建失败' }
+  finally { saving.value = false }
+}
+
+async function setTaskStatus(task: AgentTask, status: AgentTaskStatus) {
+  const item = selectedAgent.value
+  if (!auth.token || !item) return
+  try { await store.updateTask(auth.token, item.id, task.id, status); showToast('任务状态已更新。') }
+  catch (error) { showToast(error instanceof Error ? error.message : '更新失败') }
+}
+
+async function removeTask(task: AgentTask) {
+  const item = selectedAgent.value
+  if (!auth.token || !item || !window.confirm(`删除任务「${task.title}」？`)) return
+  try { await store.removeTask(auth.token, item.id, task.id); showToast('任务已删除。') }
+  catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
 }
 
 async function copyApiPath(path: string) {
@@ -154,18 +215,20 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
   <div class="agents-page">
     <h1 class="visually-hidden">智能体</h1>
     <div class="agents-page-actions" aria-label="智能体操作">
-      <ActionButton variant="secondary" size="sm" @click="createTaskOpen = true"><Zap :size="15" />新建任务</ActionButton>
-      <ActionButton size="sm" @click="createAgentOpen = true"><Plus :size="16" />添加智能体</ActionButton>
+      <ActionButton variant="secondary" size="sm" :disabled="!selectedAgent" @click="formError = ''; createTaskOpen = true"><Zap :size="15" />新建任务</ActionButton>
+      <ActionButton size="sm" @click="openCreate"><Plus :size="16" />添加智能体</ActionButton>
     </div>
 
     <div class="agents-stats">
       <StatCard label="智能体总数" :value="String(agents.length).padStart(2, '0')" detail="已配置的 AI 助手" tone="blue" :icon="Bot" />
       <StatCard label="运行中" :value="String(runningCount).padStart(2, '0')" detail="正在处理您的任务" tone="mint" :icon="Activity" />
       <StatCard label="今日任务" :value="todayTasks" detail="跨所有智能体" tone="violet" :icon="Layers3" />
-      <StatCard label="整体成功率" value="98.6%" detail="近 30 天任务表现" tone="amber" :icon="CheckCircle2" />
+      <StatCard label="已完成任务" :value="completedCount" detail="所有智能体的任务" tone="amber" :icon="CheckCircle2" />
     </div>
 
-    <div class="agents-workspace">
+    <div v-if="store.loading" class="agent-state" role="status">正在加载智能体…</div>
+    <div v-else-if="store.error" class="agent-state" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token)">重试</button></div>
+    <div v-else class="agents-workspace">
       <SectionContainer class="agent-directory" title="我的智能体">
         <template #action><span class="directory-count">{{ agents.length }} 个智能体</span></template>
         <label class="agent-search">
@@ -174,7 +237,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
           <span class="agent-search__shortcut">筛选</span>
         </label>
         <div class="directory-filters" aria-label="智能体状态筛选">
-          <button v-for="filter in ([['all', '全部'], ['running', '运行中'], ['idle', '待命'], ['offline', '已暂停']] as const)" :key="filter[0]" type="button" :class="{ active: directoryFilter === filter[0] }" :aria-pressed="directoryFilter === filter[0]" @click="directoryFilter = filter[0]">{{ filter[1] }}</button>
+          <button v-for="filter in ([['all', '全部'], ['running', '运行中'], ['idle', '待连接'], ['offline', '已暂停']] as const)" :key="filter[0]" type="button" :class="{ active: directoryFilter === filter[0] }" :aria-pressed="directoryFilter === filter[0]" @click="directoryFilter = filter[0]">{{ filter[1] }}</button>
         </div>
         <div v-if="visibleAgents.length" class="directory-list">
           <ListItemCard v-for="agent in visibleAgents" :key="agent.id" :title="agent.name" :subtitle="agent.role" :selected="selectedId === agent.id" @click="selectAgent(agent.id)">
@@ -185,11 +248,11 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
             <template #trailing><ChevronRight :size="15" class="directory-item__chevron" /></template>
           </ListItemCard>
         </div>
-        <div v-else class="directory-empty"><Search :size="21" /><span>没有找到匹配的智能体</span></div>
-        <button class="directory-add" type="button" @click="createAgentOpen = true"><Plus :size="16" />创建新的智能体</button>
+        <div v-else class="directory-empty"><Search :size="21" /><span>{{ agents.length ? '没有找到匹配的智能体' : '还没有智能体，创建后即可管理任务与连接状态' }}</span></div>
+        <button class="directory-add" type="button" @click="openCreate"><Plus :size="16" />创建新的智能体</button>
       </SectionContainer>
 
-      <GlassCard class="agent-profile">
+      <GlassCard v-if="selectedAgent" class="agent-profile">
         <div class="profile-hero">
           <div class="profile-identity">
             <span class="agent-avatar agent-avatar--large" :class="`agent-avatar--${selectedAgent.avatar}`"><component :is="avatarIcons[selectedAgent.avatar]" :size="28" :stroke-width="1.7" /></span>
@@ -200,8 +263,10 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
             </div>
           </div>
           <div class="profile-actions">
-            <ActionButton variant="secondary" size="sm" @click="toggleAgentStatus"><Pause v-if="selectedAgent.status === 'running'" :size="14" /><Play v-else :size="14" />{{ selectedAgent.status === 'running' ? '暂停' : '启动' }}</ActionButton>
-            <ActionButton size="sm" @click="createTaskOpen = true"><Plus :size="15" />新建任务</ActionButton>
+            <ActionButton variant="secondary" size="sm" @click="toggleAgentStatus"><Pause v-if="selectedAgent.enabled" :size="14" /><Play v-else :size="14" />{{ selectedAgent.enabled ? '暂停' : '启用' }}</ActionButton>
+            <ActionButton variant="secondary" size="sm" @click="openEdit">编辑</ActionButton>
+            <ActionButton variant="secondary" size="sm" @click="removeAgent">删除</ActionButton>
+            <ActionButton size="sm" @click="formError = ''; createTaskOpen = true"><Plus :size="15" />新建任务</ActionButton>
           </div>
         </div>
 
@@ -210,7 +275,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
         </nav>
 
         <div v-if="activeTab === 'overview'" class="overview-tab">
-          <div class="overview-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h3>工作概览</h3></div><span class="overview-heading__date">实时更新 <span class="live-dot" /></span></div>
+          <div class="overview-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h3>工作概览</h3></div><span class="overview-heading__date">已保存 <span class="live-dot" /></span></div>
           <div class="overview-top-grid">
             <div class="focus-task">
               <div class="focus-task__top"><span class="focus-task__icon"><Zap :size="17" fill="currentColor" /></span><span>{{ currentTask?.status === 'running' ? '当前任务' : '接下来' }}</span><MoreHorizontal :size="20" class="focus-task__more" /></div>
@@ -222,8 +287,8 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
               <div class="health-panel__title"><span class="health-panel__pulse"><Activity :size="18" /></span><div><h4>运行状态</h4><p>智能体与任务健康度</p></div></div>
               <div class="health-panel__rows">
                 <div><span>当前状态</span><StatusBadge :label="agentStatus(selectedAgent.status).label" :tone="agentStatus(selectedAgent.status).tone" /></div>
-                <div><span>任务成功率</span><strong>{{ selectedAgent.successRate }}</strong></div>
-                <div><span>持续运行</span><strong>{{ selectedAgent.uptime }}</strong></div>
+                <div><span>任务完成率</span><strong>{{ selectedAgent.successRate }}</strong></div>
+                <div><span>最近连接</span><strong>{{ selectedAgent.uptime }}</strong></div>
               </div>
             </div>
           </div>
@@ -250,16 +315,16 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
         </div>
 
         <div v-else-if="activeTab === 'tasks'" class="tab-content">
-          <div class="tab-content__heading"><div><span class="eyebrow">TASK CENTER</span><h3>任务中心</h3><p>跟踪 {{ selectedAgent.name }} 的全部工作</p></div><ActionButton size="sm" @click="createTaskOpen = true"><Plus :size="15" />创建任务</ActionButton></div>
+          <div class="tab-content__heading"><div><span class="eyebrow">TASK CENTER</span><h3>任务中心</h3><p>跟踪 {{ selectedAgent.name }} 的全部工作</p></div><ActionButton size="sm" @click="formError = ''; createTaskOpen = true"><Plus :size="15" />创建任务</ActionButton></div>
           <div class="task-filters"><Filter :size="14" /><button v-for="filter in ([['all', '全部'], ['running', '进行中'], ['completed', '已完成'], ['queued', '等待中']] as const)" :key="filter[0]" type="button" :class="{ active: taskFilter === filter[0] }" :aria-pressed="taskFilter === filter[0]" @click="taskFilter = filter[0]">{{ filter[1] }}</button></div>
           <div v-if="visibleTasks.length" class="full-task-list">
-            <div v-for="task in visibleTasks" :key="task.id" class="full-task"><span class="full-task__symbol" :class="`full-task__symbol--${task.status}`"><Activity v-if="task.status === 'running'" :size="17" /><Check v-else-if="task.status === 'completed'" :size="17" /><Clock3 v-else :size="17" /></span><div class="full-task__copy"><strong>{{ task.title }}</strong><span>{{ task.description }}</span></div><span class="full-task__id">{{ task.id }}</span><StatusBadge :label="taskStatus(task.status).label" :tone="taskStatus(task.status).tone" /><time>{{ task.time }}</time></div>
+            <div v-for="task in visibleTasks" :key="task.id" class="full-task"><span class="full-task__symbol" :class="`full-task__symbol--${task.status}`"><Activity v-if="task.status === 'running'" :size="17" /><Check v-else-if="task.status === 'completed'" :size="17" /><Clock3 v-else :size="17" /></span><div class="full-task__copy"><strong>{{ task.title }}</strong><span>{{ task.description }}</span></div><span class="full-task__id">{{ task.id.slice(0, 8) }}</span><StatusBadge :label="taskStatus(task.status).label" :tone="taskStatus(task.status).tone" /><time>{{ task.time }}</time><span class="task-actions"><button v-if="task.status === 'queued'" type="button" @click="setTaskStatus(task, 'running')">标记进行中</button><button v-if="task.status !== 'completed'" type="button" @click="setTaskStatus(task, 'completed')">标记完成</button><button type="button" @click="removeTask(task)">删除</button></span></div>
           </div>
           <div v-else class="tab-empty"><Layers3 :size="23" />当前筛选下没有任务</div>
         </div>
 
         <div v-else-if="activeTab === 'logs'" class="tab-content">
-          <div class="tab-content__heading"><div><span class="eyebrow">ACTIVITY LOG</span><h3>运行日志</h3><p>查看最近的操作与运行事件</p></div><StatusBadge label="实时记录" tone="info" /></div>
+          <div class="tab-content__heading"><div><span class="eyebrow">ACTIVITY LOG</span><h3>操作日志</h3><p>查看最近的设置和任务变更</p></div><StatusBadge label="已保存" tone="info" /></div>
           <div v-if="selectedAgent.logs.length" class="log-list"><div v-for="(log, index) in selectedAgent.logs" :key="`${log.time}-${index}`" class="log-row"><span class="log-row__time">{{ log.time }}</span><span class="log-row__level" :class="`log-row__level--${log.level}`">{{ log.level === 'success' ? '完成' : log.level === 'warning' ? '注意' : '信息' }}</span><span class="log-row__message">{{ log.message }}</span></div></div>
           <div v-else class="tab-empty"><Activity :size="23" />暂无运行日志</div>
         </div>
@@ -272,27 +337,29 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 
         <div v-else-if="activeTab === 'api'" class="tab-content">
           <div class="tab-content__heading"><div><span class="eyebrow">API ACTIVITY</span><h3>API 调用</h3><p>最近的请求与响应状态</p></div><span class="tab-count">今日 {{ selectedAgent.callsToday }} 次调用</span></div>
-          <div class="api-summary"><div><span class="api-summary__icon"><Send :size="18" /></span><span>今日调用</span><strong>{{ selectedAgent.callsToday }}</strong></div><div><span class="api-summary__icon api-summary__icon--mint"><CheckCircle2 :size="18" /></span><span>成功率</span><strong>{{ selectedAgent.successRate }}</strong></div></div>
+          <div class="api-summary"><div><span class="api-summary__icon"><Send :size="18" /></span><span>今日调用</span><strong>{{ selectedAgent.callsToday }}</strong></div><div><span class="api-summary__icon api-summary__icon--mint"><CheckCircle2 :size="18" /></span><span>任务完成率</span><strong>{{ selectedAgent.successRate }}</strong></div></div>
           <div v-if="selectedAgent.apiCalls.length" class="api-list"><div class="api-list__header"><span>请求</span><span>时间</span><span>耗时</span><span>状态</span><span /></div><div v-for="(call, index) in selectedAgent.apiCalls" :key="`${call.endpoint}-${index}`" class="api-row"><span class="api-row__request"><b :class="`api-row__method--${call.method.toLowerCase()}`">{{ call.method }}</b><code>{{ call.endpoint }}</code></span><span>{{ call.time }}</span><span>{{ call.duration }}</span><span class="api-row__success">{{ call.status }} OK</span><button type="button" :aria-label="`复制 ${call.endpoint}`" @click="copyApiPath(call.endpoint)"><Copy :size="14" /></button></div></div>
           <div v-else class="tab-empty"><Code2 :size="23" />暂无 API 调用</div>
         </div>
 
         <div v-else class="tab-content">
           <div class="tab-content__heading"><div><span class="eyebrow">USAGE INSIGHTS</span><h3>使用情况</h3><p>了解智能体的工作节奏与资源使用</p></div><span class="tab-count">最近 7 天</span></div>
-          <div class="usage-summary"><div><span>今日任务</span><strong>{{ selectedAgent.tasksToday }}</strong><small>个任务</small></div><div><span>API 调用</span><strong>{{ selectedAgent.callsToday }}</strong><small>次请求</small></div><div><span>任务成功率</span><strong>{{ selectedAgent.successRate }}</strong><small>近 30 天</small></div></div>
-          <div class="usage-chart"><div class="usage-chart__heading"><strong>任务活跃度</strong><span>过去一周</span></div><div class="usage-chart__bars"><div v-for="(height, index) in [38, 52, 46, 72, 64, 88, 77]" :key="index" class="usage-chart__bar"><span :style="{ height: `${height}%` }" /><small>{{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][index] }}</small></div></div></div>
+          <div class="usage-summary"><div><span>今日任务</span><strong>{{ selectedAgent.tasksToday }}</strong><small>个任务</small></div><div><span>API 调用</span><strong>{{ selectedAgent.callsToday }}</strong><small>次请求</small></div><div><span>任务完成率</span><strong>{{ selectedAgent.successRate }}</strong><small>所有任务</small></div></div>
+          <div class="usage-chart"><div class="usage-chart__heading"><strong>任务活跃度</strong><span>过去一周</span></div><div class="usage-chart__bars"><div v-for="day in activityByDay" :key="day.label" class="usage-chart__bar"><span :style="{ height: `${Math.max(5, Math.min(100, day.count * 22))}%` }" :title="`${day.count} 个任务`" /><small>{{ day.label }}</small></div></div></div>
         </div>
       </GlassCard>
+      <div v-else class="agent-state">选择或创建一个智能体，开始管理任务。</div>
     </div>
 
     <div v-if="createAgentOpen || createTaskOpen" class="agents-modal-backdrop" @click.self="createAgentOpen = false; createTaskOpen = false">
-      <form class="agents-modal" @submit.prevent="createAgentOpen ? createAgent() : createTask()">
+      <form class="agents-modal" @submit.prevent="createAgentOpen ? saveAgent() : createTask()">
         <div class="agents-modal__head"><span class="agents-modal__icon"><Bot v-if="createAgentOpen" :size="21" /><Zap v-else :size="21" /></span><button type="button" aria-label="关闭" @click="createAgentOpen = false; createTaskOpen = false"><X :size="18" /></button></div>
-        <h2>{{ createAgentOpen ? '添加智能体' : '创建新任务' }}</h2>
-        <p>{{ createAgentOpen ? '为您的 AI 团队添加一位新成员。' : `将任务分配给 ${selectedAgent.name}，立即开始协作。` }}</p>
-        <template v-if="createAgentOpen"><label>名称<input v-model="newAgentName" autofocus maxlength="32" placeholder="例如：Nova" required /></label><label>角色<input v-model="newAgentRole" maxlength="48" placeholder="例如：写作助理" /></label></template>
-        <label v-else>任务名称<input v-model="newTaskTitle" autofocus maxlength="80" placeholder="例如：整理本周市场动态" required /></label>
-        <div class="agents-modal__actions"><ActionButton variant="secondary" @click="createAgentOpen = false; createTaskOpen = false">取消</ActionButton><ActionButton type="submit"><Plus :size="15" />{{ createAgentOpen ? '添加智能体' : '创建任务' }}</ActionButton></div>
+        <h2>{{ createAgentOpen ? agentDialogMode === 'edit' ? '编辑智能体' : '添加智能体' : '创建新任务' }}</h2>
+        <p>{{ createAgentOpen ? '保存智能体资料，运行连接可稍后接入。' : `将任务加入 ${selectedAgent?.name ?? '智能体'} 的队列。` }}</p>
+        <template v-if="createAgentOpen"><label>名称<input v-model="newAgentName" autofocus maxlength="32" placeholder="例如：Nova" required /></label><label>角色<input v-model="newAgentRole" maxlength="48" placeholder="例如：写作助理" /></label><label>模型标识<input v-model="newAgentModel" maxlength="120" placeholder="例如：本地模型" /></label><label>简介<input v-model="newAgentDescription" maxlength="500" placeholder="这个智能体负责什么" /></label></template>
+        <template v-else><label>任务名称<input v-model="newTaskTitle" autofocus maxlength="80" placeholder="例如：整理本周市场动态" required /></label><label>任务说明<input v-model="newTaskDescription" maxlength="500" placeholder="补充任务内容" /></label></template>
+        <p v-if="formError" class="agent-form-error" role="alert">{{ formError }}</p>
+        <div class="agents-modal__actions"><ActionButton variant="secondary" type="button" :disabled="saving" @click="createAgentOpen = false; createTaskOpen = false">取消</ActionButton><ActionButton type="submit" :disabled="saving"><Plus :size="15" />{{ saving ? '保存中…' : createAgentOpen ? agentDialogMode === 'edit' ? '保存修改' : '添加智能体' : '创建任务' }}</ActionButton></div>
       </form>
     </div>
     <Transition name="agent-toast"><div v-if="toast" class="agents-toast" role="status"><CheckCircle2 :size="17" />{{ toast }}</div></Transition>
@@ -301,11 +368,14 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 
 <style scoped>
 .agents-page { width:100%; min-width:0; padding-bottom:28px; color:#263653; --agent-tile-bg:var(--glass-tile-background); --agent-tile-border:rgba(255,255,255,.68); --agent-tile-shadow:var(--glass-tile-shadow); }
+.agent-state { display:flex; align-items:center; justify-content:center; gap:10px; min-height:220px; padding:28px; border:1px solid rgba(255,255,255,.55); border-radius:18px; background:rgba(218,229,255,.3); color:white; font-size:13px; text-align:center; }
+.agent-state button { padding:6px 11px; border:1px solid rgba(255,255,255,.55); border-radius:8px; background:rgba(255,255,255,.25); color:white; }
 .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .agents-page-actions { display:flex; justify-content:flex-end; align-items:center; gap:8px; min-height:31px; margin-bottom:14px; }
 .agents-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
-.agents-workspace { display:grid; grid-template-columns:minmax(270px,302px) minmax(0,1fr); align-items:start; gap:18px; }
+.agents-workspace { display:grid; grid-template-columns:minmax(270px,302px) minmax(0,1fr); align-items:stretch; gap:18px; }
 .agent-directory { min-height:640px; }
+.agents-workspace > .agent-state { min-height:640px; }
 .directory-count,.tab-count { display:inline-flex; align-items:center; min-height:26px; padding:5px 10px; border:1px solid rgba(255,255,255,.35); border-radius:999px; background:rgba(235,241,255,.2); color:#fff; font-size:10px; font-weight:700; white-space:nowrap; text-shadow:0 1px 8px rgba(25,38,76,.28); }
 .agent-search { display:flex; align-items:center; gap:9px; height:38px; padding:0 11px; border:1px solid var(--agent-tile-border); border-radius:11px; background:rgba(255,255,255,.78); color:#52678c; box-shadow:var(--agent-tile-shadow); }
 .agent-search:focus-within { border-color:#96a9ec; box-shadow:0 0 0 3px rgba(119,145,236,.12); }
@@ -345,7 +415,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 .profile-role { display:flex; align-items:center; gap:7px; margin:5px 0 0; color:rgba(255,255,255,.84); font-size:10px; font-weight:610; text-shadow:0 1px 8px rgba(25,38,76,.3); }
 .profile-role span { color:rgba(255,255,255,.64); }
 .profile-description { margin:8px 0 0; color:rgba(255,255,255,.76); font-size:11px; line-height:1.5; text-shadow:0 1px 8px rgba(25,38,76,.3); }
-.profile-actions { display:flex; align-items:center; gap:8px; flex:none; }
+.profile-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; flex:none; max-width:280px; }
 .profile-tabs { display:flex; align-items:stretch; gap:4px; margin:0 25px; border-bottom:1px solid rgba(255,255,255,.3); overflow-x:auto; scrollbar-width:none; }
 .profile-tabs::-webkit-scrollbar { display:none; }
 .profile-tabs button { position:relative; flex:none; min-height:45px; padding:0 14px; border:0; background:transparent; color:rgba(255,255,255,.72); font-size:11px; font-weight:660; white-space:nowrap; text-shadow:0 1px 8px rgba(25,38,76,.3); }
@@ -410,7 +480,10 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 .task-filters button { color:#53627d; text-shadow:none; }
 .task-filters button:hover { color:#3553a3; background:rgba(230,237,252,.45); }
 .full-task-list { overflow:hidden; border:1px solid var(--agent-tile-border); border-radius:15px; background:var(--agent-tile-bg); box-shadow:var(--agent-tile-shadow); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
-.full-task { display:flex; align-items:center; gap:12px; min-height:71px; padding:13px 16px; border-bottom:1px solid #e8edf6; }
+.full-task { display:flex; align-items:center; flex-wrap:wrap; gap:12px; min-height:71px; padding:13px 16px; border-bottom:1px solid #e8edf6; }
+.task-actions { display:flex; justify-content:flex-end; gap:7px; width:100%; }
+.task-actions button { padding:5px 8px; border:1px solid rgba(124,148,205,.28); border-radius:7px; background:rgba(237,243,255,.75); color:#4b64a4; font-size:10px; cursor:pointer; }
+.task-actions button:hover { background:#dfe9ff; }
 .full-task:last-child { border-bottom:0; }
 .full-task__symbol { display:grid; width:34px; height:34px; flex:none; place-items:center; border-radius:10px; background:#ebf0ff; color:#6d86db; }
 .full-task__symbol--completed { background:#e6f7f0; color:#39ad8a; }
@@ -479,12 +552,13 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer) })
 .agents-modal input:focus { border-color:#98aaeb; box-shadow:0 0 0 3px rgba(133,154,235,.13); }
 .agents-modal input::placeholder { color:#aeb9c8; }
 .agents-modal__actions { display:flex; justify-content:flex-end; gap:8px; margin-top:23px; }
+.agent-form-error { margin:0; color:#bd4560; font-size:11px; }
 .agents-toast { position:fixed; z-index:110; right:27px; bottom:25px; display:flex; align-items:center; gap:9px; padding:11px 15px; border:1px solid rgba(255,255,255,.5); border-radius:13px; background:rgba(49,69,112,.9); color:white; box-shadow:0 12px 35px rgba(32,44,81,.22); backdrop-filter:blur(18px); font-size:11px; font-weight:660; }
 .agents-toast svg { color:#8ee1be; }
 .agent-toast-enter-active,.agent-toast-leave-active { transition:opacity .2s,transform .2s; }
 .agent-toast-enter-from,.agent-toast-leave-to { opacity:0; transform:translateY(8px); }
 @media (max-width:1220px) { .agents-workspace { grid-template-columns:265px minmax(0,1fr); gap:14px; } .overview-top-grid,.overview-bottom-grid { grid-template-columns:minmax(0,1fr) minmax(205px,.8fr); } .profile-actions { flex-direction:column; align-items:stretch; } }
-@media (max-width:1030px) { .agents-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .agents-workspace { grid-template-columns:1fr; } .agent-directory { min-height:0; } .directory-list { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:1030px) { .agents-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .agents-workspace { grid-template-columns:1fr; } .agent-directory,.agents-workspace > .agent-state { min-height:0; } .directory-list { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:700px) { .agents-stats { gap:9px; } .agents-workspace { gap:12px; } .directory-list { grid-template-columns:1fr; } .profile-hero { align-items:flex-start; flex-direction:column; padding:20px; } .profile-actions { flex-direction:row; } .profile-tabs { margin:0 14px; } .overview-tab,.tab-content { padding:18px; } .overview-top-grid,.overview-bottom-grid,.capability-grid { grid-template-columns:1fr; } .overview-bottom-grid { margin-top:12px; } .full-task__id,.full-task time { display:none; } .api-summary,.usage-summary { gap:8px; } .api-summary strong { font-size:18px; } }
 @media (max-width:440px) { .agents-stats { grid-template-columns:1fr 1fr; } .profile-identity { align-items:flex-start; gap:11px; } .agent-avatar--large { width:52px; height:52px; } .profile-title-row { flex-wrap:wrap; gap:6px; } .profile-description { font-size:10px; } .focus-task { min-height:184px; } .usage-summary { grid-template-columns:1fr; } }
 </style>

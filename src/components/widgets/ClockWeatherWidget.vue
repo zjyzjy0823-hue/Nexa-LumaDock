@@ -2,13 +2,32 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { MapPin, Sun } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { weatherSnapshot } from '../../data/overview'
+import { getLocationWeather } from '../../services/weather'
 
 const now = ref(new Date())
+const city = ref('定位中…')
+const temperature = ref<number | null>(null)
+const condition = ref('天气加载中')
+const locating = ref(false)
 let clockInterval: number | undefined
+
+async function locate(force = false) {
+  if (locating.value) return
+  locating.value = true
+  try {
+    const weather = await getLocationWeather(force)
+    city.value = weather.approximate ? `约 ${weather.city}` : weather.city
+    temperature.value = weather.temperature
+    condition.value = weather.condition
+  } catch {
+    city.value = '点击获取位置'
+    condition.value = '天气不可用'
+  } finally { locating.value = false }
+}
 
 onMounted(() => {
   clockInterval = window.setInterval(() => { now.value = new Date() }, 15_000)
+  void locate()
 })
 
 onUnmounted(() => {
@@ -63,9 +82,10 @@ const isNight = computed(() => now.value.getHours() < 6 || now.value.getHours() 
           <path d="m39 6 1.2 3.5L44 11l-3.8 1.3L39 16l-1.1-3.7L34 11l3.9-1.5Z" fill="currentColor" />
         </svg>
         <Sun v-else class="weather-symbol" :size="44" :stroke-width="1.5" />
-        <span><strong>{{ weatherSnapshot.temperature }}°C</strong><small>{{ weatherSnapshot.condition }}</small></span>
+        <span><strong>{{ temperature === null ? '--' : `${temperature}°C` }}</strong><small>{{ condition }}</small></span>
       </div>
-      <span class="weather-location"><MapPin :size="17" :stroke-width="2.1" />{{ weatherSnapshot.location }}</span>
+      <button class="weather-location" type="button" :title="city === '点击获取位置' ? '重试定位' : '更新位置和天气'" @click="locate(true)"><MapPin :size="17" :stroke-width="2.1" />{{ city }}</button>
+      <a v-if="temperature !== null" class="weather-credit" href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">天气数据 Open-Meteo</a>
     </div>
   </GlassCard>
 </template>
@@ -89,7 +109,10 @@ const isNight = computed(() => now.value.getHours() < 6 || now.value.getHours() 
 .weather-reading span { display: flex; flex-direction: column; color: white; }
 .weather-reading strong { font-size: 24px; font-weight: 490; line-height: 1; letter-spacing: -.045em; }
 .weather-reading small { margin-top: 3px; font-size: 14px; font-weight: 450; }
-.weather-location { display: flex; align-items: center; gap: 8px; margin-top: 19px; font-size: 14px; font-weight: 500; text-shadow: 0 1px 8px rgba(8,20,50,.35); }
+.weather-location { display: flex; align-items: center; gap: 8px; align-self: flex-start; margin-top: 19px; padding: 0; color: white; border: 0; background: none; font: inherit; font-size: 14px; font-weight: 500; text-shadow: 0 1px 8px rgba(8,20,50,.35); cursor: pointer; }
+.weather-location:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+.weather-credit { position: absolute; z-index: 2; right: 10px; bottom: 8px; color: rgba(255,255,255,.82); font-size: 9px; text-decoration: none; text-shadow: 0 1px 4px rgba(8,20,50,.5); }
+.weather-credit:hover { color: white; text-decoration: underline; }
 @container (max-width: 280px) {
   .clock-content { padding-inline: 16px; }
   .clock-time { font-size: clamp(37px, 17cqw, 48px); }

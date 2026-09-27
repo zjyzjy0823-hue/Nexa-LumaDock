@@ -1,5 +1,7 @@
+import os
+from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -9,13 +11,17 @@ from ..security import create_access_token, current_user, hash_password, verify_
 from .dashboard import ensure_dashboard
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+v1_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
+@v1_router.post("/register", response_model=TokenResponse, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    if db.scalar(select(User).where(or_(User.username == payload.username, User.email == payload.email))):
-        raise HTTPException(status_code=409, detail="Username or email already exists")
-    user = User(username=payload.username, email=payload.email, password_hash=hash_password(payload.password))
+    if os.getenv("ALLOW_REGISTRATION", "true").lower() != "true":
+        raise HTTPException(status_code=403, detail="Public registration is disabled")
+    if db.scalar(select(User).where(func.lower(User.username) == payload.username.lower())):
+        raise HTTPException(status_code=409, detail="Username already exists")
+    user = User(username=payload.username, email=f"{uuid4().hex}@nexa.local", password_hash=hash_password(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -24,13 +30,15 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
+@v1_router.post("/login", response_model=TokenResponse)
 def login(payload: UserLogin, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == payload.email.strip().lower()))
+    user = db.scalar(select(User).where(func.lower(User.username) == payload.username.strip().lower()))
     if user is None or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
     return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.get("/me", response_model=UserPublic)
+@v1_router.get("/me", response_model=UserPublic)
 def me(user: User = Depends(current_user)):
     return user

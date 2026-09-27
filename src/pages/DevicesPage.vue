@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   Activity, Battery, Check, ChevronDown, CircleAlert, Clock3, Cpu,
   HardDrive, Laptop, MemoryStick, Monitor, MonitorSmartphone, Network,
@@ -10,18 +10,44 @@ import GlassCard from '../components/ui/GlassCard.vue'
 import SectionContainer from '../components/ui/SectionContainer.vue'
 import StatCard from '../components/ui/StatCard.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
-import { initialDevices, type DeviceKind, type ManagedDevice } from '../data/devices'
+import { useAuthStore } from '../stores/auth'
+import { useDevicesStore } from '../stores/devices'
+import type { Device, DeviceKind } from '../types/device'
 
 type DeviceFilter = 'all' | 'online' | 'offline'
 
-const devices = ref<ManagedDevice[]>(initialDevices.map(device => ({ ...device })))
+const emit = defineEmits<{ action: [message: string] }>()
+const auth = useAuthStore()
+const store = useDevicesStore()
+const devices = computed(() => store.devices)
 const activeFilter = ref<DeviceFilter>('all')
-const selectedId = ref(initialDevices[0].id)
+const selectedId = ref('')
 const showAddDialog = ref(false)
+const dialogMode = ref<'add' | 'edit'>('add')
 const justUpdated = ref(false)
-const draft = ref({ name: '', system: '', ip: '', kind: 'desktop' as DeviceKind })
+const saving = ref(false)
+const formError = ref('')
+const draft = ref({ name: '', system: '', ip: '', location: '', kind: 'desktop' as DeviceKind })
 
-defineExpose({ openCreate: () => { showAddDialog.value = true } })
+function openCreate() {
+  dialogMode.value = 'add'
+  draft.value = { name: '', system: '', ip: '', location: '', kind: 'desktop' }
+  formError.value = ''
+  showAddDialog.value = true
+}
+function openEdit() {
+  const item = selectedDevice.value
+  if (!item) return
+  dialogMode.value = 'edit'
+  draft.value = { name: item.name, system: item.system, ip: item.ip, location: item.location, kind: item.kind }
+  formError.value = ''
+  showAddDialog.value = true
+}
+defineExpose({ openCreate })
+watch(devices, items => {
+  if (!items.some(item => item.id === selectedId.value)) selectedId.value = items[0]?.id ?? ''
+})
+onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 const onlineDevices = computed(() => devices.value.filter(device => device.online))
 const offlineCount = computed(() => devices.value.length - onlineDevices.value.length)
@@ -53,9 +79,13 @@ function sparkline(values: number[], width = 130, height = 35) {
   return values.map((value, index) => `${Math.round(index * step)},${Math.round(height - 4 - value * (height - 8) / 100)}`).join(' ')
 }
 
-function refreshDevices() {
-  justUpdated.value = true
-  window.setTimeout(() => { justUpdated.value = false }, 2200)
+async function refreshDevices() {
+  if (!auth.token) return
+  await store.load(auth.token)
+  if (!store.error) {
+    justUpdated.value = true
+    window.setTimeout(() => { justUpdated.value = false }, 2200)
+  }
 }
 
 function setFilter(filter: DeviceFilter) {
@@ -64,23 +94,32 @@ function setFilter(filter: DeviceFilter) {
   if (visible.length && !visible.some(device => device.id === selectedId.value)) selectedId.value = visible[0].id
 }
 
-function addDevice() {
+async function saveDevice() {
+  if (!auth.token || saving.value) return
   const name = draft.value.name.trim()
   const system = draft.value.system.trim()
   const ip = draft.value.ip.trim()
-  if (!name || !system || !ip) return
-  const device: ManagedDevice = {
-    id: `local-${Date.now()}`, name, system, ip, kind: draft.value.kind,
-    online: true, cpu: 8, memory: 24, disk: 12,
-    battery: draft.value.kind === 'phone' || draft.value.kind === 'tablet' ? 85 : null,
-    activity: [17, 20, 16, 24, 19, 22, 18, 25, 20, 23, 18, 22, 24, 20],
-    lastSeen: '刚刚', location: '新添加的设备',
-  }
-  devices.value.unshift(device)
-  selectedId.value = device.id
-  activeFilter.value = 'all'
-  showAddDialog.value = false
-  draft.value = { name: '', system: '', ip: '', kind: 'desktop' }
+  if (!name || !system || !ip) { formError.value = '请填写设备名称、系统和地址。'; return }
+  saving.value = true
+  formError.value = ''
+  try {
+    const data = { name, system, ip, location: draft.value.location.trim(), kind: draft.value.kind }
+    const item = dialogMode.value === 'edit' && selectedId.value
+      ? await store.update(auth.token, selectedId.value, data)
+      : await store.create(auth.token, data)
+    selectedId.value = item.id
+    activeFilter.value = 'all'
+    showAddDialog.value = false
+    emit('action', dialogMode.value === 'edit' ? '设备已更新。' : '设备已添加，等待首次心跳。')
+  } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
+  finally { saving.value = false }
+}
+
+async function removeDevice() {
+  const item = selectedDevice.value
+  if (!auth.token || !item || !window.confirm(`删除「${item.name}」？`)) return
+  try { await store.remove(auth.token, item.id); emit('action', '设备已删除。') }
+  catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
 }
 </script>
 
@@ -88,21 +127,21 @@ function addDevice() {
   <div class="devices-page">
     <h1 class="visually-hidden">设备</h1>
     <div class="device-page-actions" aria-label="设备操作">
-      <ActionButton variant="secondary" size="sm" @click="refreshDevices">
+      <ActionButton variant="secondary" size="sm" :disabled="store.loading" @click="refreshDevices">
         <Check v-if="justUpdated" :size="16" /><RotateCw v-else :size="16" />
         {{ justUpdated ? '已更新' : '刷新状态' }}
       </ActionButton>
-      <ActionButton variant="primary" size="sm" @click="showAddDialog = true"><Plus :size="17" />添加设备</ActionButton>
+      <ActionButton variant="primary" size="sm" @click="openCreate"><Plus :size="17" />添加设备</ActionButton>
     </div>
 
     <div class="device-stats" aria-label="设备概览">
-      <StatCard label="设备总数" :value="String(devices.length).padStart(2, '0')" detail="所有已连接的设备" tone="blue">
+      <StatCard label="设备总数" :value="String(devices.length).padStart(2, '0')" detail="已添加的设备" tone="blue">
         <template #icon><MonitorSmartphone :size="20" /></template>
       </StatCard>
-      <StatCard label="当前在线" :value="String(onlineDevices.length).padStart(2, '0')" detail="运行状态良好" tone="mint">
+      <StatCard label="当前在线" :value="String(onlineDevices.length).padStart(2, '0')" detail="最近收到状态的设备" tone="mint">
         <template #icon><Wifi :size="20" /></template>
       </StatCard>
-      <StatCard label="平均 CPU" :value="`${averageCpu}%`" detail="在线设备实时均值" tone="violet">
+      <StatCard label="平均 CPU" :value="onlineDevices.length ? `${averageCpu}%` : '—'" detail="最近心跳中的设备" tone="violet">
         <template #icon><Activity :size="20" /></template>
       </StatCard>
       <StatCard label="需要关注" :value="String(offlineCount).padStart(2, '0')" detail="当前离线设备" tone="amber">
@@ -113,7 +152,7 @@ function addDevice() {
     <SectionContainer title="我的设备" class="devices-section">
       <template #action>
         <div class="device-toolbar">
-          <span class="sync-note"><span class="sync-dot" />最近同步于 09:42</span>
+          <span class="sync-note"><span class="sync-dot" />{{ store.loadedAt ? `最近同步于 ${store.loadedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '尚未同步' }}</span>
           <div class="filter-segment" role="group" aria-label="筛选设备">
             <button v-for="filter in filters" :key="filter.value" type="button"
               :class="{ 'is-active': activeFilter === filter.value }"
@@ -123,7 +162,9 @@ function addDevice() {
         </div>
       </template>
 
-      <div class="device-grid">
+      <div v-if="store.loading" class="device-empty" role="status">正在加载设备…</div>
+      <div v-else-if="store.error" class="device-empty" role="alert">{{ store.error }} <button type="button" @click="refreshDevices">重试</button></div>
+      <div v-else class="device-grid">
         <GlassCard v-for="device in filteredDevices" :key="device.id" class="device-card"
           :class="{ 'device-card--selected': selectedId === device.id, 'device-card--offline': !device.online }"
           role="button" tabindex="0" :aria-pressed="selectedId === device.id"
@@ -142,36 +183,37 @@ function addDevice() {
           <div class="device-card__ip"><Network :size="13" /><span>{{ device.ip }}</span></div>
           <div class="device-card__divider" />
           <div class="device-card__metrics">
-            <div><span>CPU</span><strong>{{ device.cpu }}%</strong></div>
-            <div><span>内存</span><strong>{{ device.memory }}%</strong></div>
-            <div><span>磁盘</span><strong>{{ device.disk }}%</strong></div>
-            <div><span>电量</span><strong>{{ device.battery === null ? '电源' : `${device.battery}%` }}</strong></div>
+            <div><span>CPU</span><strong>{{ device.lastSeenAt ? `${device.cpu}%` : '—' }}</strong></div>
+            <div><span>内存</span><strong>{{ device.lastSeenAt ? `${device.memory}%` : '—' }}</strong></div>
+            <div><span>磁盘</span><strong>{{ device.lastSeenAt ? `${device.disk}%` : '—' }}</strong></div>
+            <div><span>电量</span><strong>{{ device.lastSeenAt ? (device.battery === null ? '电源' : `${device.battery}%`) : '—' }}</strong></div>
           </div>
           <div class="device-card__activity">
-            <span>{{ device.online ? '近 24 小时活动' : `最后在线 · ${device.lastSeen}` }}</span>
+            <span>{{ device.online ? '最近心跳' : `最后在线 · ${device.lastSeen}` }}</span>
             <svg viewBox="0 0 130 35" preserveAspectRatio="none" aria-hidden="true">
               <polyline :points="sparkline(device.activity)" />
             </svg>
           </div>
         </GlassCard>
-        <div v-if="!filteredDevices.length" class="device-empty">这个分类下还没有设备。</div>
+        <div v-if="!filteredDevices.length" class="device-empty">{{ devices.length ? '这个分类下还没有设备。' : '还没有设备。添加设备后，向心跳接口发送指标即可显示在线状态。' }}</div>
       </div>
     </SectionContainer>
 
     <SectionContainer v-if="selectedDevice" title="设备详情" class="detail-section">
-      <template #action><span class="detail-caption"><Clock3 :size="14" />{{ selectedDevice.online ? '实时数据' : `最后更新 ${selectedDevice.lastSeen}` }}</span></template>
+      <template #action><span class="detail-caption"><Clock3 :size="14" />{{ selectedDevice.online ? '最近心跳' : `最后更新 ${selectedDevice.lastSeen}` }}</span></template>
       <div class="detail-panel">
         <div class="detail-panel__identity">
           <span class="detail-icon" :class="`device-glyph--${selectedDevice.kind}`"><component :is="deviceIcon(selectedDevice.kind)" :size="31" :stroke-width="1.7" /></span>
           <div class="detail-name"><div class="detail-name__title"><h3>{{ selectedDevice.name }}</h3><StatusBadge :label="selectedDevice.online ? '在线' : '离线'" :tone="selectedDevice.online ? 'success' : 'neutral'" /></div><p>{{ selectedDevice.system }}</p></div>
-          <div class="detail-meta"><div><span>IP 地址</span><strong>{{ selectedDevice.ip }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div></div>
+          <div class="detail-meta"><div><span>IP 地址</span><strong>{{ selectedDevice.ip }}</strong></div><div><span>设备位置</span><strong>{{ selectedDevice.location || '未设置' }}</strong></div><div><span>最后活跃</span><strong>{{ selectedDevice.lastSeen }}</strong></div></div>
+          <div class="device-detail-actions"><ActionButton variant="secondary" size="sm" @click="openEdit">编辑设备</ActionButton><ActionButton variant="secondary" size="sm" @click="removeDevice">删除设备</ActionButton></div>
         </div>
         <div class="detail-panel__resources">
-          <div class="detail-resources__head"><span>资源使用</span><span>{{ selectedDevice.online ? '实时监控' : '最近一次记录' }}</span></div>
+          <div class="detail-resources__head"><span>资源使用</span><span>{{ selectedDevice.lastSeenAt ? '最近一次心跳' : '等待首次心跳' }}</span></div>
           <div class="resource-grid">
             <div v-for="metric in selectedMetrics" :key="metric.label" class="resource-item" :class="`resource-item--${metric.tone}`">
-              <div class="resource-item__head"><span><component :is="metric.icon" :size="14" />{{ metric.label }}</span><strong>{{ metric.display }}</strong></div>
-              <div class="resource-item__track"><i :style="{ width: `${metric.value}%` }" /></div>
+              <div class="resource-item__head"><span><component :is="metric.icon" :size="14" />{{ metric.label }}</span><strong>{{ selectedDevice.lastSeenAt ? metric.display : '—' }}</strong></div>
+              <div class="resource-item__track"><i :style="{ width: selectedDevice.lastSeenAt ? `${metric.value}%` : '0%' }" /></div>
             </div>
           </div>
           <div class="detail-trend"><span>活动趋势</span><svg viewBox="0 0 390 43" preserveAspectRatio="none" aria-hidden="true"><polyline :points="sparkline(selectedDevice.activity, 390, 43)" /></svg><span>24 小时</span></div>
@@ -180,15 +222,17 @@ function addDevice() {
     </SectionContainer>
 
     <div v-if="showAddDialog" class="device-dialog-backdrop" @click.self="showAddDialog = false">
-      <form class="device-dialog" role="dialog" aria-modal="true" aria-labelledby="add-device-title" @submit.prevent="addDevice" @keydown.esc="showAddDialog = false">
-        <div class="device-dialog__header"><div><span>CONNECT DEVICE</span><h2 id="add-device-title">添加设备</h2><p>将设备加入你的 Nexa 工作空间。</p></div><button type="button" class="device-dialog__close" aria-label="关闭" @click="showAddDialog = false"><X :size="18" /></button></div>
+      <form class="device-dialog" role="dialog" aria-modal="true" aria-labelledby="add-device-title" @submit.prevent="saveDevice" @keydown.esc="showAddDialog = false">
+        <div class="device-dialog__header"><div><span>CONNECT DEVICE</span><h2 id="add-device-title">{{ dialogMode === 'edit' ? '编辑设备' : '添加设备' }}</h2><p>设备状态由心跳接口提供，不会自动探测地址。</p></div><button type="button" class="device-dialog__close" aria-label="关闭" @click="showAddDialog = false"><X :size="18" /></button></div>
         <div class="device-dialog__fields">
           <label>设备名称<input v-model="draft.name" required placeholder="例如：我的笔记本" autofocus /></label>
           <label>操作系统<input v-model="draft.system" required placeholder="例如：Windows 11" /></label>
           <label>IP 地址<input v-model="draft.ip" required placeholder="例如：192.168.31.120" /></label>
+          <label>设备位置<input v-model="draft.location" placeholder="例如：书房" /></label>
           <label>设备类型<span class="device-dialog__select"><select v-model="draft.kind"><option value="desktop">台式电脑</option><option value="mac">笔记本电脑</option><option value="phone">手机</option><option value="tablet">平板电脑</option><option value="server">服务器</option><option value="nas">NAS</option></select><ChevronDown :size="16" /></span></label>
         </div>
-        <div class="device-dialog__actions"><ActionButton variant="secondary" type="button" @click="showAddDialog = false">取消</ActionButton><ActionButton variant="primary" type="submit"><Plus :size="16" />添加设备</ActionButton></div>
+        <p v-if="formError" class="device-form-error" role="alert">{{ formError }}</p>
+        <div class="device-dialog__actions"><ActionButton variant="secondary" type="button" :disabled="saving" @click="showAddDialog = false">取消</ActionButton><ActionButton variant="primary" type="submit" :disabled="saving"><Plus :size="16" />{{ saving ? '保存中…' : dialogMode === 'edit' ? '保存修改' : '添加设备' }}</ActionButton></div>
       </form>
     </div>
   </div>
@@ -245,6 +289,7 @@ function addDevice() {
 .detail-meta div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .detail-meta span { color: #586781; font-size: 10px; }
 .detail-meta strong { overflow: hidden; color: #4d5d79; font-size: 11px; font-weight: 630; text-overflow: ellipsis; white-space: nowrap; }
+.device-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
 .detail-panel__resources { min-width: 0; padding-left: 22px; border-left: 1px solid rgba(130,150,190,.17); }
 .detail-resources__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; color: #3a4a69; font-size: 13px; font-weight: 680; }
 .detail-resources__head span:last-child { color: #5b6b83; font-size: 11px; font-weight: 500; }
@@ -277,6 +322,7 @@ function addDevice() {
 .device-dialog__select select { appearance: none; }
 .device-dialog__select svg { position: absolute; right: 12px; top: 12px; color: #8b99b0; pointer-events: none; }
 .device-dialog__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 27px; }
+.device-form-error { margin: 14px 0 0; color: #b73e55; font-size: 12px; }
 @media (max-width: 1180px) { .device-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .sync-note { display: none; } }
 @media (max-width: 850px) { .device-stats { grid-template-columns: repeat(2, minmax(0,1fr)); } .detail-panel { grid-template-columns: 1fr; } .detail-panel__resources { padding: 20px 0 0; border-left: 0; border-top: 1px solid rgba(130,150,190,.17); } }
 @media (max-width: 610px) { .devices-page { gap: 18px; } .device-grid { grid-template-columns: 1fr; } .detail-meta { grid-template-columns: repeat(2, minmax(0,1fr)); } .device-dialog__fields { grid-template-columns: 1fr; } }

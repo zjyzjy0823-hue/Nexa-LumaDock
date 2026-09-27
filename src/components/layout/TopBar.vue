@@ -2,10 +2,12 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Search, ChevronRight, Globe2, StickyNote, Workflow, Database } from 'lucide-vue-next'
 import { useDashboardStore } from '../../stores/dashboard'
-import { demoProfile } from '../../data/overview'
+import { useAuthStore } from '../../stores/auth'
 import TopActionControls from './TopActionControls.vue'
 
-withDefaults(defineProps<{ name?: string }>(), { name: demoProfile.name })
+const props = defineProps<{ name?: string }>()
+const auth = useAuthStore()
+const displayName = computed(() => props.name ?? auth.user?.username ?? '访客')
 const dashboard = useDashboardStore()
 
 const emit = defineEmits<{ navigate: [section: string]; create: [kind: string] }>()
@@ -80,7 +82,7 @@ onUnmounted(() => {
 <template>
   <header class="topbar">
     <div class="topbar__intro">
-      <h1>{{ greeting }}，{{ name }}。</h1>
+      <h1>{{ greeting }}，{{ displayName }}。</h1>
       <div class="topbar__date">{{ date }}</div>
       <p>让数字生活更有条理。</p>
     </div>

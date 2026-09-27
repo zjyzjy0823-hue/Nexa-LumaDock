@@ -14,6 +14,7 @@ import SecuritySettings from '../components/settings/SecuritySettings.vue'
 import NotificationSettings from '../components/settings/NotificationSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import SettingsNav from '../components/settings/SettingsNav.vue'
+import { useAuthStore } from '../stores/auth'
 import {
   aboutInfo, appearanceInitial, notificationInitial, profileInitial, securityInitial,
   settingsNavigation, storageInitial, syncInitial,
@@ -28,7 +29,8 @@ const emit = defineEmits<{ action: [message: string]; navigate: [page: string] }
 
 const activeSection = ref<SettingsSectionId>('account')
 const searchQuery = ref('')
-const profile = ref<UserProfile>({ ...profileInitial })
+const auth = useAuthStore()
+const profile = ref<UserProfile>({ ...profileInitial, username: auth.user?.username ?? profileInitial.username })
 const appearance = ref<AppearanceConfig>({ ...appearanceInitial })
 const syncConfig = ref<SyncConfig>({ ...syncInitial })
 const storage = ref<StorageInfo>({ ...storageInitial, segments: storageInitial.segments.map(item => ({ ...item })) })
@@ -49,7 +51,7 @@ function selectFirstSearchResult() {
   if (match) selectSection(match.id)
 }
 function resetSettings() {
-  profile.value = { ...profileInitial }
+  profile.value = { ...profileInitial, username: auth.user?.username ?? profileInitial.username }
   appearance.value = { ...appearanceInitial }
   syncConfig.value = { ...syncInitial }
   storage.value = { ...storageInitial, segments: storageInitial.segments.map(item => ({ ...item })) }
@@ -148,7 +150,7 @@ onUnmounted(() => {
     <div class="settings-layout">
       <SettingsNav :active="activeSection" :query="searchQuery" @select="selectSection" />
       <div class="settings-content" :key="activeSection">
-        <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="profile = $event" @avatar="updateAvatar" @password="passwordOpen = true" @logout="emit('action', '演示账户尚未连接登录服务。')" />
+        <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="profile = $event" @avatar="updateAvatar" @password="passwordOpen = true" />
         <AppearanceSettings v-else-if="activeSection === 'appearance'" :config="appearance" @update:config="appearance = $event" />
         <SyncSettings v-else-if="activeSection === 'sync'" :config="syncConfig" :syncing="syncing" @update:config="syncConfig = $event" @sync="syncNow" />
         <StorageSettings v-else-if="activeSection === 'storage'" :info="storage" @clear="clearCache" @export="exportData" @import="importData" @backup="backupData" />

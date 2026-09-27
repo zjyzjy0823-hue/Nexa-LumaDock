@@ -1,14 +1,37 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   House, LayoutGrid, Monitor, Sparkle, Database, BookOpen,
-  Zap, Braces, Settings, ChevronRight,
+  Zap, Braces, Settings, ChevronRight, LogOut,
 } from 'lucide-vue-next'
-import { demoProfile } from '../../data/overview'
+import { useAuthStore } from '../../stores/auth'
 
-withDefaults(defineProps<{ activeItem: string; name?: string; avatar?: string | null }>(), {
-  name: demoProfile.name, avatar: demoProfile.avatar,
-})
+const props = defineProps<{ activeItem: string; name?: string; avatar?: string | null }>()
+const auth = useAuthStore()
+const displayName = computed(() => props.name ?? auth.user?.username ?? (auth.token ? 'Nexa' : '访客'))
+const displayAvatar = computed(() => auth.user ? (props.avatar ?? auth.user.avatar ?? '/avatar-doodle.svg') : null)
 const emit = defineEmits<{ select: [item: string] }>()
+const menuOpen = ref(false)
+const userButton = ref<HTMLElement | null>(null)
+const menu = ref<HTMLElement | null>(null)
+const menuLeft = ref(12)
+const menuTop = ref(0)
+
+function positionMenu() {
+  const rect = userButton.value?.getBoundingClientRect()
+  if (!rect) return
+  menuLeft.value = Math.max(12, Math.min(rect.right - 220, window.innerWidth - 232))
+  menuTop.value = rect.top >= 110 ? rect.top - 100 : rect.bottom + 8
+}
+function toggleMenu() { positionMenu(); menuOpen.value = !menuOpen.value }
+function onPointerDown(event: PointerEvent) {
+  const target = event.target as Node
+  if (!userButton.value?.contains(target) && !menu.value?.contains(target)) menuOpen.value = false
+}
+function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape') menuOpen.value = false }
+function logout() { menuOpen.value = false; auth.logout() }
+onMounted(() => { document.addEventListener('pointerdown', onPointerDown); document.addEventListener('keydown', onKeydown); window.addEventListener('resize', positionMenu) })
+onUnmounted(() => { document.removeEventListener('pointerdown', onPointerDown); document.removeEventListener('keydown', onKeydown); window.removeEventListener('resize', positionMenu) })
 
 const navItems = [
   { key: 'Home', label: '首页', icon: House },
@@ -46,12 +69,16 @@ const navItems = [
       </button>
     </nav>
 
-    <button class="user" type="button" aria-label="打开用户设置" @click="emit('select', 'Settings')">
-      <span class="user__avatar" aria-hidden="true"><img v-if="avatar" :src="avatar" alt="" /><span v-else>{{ name?.slice(0, 1).toUpperCase() }}</span></span>
-      <span class="user__details"><strong>{{ name }}</strong><small>在线 <i /></small></span>
-      <ChevronRight class="user__chevron" :size="15" :stroke-width="1.7" />
+    <button ref="userButton" class="user" type="button" aria-label="账户菜单" aria-haspopup="menu" :aria-expanded="menuOpen" @click="toggleMenu">
+      <span class="user__avatar" :class="{ 'user__avatar--guest': !auth.user }" aria-hidden="true"><img v-if="displayAvatar" :src="displayAvatar" alt="" /><span v-else>{{ auth.user ? displayName.slice(0, 1).toUpperCase() : '未登录' }}</span></span>
+      <span class="user__details"><strong>{{ displayName }}</strong><small>{{ auth.user ? '在线' : '未登录' }} <i :class="{ 'user__offline': !auth.user }" /></small></span>
+      <ChevronRight class="user__chevron" :size="15" :stroke-width="1.7" :class="{ 'user__chevron--open': menuOpen }" />
     </button>
   </aside>
+  <Teleport to="body"><div v-if="menuOpen" ref="menu" class="account-menu" role="menu" :style="{ left: `${menuLeft}px`, top: `${menuTop}px` }">
+    <div class="account-menu__identity"><strong>{{ displayName }}</strong><small>已登录 Nexa</small></div>
+    <button type="button" role="menuitem" @click="logout"><LogOut :size="16" />退出登录</button>
+  </div></Teleport>
 </template>
 
 <style scoped>
@@ -149,11 +176,18 @@ const navItems = [
 }
 .user__avatar img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .user__avatar > span { color: #fff; font-size: 19px; font-weight: 700; }
+.user__avatar--guest { background:#fff; box-shadow:0 4px 12px rgba(23,28,64,.12); }
+.user__avatar--guest > span { color:#52679b; font-size:12px; }
 .user__details { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .user__details strong { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 580; }
 .user__details small { display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,.72); font-size: 12px; }
 .user__details i { width: 7px; height: 7px; border-radius: 50%; background: #73e5b4; box-shadow: 0 0 9px rgba(115,229,180,.64); }
+.user__details .user__offline { background: #a9b4c9; box-shadow: none; }
 .user__chevron { margin-left: auto; color: rgba(255,255,255,.67); }
+.user__chevron--open { transform:rotate(-90deg); }
+.account-menu { position:fixed; z-index:200; width:220px; padding:8px; color:#354b71; border:1px solid rgba(255,255,255,.75); border-radius:14px; background:rgba(249,252,255,.96); box-shadow:0 15px 36px rgba(26,39,84,.24); backdrop-filter:blur(24px); }
+.account-menu__identity { display:grid; gap:3px; padding:8px 10px 10px; border-bottom:1px solid rgba(130,151,195,.2); }.account-menu__identity strong { font-size:13px; }.account-menu__identity small { color:#8493ae; font-size:11px; }
+.account-menu button { display:flex; align-items:center; gap:9px; width:100%; margin-top:5px; padding:9px 10px; color:#ad5361; border:0; border-radius:8px; background:transparent; font-size:12px; text-align:left; cursor:pointer; }.account-menu button:hover { background:#f8edf0; }
 @media (max-width: 1279px) {
   .sidebar { width: 100%; align-items: center; padding: 13px 8px 12px; }
   .brand { height: 56px; padding: 0 0 10px; transform: none; }
@@ -172,6 +206,7 @@ const navItems = [
   .sidebar__nav::-webkit-scrollbar { display: none; }
   .nav-item { width: 44px; min-width: 44px; min-height: 42px; }
   .nav-item:last-child { margin-top: 0; }
-  .user { display: none; }
+  .user { display:flex; width:43px; min-height:43px; flex:none; justify-content:center; margin:0; padding:0; border-top:0; }
+  .user__avatar { width:38px; height:38px; }
 }
 </style>

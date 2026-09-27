@@ -1,24 +1,35 @@
 <script setup lang="ts">
-import { Code2, Globe2 } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { Sparkles } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { agentSnapshots } from '../../data/overview'
+import { useAuthStore } from '../../stores/auth'
+import { useAgentsStore } from '../../stores/agents'
+
+const auth = useAuthStore()
+const store = useAgentsStore()
+const agentSnapshots = computed(() => store.agents.slice(0, 3).map(agent => ({
+  id: agent.id, name: agent.name, model: agent.model,
+  status: agent.status === 'running' ? '运行中' : agent.status === 'offline' ? '已暂停' : '待连接',
+  activity: Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(); day.setHours(0, 0, 0, 0); day.setDate(day.getDate() - (6 - index))
+    return Math.min(100, agent.tasks.filter(task => new Date(task.createdAt).toDateString() === day.toDateString()).length * 25)
+  }),
+})))
+onMounted(() => { if (auth.token) void store.load(auth.token) })
 
 function activityPoints(values: number[]) {
-  return values.map((value, index) => `${(index * 88) / (values.length - 1)},${25 - value * .22}`).join(' ')
+  return values.map((value, index) => `${(index * 88) / Math.max(values.length - 1, 1)},${25 - value * .22}`).join(' ')
 }
 </script>
 
 <template>
   <GlassCard title="智能体" class="agents-card">
-    <template #action><span class="view-all">查看全部 ({{ agentSnapshots.length }})</span></template>
+    <template #action><span class="view-all">查看全部 ({{ store.agents.length }})</span></template>
 
     <div class="agent-list">
+      <p v-if="!agentSnapshots.length" class="widget-empty">{{ store.loading ? '正在加载智能体…' : store.error || '暂无智能体，前往智能体页添加。' }}</p>
       <div v-for="agent in agentSnapshots" :key="agent.id" class="agent-row" :class="{ 'agent-row--running': agent.status === '运行中' }">
-        <span class="agent-avatar" :class="`agent-avatar--${agent.icon}`" aria-hidden="true">
-          <img v-if="agent.icon === 'lili'" class="lili-photo" src="/avatar-zjy.png" alt="" />
-          <Code2 v-else-if="agent.icon === 'coding'" :size="23" :stroke-width="1.8" />
-          <Globe2 v-else :size="27" :stroke-width="2.1" />
-        </span>
+        <span class="agent-avatar agent-avatar--browser" aria-hidden="true"><Sparkles :size="23" :stroke-width="1.8" /></span>
         <span class="agent-identity">
           <strong>{{ agent.name }}</strong>
           <small>{{ agent.model }} <span aria-hidden="true">·</span> <em :class="{ 'running-text': agent.status === '运行中' }">{{ agent.status }}</em></small>
@@ -37,6 +48,7 @@ function activityPoints(values: number[]) {
 .agents-card :deep(.glass-card__title)::after { content: '›'; display: inline-block; margin-left: 12px; font-size: 26px; font-weight: 300; line-height: .5; vertical-align: -1px; }
 .view-all { color: rgba(255,255,255,.9); font-size: 13px; white-space: nowrap; }
 .agent-list { display: grid; gap: 3px; }
+.widget-empty { align-self: center; margin: 28px 0; color: rgba(255,255,255,.9); font-size: 12px; text-align: center; }
 .agent-row { display: grid; grid-template-columns: 48px minmax(0,1fr) 9px 90px; align-items: center; gap: 8px; min-width: 0; height: 58px; padding: 5px 11px; border: 1px solid rgba(255,255,255,.37); border-radius: 15px; background: linear-gradient(105deg,rgba(248,249,255,.72),rgba(238,239,255,.61)); box-shadow: inset 0 1px rgba(255,255,255,.5); transition: transform .2s ease, background .2s ease; }
 .agent-row:hover { transform: translateX(2px); background: rgba(255,255,255,.81); }
 .agent-row--running { background: linear-gradient(105deg,rgba(250,250,255,.82),rgba(241,244,255,.66)); }

@@ -19,8 +19,9 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, tok
     throw new ApiError(0, '无法连接到 Nexa 后端')
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { detail?: string }
-    throw new ApiError(response.status, body.detail || `请求失败 (${response.status})`)
+    const body = await response.json().catch(() => ({})) as { detail?: string; error?: { message?: string } }
+    throw new ApiError(response.status, body.error?.message || body.detail || `请求失败 (${response.status})`)
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
