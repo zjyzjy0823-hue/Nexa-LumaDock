@@ -42,10 +42,16 @@ def entity_type(item: LedgerCategory | LedgerTransaction) -> str:
     return "ledger.category" if isinstance(item, LedgerCategory) else "ledger.transaction"
 
 
-def queued(db: Session, item: LedgerCategory | LedgerTransaction) -> LocalMutation | None:
-    return db.scalar(select(LocalMutation).where(
+def queued_entries(db: Session, item: LedgerCategory | LedgerTransaction) -> list[LocalMutation]:
+    return db.scalars(select(LocalMutation).where(
         LocalMutation.workspace_id == item.workspace_id,
-        LocalMutation.entity_type == entity_type(item), LocalMutation.entity_id == item.id))
+        LocalMutation.entity_type == entity_type(item), LocalMutation.entity_id == item.id)).all()
+
+
+def queued(db: Session, item: LedgerCategory | LedgerTransaction) -> LocalMutation | None:
+    """Return the editable tail if present, otherwise its frozen predecessor."""
+    entries = queued_entries(db, item)
+    return next((entry for entry in entries if entry.status == "pending"), entries[0] if entries else None)
 
 
 def _new_mutation(item: LedgerCategory | LedgerTransaction, operation: str,
@@ -64,17 +70,17 @@ def record_local_upsert(db: Session, item: LedgerCategory | LedgerTransaction) -
     payload = serialize(item)
     # The outbox sends the exact same complete business shape as Protocol v1.
     REGISTRY[entity_type(item)][1].model_validate(payload)
-    entry = queued(db, item)
+    entries = queued_entries(db, item)
+    entry = next((value for value in entries if value.status == "pending"), None)
     if entry is None:
         entry = _new_mutation(item, "upsert", payload)
+        predecessor = next((value for value in entries if value.status != "pending"), None)
+        if predecessor is not None:
+            entry.depends_on_mutation_id = predecessor.mutation_id
         db.add(entry)
     else:
-        if entry.status != "pending" or entry.attempt_count > 0:
-            entry.mutation_id = str(uuid4())
-            entry.base_revision = item.sync_revision
-            entry.status = "pending"
-            entry.attempt_count = 0
-            entry.last_error = None
+        if entry.attempt_count != 0:
+            raise RuntimeError("An attempted mutation cannot be edited")
         entry.operation = "upsert"
         entry.payload_json = payload
         entry.updated_at = utcnow()
@@ -93,23 +99,27 @@ def record_local_delete(db: Session, item: LedgerCategory | LedgerTransaction) -
             transaction.category_id = None
             record_local_upsert(db, transaction)
 
-    entry = queued(db, item)
-    if item.sync_revision == 0:
-        if entry is not None:
-            db.delete(entry)
+    entries = queued_entries(db, item)
+    pending = next((value for value in entries if value.status == "pending"), None)
+    predecessor = next((value for value in entries if value.status != "pending"), None)
+    if (item.sync_revision == 0 and predecessor is None and pending is not None and
+            pending.attempt_count == 0 and pending.operation == "upsert"):
+        db.delete(pending)
         return
-    if entry is None:
-        db.add(_new_mutation(item, "delete", None))
+    if item.sync_revision == 0 and not entries:
+        # A legacy local tombstone has no known Core identity.
+        return
+    if pending is None:
+        pending = _new_mutation(item, "delete", None)
+        if predecessor is not None:
+            pending.depends_on_mutation_id = predecessor.mutation_id
+        db.add(pending)
     else:
-        if entry.status != "pending" or entry.attempt_count > 0:
-            entry.mutation_id = str(uuid4())
-            entry.base_revision = item.sync_revision
-            entry.status = "pending"
-            entry.attempt_count = 0
-            entry.last_error = None
-        entry.operation = "delete"
-        entry.payload_json = None
-        entry.updated_at = utcnow()
+        if pending.attempt_count != 0:
+            raise RuntimeError("An attempted mutation cannot be edited")
+        pending.operation = "delete"
+        pending.payload_json = None
+        pending.updated_at = utcnow()
 
 
 def seed_local_ledger_queue(db: Session, workspace_id: str) -> LocalSyncState:
@@ -138,6 +148,7 @@ def seed_local_ledger_queue(db: Session, workspace_id: str) -> LocalSyncState:
 def ordered_pending_mutations(db: Session, workspace_id: str) -> list[LocalMutation]:
     """Dependency order for Phase 3 push; created_at only breaks ties."""
     entries = db.scalars(select(LocalMutation).where(
-        LocalMutation.workspace_id == workspace_id, LocalMutation.status == "pending")).all()
+        LocalMutation.workspace_id == workspace_id, LocalMutation.status == "pending",
+        LocalMutation.depends_on_mutation_id.is_(None))).all()
     return sorted(entries, key=lambda entry: (
         PUSH_PRIORITY[(entry.entity_type, entry.operation)], entry.created_at, entry.id))

@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from ..database import get_db
+from .. import core_connection
 from ..models import Client, LocalMutation, LocalSyncState, User
 from ..runtime_mode import require_local_mode
 from ..security import client_from_token, current_user
 from ..sync.local import seed_local_ledger_queue
+from ..sync.engine import run_sync_cycle
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
 from ..utils.time import iso_utc
 from ..workspaces import get_personal_workspace
@@ -56,5 +58,27 @@ def local_status(_local: None = Depends(require_local_mode), user: User = Depend
     counts = dict(db.execute(select(LocalMutation.status, func.count()).where(
         LocalMutation.workspace_id == workspace_id).group_by(LocalMutation.status)).all())
     return {"pending": counts.get("pending", 0), "conflicts": counts.get("conflict", 0),
+            "inFlight": counts.get("in_flight", 0), "rejected": counts.get("rejected", 0),
             "cursor": state.cursor, "queueSeeded": state.queue_seeded_at is not None,
-            "lastSuccessAt": iso_utc(state.last_success_at)}
+            "lastSuccessAt": iso_utc(state.last_success_at), "lastError": state.last_error}
+
+
+@router.post("/run")
+def local_run(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    user_id = user.id
+    workspace_id = get_personal_workspace(db, user).id
+    # Release the request session's SQLite read transaction before the engine
+    # opens its short write transactions and performs network I/O.
+    db.rollback()
+    metadata = core_connection.load_connection(user_id)
+    if metadata is None:
+        raise HTTPException(409, "Core connection is not configured")
+    try:
+        credential = core_connection.credential_store.load(user_id)
+    except OSError:
+        credential = None
+    if not credential or not credential.startswith("nc_live_"):
+        raise HTTPException(401, "Client credential is unavailable")
+    factory = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False)
+    return run_sync_cycle(factory, user_id, workspace_id, metadata, credential)

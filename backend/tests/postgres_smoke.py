@@ -20,15 +20,20 @@ from app.sync.service import apply_mutation
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012_local_sync_queue"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_sync_engine"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
     assert {"sync_workspace_state", "sync_changes", "sync_mutations",
             "local_sync_state", "local_mutation_queue"}.issubset(set(inspector.get_table_names()))
     assert "initialized_at" in {column["name"] for column in inspector.get_columns("sync_workspace_state")}
-    assert any(set(item["column_names"]) == {"workspace_id", "entity_type", "entity_id"}
-               for item in inspector.get_unique_constraints("local_mutation_queue"))
+    assert {"depends_on_mutation_id", "result_revision", "conflict_json"}.issubset(
+        {column["name"] for column in inspector.get_columns("local_mutation_queue")})
+    assert not any(set(item["column_names"]) == {"workspace_id", "entity_type", "entity_id"}
+                   for item in inspector.get_unique_constraints("local_mutation_queue"))
+    queue_indexes = {item["name"]: item for item in inspector.get_indexes("local_mutation_queue")}
+    assert queue_indexes["uq_local_mutation_pending_entity"]["unique"]
+    assert queue_indexes["uq_local_mutation_frozen_entity"]["unique"]
     assert any(set(item["column_names"]) == {"workspace_id", "revision"}
                for item in inspector.get_unique_constraints("sync_changes"))
     assert any(set(item["column_names"]) == {"client_id", "mutation_id"}
@@ -253,4 +258,4 @@ with TestClient(app) as client:
                                  {"id": workspace_id}) is not None
         assert connection.scalar(text("SELECT count(*) FROM local_mutation_queue")) == 0
 
-print("PostgreSQL 0012 migration, sync, isolation, legacy seeding and concurrency: PASS")
+print("PostgreSQL 0013 migration, sync, isolation, legacy seeding and concurrency: PASS")

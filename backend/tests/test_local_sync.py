@@ -81,7 +81,8 @@ def test_offline_create_compaction_and_unsynced_delete(client, users, monkeypatc
     finally:
         iterator.close()
     assert client.get("/api/v1/sync/status", headers=auth).json() == {
-        "pending": 1, "conflicts": 0, "cursor": 0, "queueSeeded": True, "lastSuccessAt": None}
+        "pending": 1, "inFlight": 0, "conflicts": 0, "rejected": 0,
+        "cursor": 0, "queueSeeded": True, "lastSuccessAt": None, "lastError": None}
     assert client.delete(f"{LEDGER}/transactions/{entity_id}", headers=auth).status_code == 204
     assert client.get(f"{LEDGER}/transactions/{entity_id}", headers=auth).status_code == 404
     iterator, db = db_session()
@@ -92,7 +93,7 @@ def test_offline_create_compaction_and_unsynced_delete(client, users, monkeypatc
         iterator.close()
 
 
-def test_synced_update_delete_and_conflict_rekey(client, users):
+def test_synced_update_delete_and_conflict_tail(client, users):
     auth, _ = users
     entity_id = client.post(f"{LEDGER}/transactions", headers=auth,
                             json=transaction_data()).json()["id"]
@@ -139,9 +140,12 @@ def test_synced_update_delete_and_conflict_rekey(client, users):
                         json={"description": "Resolved"}).status_code == 200
     iterator, db = db_session()
     try:
-        entry = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == other_id))
-        assert entry.mutation_id != old_id and entry.status == "pending"
-        assert entry.base_revision == 0
+        entries = db.scalars(select(LocalMutation).where(LocalMutation.entity_id == other_id)).all()
+        assert len(entries) == 2
+        frozen = next(entry for entry in entries if entry.mutation_id == old_id)
+        tail = next(entry for entry in entries if entry.mutation_id != old_id)
+        assert frozen.status == "conflict" and tail.status == "pending"
+        assert tail.depends_on_mutation_id == old_id and tail.base_revision == 0
     finally:
         iterator.close()
 
@@ -337,3 +341,4 @@ def test_status_is_local_only(client, users, monkeypatch):
     monkeypatch.setattr(runtime_mode, "runtime_config", replace(runtime_mode.runtime_config, mode="core"))
     auth, _ = users
     assert client.get("/api/v1/sync/status", headers=auth).status_code == 404
+    assert client.post("/api/v1/sync/run", headers=auth).status_code == 404

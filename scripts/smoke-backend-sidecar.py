@@ -90,7 +90,7 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0012_local_sync_queue"
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0013_sync_engine"
             assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 2
         second = launch(data_dir)
         try:

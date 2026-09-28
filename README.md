@@ -2,7 +2,7 @@
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
-v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。Desktop 可经本地 Backend 加入 Core，但目前没有业务数据同步。
+v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单，其他业务模块仍为本地数据。
 
 ## Nexa Desktop
 
@@ -183,7 +183,7 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-v0.5.3 Phase 2 adds a durable Local Ledger mutation queue and seeds legacy Core and Local Ledger data for future sync. Local automatic synchronization is not enabled yet; see [Sync Protocol v1](docs/sync.md).
+v0.5.3 Phase 3 adds manual bidirectional Local-first Ledger synchronization through Core, with durable offline edits and conflict recording. It synchronizes Ledger categories and transactions only; background synchronization and a sync UI are not enabled. See [Sync Protocol v1](docs/sync.md).
 
 GitHub Actions runs frontend, backend SQLite, backend PostgreSQL, Windows device client, OpenClaw adapter, and desktop build checks on pushes and pull requests.
 
