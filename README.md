@@ -1,8 +1,26 @@
-# Nexa-LumaDock — v0.5 Agent Runtime
+# Nexa Desktop — Nexa-LumaDock v0.5.1
 
-Nexa 是自托管个人控制中心。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。**Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger** 已接入数据库。Dashboard widgets now use persistent user-scoped data.
+Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
-## 开发启动
+## Nexa Desktop
+
+推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。本版本 Backend 只监听 `127.0.0.1:17800`，跨设备 Runtime 连接将在 v0.5.2 处理。
+
+开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
+
+```powershell
+npm ci
+python -m pip install -r backend/requirements.txt
+npm run desktop:build
+```
+
+安装包位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`。该命令自动打包 Python sidecar、构建 Vue UI 和生成 NSIS 安装包。`npm run desktop:dev` 启动 Tauri 开发窗口；详情见 Desktop 使用说明。
+
+## Web Development
+
+现有 Web 开发模式仍受支持。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。
+
+### 开发启动
 
 需要 Node.js 和 Python 3.11+。在 `backend` 目录复制 `.env.example` 为 `.env`，将 `JWT_SECRET` 改为随机长字符串。`.env` 已被 Git 忽略。
 
@@ -53,7 +71,7 @@ Nexa/
 
 ## 数据与认证
 
-默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。`DATABASE_URL` 支持 SQLite 和 PostgreSQL；PostgreSQL 额外安装 `requirements-postgres.txt`，使用 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
+Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。Desktop 模式使用 Tauri AppData 中的绝对路径 SQLite 数据库。`DATABASE_URL` 支持 SQLite 和 PostgreSQL；PostgreSQL 额外安装 `requirements-postgres.txt`，使用 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
 
 `.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，业务资源按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import AuthGate from './components/auth/AuthGate.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import TopSearchBar from './components/layout/TopSearchBar.vue'
@@ -39,6 +40,8 @@ const currentPage = ref<Page>(pageFromLocation())
 const auth = useAuthStore()
 const authReady = ref(false)
 const authStartupError = ref('')
+const desktopError = ref('')
+let backendTimer: ReturnType<typeof setInterval> | undefined
 const currentComponent = computed(() => ({
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
@@ -88,6 +91,15 @@ async function restoreSession() {
       : error instanceof Error ? error.message : '无法连接到 Nexa 后端。'
   } finally { authReady.value = true }
 }
+async function checkDesktopBackend() {
+  if (!isTauri()) return
+  try {
+    const status = await invoke<string>('backend_status')
+    desktopError.value = status === 'ready' || status === 'starting' ? '' : status
+  } catch {
+    desktopError.value = '无法读取 Nexa Backend 状态。请重新启动 Nexa。'
+  }
+}
 async function create(kind: string) {
   const destination: Record<string, Page> = {
     website: 'Websites', device: 'Devices', agent: 'Agents',
@@ -102,17 +114,21 @@ async function create(kind: string) {
 onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
-  await restoreSession()
+  await checkDesktopBackend()
+  if (isTauri()) backendTimer = setInterval(checkDesktopBackend, 2000)
+  if (!desktopError.value) await restoreSession()
 })
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
   window.removeEventListener('hashchange', onLocationChange)
   if (toastTimer) clearTimeout(toastTimer)
+  if (backendTimer) clearInterval(backendTimer)
 })
 </script>
 
 <template>
-  <div v-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
+  <div v-if="desktopError" class="auth-loading auth-loading--error" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></div>
+  <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
   <div v-else-if="authStartupError" class="auth-loading auth-loading--error" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></div>
   <AuthGate v-else-if="!auth.user" />
   <DashboardPage v-else-if="currentPage === 'Home'" @navigate="navigate" @create="create" />

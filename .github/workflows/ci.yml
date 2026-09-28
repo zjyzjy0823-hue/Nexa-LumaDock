@@ -48,3 +48,36 @@ jobs:
       - run: python -m compileall agent-adapters/openclaw
       - run: python -m pytest -q
         working-directory: agent-adapters/openclaw
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: python -m pip install -r backend/requirements.txt 'pyinstaller>=6,<7'
+      - run: npm run desktop:build
+      - run: python scripts/smoke-backend-sidecar.py
+      - name: Verify installer and sidecar
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'src-tauri/binaries/nexa-backend-x86_64-pc-windows-msvc.exe')) { throw 'Sidecar missing' }
+          $installer = Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer missing' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexa-desktop-windows
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe

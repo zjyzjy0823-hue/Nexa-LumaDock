@@ -19,19 +19,22 @@ from .api.data.routes import router as data_router, v1_router as v1_data_router
 from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router, runtime_router as device_runtime_router
 from .api.websites import router as websites_router
 from .realtime.events import Event
+from .resources import resource_path
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    config.set_main_option("script_location", str(Path(__file__).parents[1] / "migrations"))
+    config = Config(str(resource_path("alembic.ini", Path(__file__).parents[1] / "alembic.ini")))
+    config.set_main_option("script_location", str(resource_path("migrations", Path(__file__).parents[1] / "migrations")))
+    logger.info("Running database migrations")
     command.upgrade(config, "head")
+    logger.info("Database migrations completed")
     yield
 
 
-app = FastAPI(title="Nexa API", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Nexa API", version="0.5.1", lifespan=lifespan)
 origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +49,11 @@ for router in (
     v1_data_router, v1_automation_router, settings.router, ledger.router,
 ):
     app.include_router(router)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "service": "nexa", "version": "0.5.1"}
 
 
 @app.exception_handler(RequestValidationError)

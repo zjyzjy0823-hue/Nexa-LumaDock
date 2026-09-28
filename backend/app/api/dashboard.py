@@ -8,9 +8,12 @@ from ..database import get_db
 from ..models import Dashboard, User, utcnow
 from ..schemas import DashboardPublic, Layout
 from ..security import current_user
+from ..resources import resource_path
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
-DEFAULT_LAYOUT = Layout.model_validate_json((Path(__file__).parents[3] / "src" / "data" / "dashboard.json").read_text(encoding="utf-8"))
+DEFAULT_LAYOUT = Layout.model_validate_json(resource_path(
+    "dashboard.json", Path(__file__).parents[3] / "src" / "data" / "dashboard.json"
+).read_text(encoding="utf-8"))
 
 
 def ensure_dashboard(db: Session, user: User) -> Dashboard:

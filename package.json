@@ -1,19 +1,26 @@
 {
   "name": "nexa",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.5.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "build:desktop": "vue-tsc --noEmit && vite build --mode desktop",
+    "dev:desktop": "vite --mode desktop --host 127.0.0.1",
+    "desktop:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend-sidecar.ps1",
+    "desktop:dev": "npm run desktop:prepare && tauri dev --target x86_64-pc-windows-msvc",
+    "desktop:build": "npm run desktop:prepare && tauri build --target x86_64-pc-windows-msvc"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.0",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^4.0.3",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
