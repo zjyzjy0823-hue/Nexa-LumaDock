@@ -51,6 +51,7 @@ def prepare_desktop(data_dir: Path) -> dict[str, str]:
         "JWT_SECRET": secret,
         "CORS_ORIGINS": DESKTOP_ORIGINS,
         "NEXA_INSTALLATION_ID": installation_id,
+        "NEXA_DATA_DIR": str(data_dir),
     }
     os.environ.update(config)
     return config

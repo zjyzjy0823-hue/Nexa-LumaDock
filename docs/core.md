@@ -1,4 +1,4 @@
-# Nexa Core（v0.5.2 Phase 2）
+# Nexa Core（v0.5.2 Phase 3）
 
 Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -7,7 +7,7 @@ Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Ale
 | Local | `Nexa.exe` → Tauri → `desktop_entry.py` sidecar | AppData 中的 SQLite | `127.0.0.1:17800` |
 | Core | Docker → `core_entry.py` → `app.main:app` | 持久化 PostgreSQL | 容器内 `0.0.0.0:8000` |
 
-Desktop Local Mode 与 Core Mode 是两个独立后端。本阶段**没有 Local ↔ Core 数据同步**；启动 Core 不会迁移或共享 Desktop 数据，关闭 Core 也不影响 Desktop。本阶段不改变 Tauri 到本地 sidecar 的网络连接。
+Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 现在可以通过本地 Backend 加入 Core，并保存 Client Credential；**仍没有 Local ↔ Core 业务数据同步**。启动 Core 不会迁移或共享 Desktop 数据，关闭 Core 也不影响 Desktop 的本地业务。本阶段不改变 Tauri 到本地 sidecar 的网络连接。
 
 ## 启动 Core
 
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`，迁移版本为 `0009_workspace_clients`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。
+预期健康接口返回 `status: ok`，迁移版本为 `0010_client_auth`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。
 
 ## Workspace 与 Client 身份
 
@@ -34,7 +34,15 @@ docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -At
 
 Client 表示一份 Nexa 应用安装实例，与 Device（硬件及 Runtime 遥测）和 Agent（AI Runtime）是不同实体。Desktop 在 AppData 中保存稳定的 `installation.id` UUID。它只是身份标识，**不是认证凭证、Token、密钥或同步状态**。当前可用用户 JWT 访问 `GET/PATCH /api/v1/workspace`，以及 `GET/POST /api/v1/clients`、`GET /api/v1/clients/{id}`、`POST /api/v1/clients/{id}/revoke`。Client 管理只作用于当前用户的 Personal Workspace；撤销保留记录，再次用同一 installation ID 注册会返回 409。
 
-Phase 2 仍没有 Client Authentication、Enrollment 或 Local/Core 数据同步。Desktop 仍只请求本地后端。
+`Client Identity` 是安装实例 UUID；`Client Credential` 是 Core 一次性签发的 `nc_live_` bearer secret。Core 仅存 SHA-256、末四位和签发时间。它与用户 JWT、`sk_live_` API Key、`nd_live_` Device Token、`na_live_` Agent Token 相互独立。用户 JWT 负责 enrollment、轮换和撤销；Client Credential 只可访问 `GET /api/v1/client/me` 与 `POST /api/v1/client/heartbeat`，未来 Sync 应从认证后的 `Client.workspace_id` 获取归属，不能信任客户端自报的 Workspace。
+
+Core 端以用户 JWT 调用 `POST /api/v1/clients/enroll`，首次返回明文 credential 一次，并设置 `Cache-Control: no-store`。再次 enrollment 返回 409；`POST /api/v1/clients/{id}/credential` 显式轮换并立即使旧凭证失效。`POST /api/v1/clients/{id}/revoke` 清除 hash，旧凭证立即失效，保留撤销记录。
+
+Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`，传入 `coreUrl`、Core 用户名和密码、`clientName`、`platform`、`appVersion`。它依次检查 Core 健康状态、登录、读取 Workspace、注册 Client、用新凭证验证 `/api/v1/client/me`，然后在 AppData 中保存非敏感的 `connection.json` 和单独的 `credential` 文件。用户名密码和临时 Core JWT 不落盘。`GET /api/v1/core/connection` 只返回元数据；`POST /api/v1/core/connection/test` 验证保存的凭证；`DELETE /api/v1/core/connection` 仅删除本地连接，不撤销远端 Client。Core 不开放这些 Local 接口。
+
+公网 Core 必须通过 HTTPS 暴露。HTTP 仅适用于可信 localhost/LAN 开发环境；连接流程不会跳过 TLS 证书验证或自动跟随重定向。Desktop 仍只请求 `127.0.0.1:17800`，由 Python Local Backend 请求 Core，WebView 不直连 Core。Client 凭证当前保存在受 AppData 用户权限保护的独立文件；未来可迁至 Windows Credential Manager、macOS Keychain、Android Keystore 或 iOS Keychain。`/connection/test` 对远端 401 统一报告 `unauthorized`，包括撤销情形，因为 Core 不泄露凭证失效原因。
+
+Phase 3 仍**没有 Local/Core 业务数据同步**，也没有 Workspace 切换、Client 配对或 Sync API。
 
 ## 配置
 

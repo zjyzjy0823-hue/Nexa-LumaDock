@@ -69,10 +69,10 @@ try:
     finally:
         engine.dispose()
 
-    upgrade("head")
+    upgrade("0009_workspace_clients")
     engine = create_engine(upgrade_url)
     try:
-        with engine.connect() as connection:
+        with engine.begin() as connection:
             workspace_id = connection.scalar(text("SELECT id FROM workspaces WHERE owner_user_id=1 AND kind='personal'"))
             assert workspace_id
             for name in ("dashboards", "websites", "devices", "agents", "data_collections",
@@ -81,9 +81,24 @@ try:
                                          {"id": workspace_id}) == 1
             assert connection.scalar(text("SELECT workspace FROM agents WHERE id='agent-1'")) == "Legacy label"
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_workspace_clients"
+            connection.execute(Table("clients", MetaData(), autoload_with=connection).insert().values(
+                id="old-client", workspace_id=workspace_id, installation_id=str(uuid4()),
+                name="Existing installation", platform="windows", app_version="0.5.2",
+                created_at=now, updated_at=now))
     finally:
         engine.dispose()
-    print("PostgreSQL 0008 -> 0009 backfill and existing data preservation: PASS")
+    upgrade("head")
+    engine = create_engine(upgrade_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+            assert connection.execute(text("SELECT name, token_hash, token_last4, token_created_at "
+                                           "FROM clients WHERE id='old-client'")).one() == (
+                "Existing installation", None, None, None)
+            assert connection.scalar(text("SELECT count(*) FROM websites WHERE id='website-1'")) == 1
+    finally:
+        engine.dispose()
+    print("PostgreSQL 0008 -> 0009 backfill and 0009 -> 0010 Client preservation: PASS")
 finally:
     with admin_engine.connect() as connection:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE_NAME}" WITH (FORCE)'))

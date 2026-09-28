@@ -58,6 +58,9 @@ class Client(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    token_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     workspace: Mapped[Workspace] = relationship(back_populates="clients")
 
 

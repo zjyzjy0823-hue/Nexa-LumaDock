@@ -10,12 +10,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db, runtime_config
-from .models import Agent, ApiKey, Device, User, utcnow
+from .models import Agent, ApiKey, Client, Device, User, utcnow
+from .runtime_mode import require_core_mode
 
 
 JWT_SECRET = runtime_config.jwt_secret
 JWT_ALGORITHM = "HS256"
 bearer = HTTPBearer(auto_error=False)
+
+
+def client_from_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+    _core: None = Depends(require_core_mode),
+) -> Client:
+    if credentials is None or not credentials.credentials.startswith("nc_live_"):
+        raise HTTPException(401, "Invalid client credential")
+    token_hash = hashlib.sha256(credentials.credentials.encode()).hexdigest()
+    client = db.scalar(select(Client).where(Client.token_hash == token_hash, Client.revoked_at.is_(None)))
+    if client is None:
+        raise HTTPException(401, "Invalid client credential")
+    return client
 
 
 def agent_from_token(

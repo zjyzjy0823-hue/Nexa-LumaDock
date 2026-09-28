@@ -44,7 +44,10 @@ def test_fresh_install_schema(tmp_path: Path):
             assert not column["nullable"]
         assert any(set(constraint["column_names"]) == {"workspace_id", "installation_id"}
                    for constraint in inspector.get_unique_constraints("clients"))
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009_workspace_clients"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010_client_auth"
+        client_columns = {column["name"]: column for column in inspector.get_columns("clients")}
+        assert {"token_hash", "token_last4", "token_created_at"}.issubset(client_columns)
+        assert all(client_columns[name]["nullable"] for name in ("token_hash", "token_last4", "token_created_at"))
     engine.dispose()
 
 
@@ -153,7 +156,43 @@ def test_upgrade_0008_backfills_workspace_ownership_without_data_loss(tmp_path: 
         assert conn.scalar(text("SELECT workspace FROM agents WHERE id='agent-1'")) == "Legacy workspace label"
         assert conn.scalar(text("SELECT count(*) FROM agent_tasks WHERE id='task-1'")) == 1
         assert conn.scalar(text("SELECT amount FROM ledger_transactions WHERE id='transaction-1'")) == 12
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0009_workspace_clients"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+    engine.dispose()
+
+
+def test_upgrade_0009_to_0010_preserves_existing_client(tmp_path: Path):
+    database = tmp_path / "client-upgrade.db"
+    backend = Path(__file__).parents[1]
+    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+
+    def upgrade(revision):
+        result = subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", revision],
+                                cwd=backend, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    upgrade("0009_workspace_clients")
+    engine = create_engine(f"sqlite:///{database}")
+    now = datetime.now(timezone.utc)
+    with engine.begin() as conn:
+        metadata = MetaData()
+        conn.execute(Table("users", metadata, autoload_with=conn).insert().values(
+            id=1, username="old-client-owner", email="old@example.test", password_hash="hash",
+            created_at=now, updated_at=now))
+        conn.execute(Table("workspaces", metadata, autoload_with=conn).insert().values(
+            id="workspace-old", owner_user_id=1, name="Personal", kind="personal",
+            created_at=now, updated_at=now))
+        conn.execute(Table("clients", metadata, autoload_with=conn).insert().values(
+            id="client-old", workspace_id="workspace-old", installation_id="installation-old",
+            name="Old desktop", platform="windows", app_version="0.5.2",
+            created_at=now, updated_at=now))
+    engine.dispose()
+    upgrade("head")
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT name, workspace_id, token_hash, token_last4, token_created_at "
+                                "FROM clients WHERE id='client-old'")).one()
+        assert row == ("Old desktop", "workspace-old", None, None, None)
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
     engine.dispose()
 
 

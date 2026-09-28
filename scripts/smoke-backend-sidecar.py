@@ -83,7 +83,7 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0009_workspace_clients"
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0010_client_auth"
         second = launch(data_dir)
         try:
             assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id

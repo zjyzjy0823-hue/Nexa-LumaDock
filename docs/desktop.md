@@ -11,12 +11,18 @@ com.isidel.nexa/
 ├── nexa.db
 ├── secret.key
 ├── installation.id
+├── core-connections/
+│   └── <local-user-id>/
+│       ├── connection.json
+│       └── credential
 └── logs/
     ├── backend.log
     └── desktop.log
 ```
 
-`nexa.db` 保存用户数据，`secret.key` 保存首次启动生成的 256 位随机 JWT 密钥。Phase 2 的 `installation.id` 是本机安装实例的稳定 UUID，不是密钥或认证凭证；重新安装后沿用该文件可保留安装身份。请备份这三个文件。Backend 日志轮转保留最近文件。密码、Token 和密钥不写入常规日志。
+`nexa.db` 保存用户数据，`secret.key` 保存首次启动生成的 256 位随机 JWT 密钥。`installation.id` 是本机安装实例的稳定 UUID，不是密钥或认证凭证；重新安装后沿用该文件可保留安装身份。Phase 3 加入 Core 后，每个本地用户可有一个 `core-connections` 子目录：JSON 只存连接元数据，`credential` 独立保存 Core 签发的 `nc_live_` bearer secret。请妥善备份用户数据与密钥，保护凭证文件；未来可迁至系统 Keychain。Backend 日志轮转保留最近文件。密码、Token 和密钥不写入常规日志。
+
+目前可通过 Local Backend API `POST /api/v1/core/connect` 加入 Core，随后使用 `GET /api/v1/core/connection` 和 `POST /api/v1/core/connection/test` 查询与验证连接；`DELETE /api/v1/core/connection` 只删除本地连接，不撤销远端 Client。需要远端撤销时，用 Core 用户 JWT 调用 `POST /api/v1/clients/{id}/revoke`。公网 Core 必须通过 HTTPS 暴露。Desktop UI 暂无连接设置页；Desktop 与 Core 仍不会自动交换 Dashboard、Ledger 等业务数据。Core 离线时这些本地页面照常可用。
 
 ## 窗口、托盘与退出
 
