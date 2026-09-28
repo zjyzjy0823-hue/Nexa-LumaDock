@@ -8,9 +8,11 @@ from desktop_entry import prepare_desktop
 
 def test_desktop_config_and_persistence(tmp_path: Path):
     data_dir = tmp_path / "Nexa Data"
-    original = {key: os.environ.get(key) for key in ("DATABASE_URL", "JWT_SECRET", "CORS_ORIGINS")}
+    original = {key: os.environ.get(key) for key in ("NEXA_MODE", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGINS")}
     try:
         first = prepare_desktop(data_dir)
+        assert first["NEXA_MODE"] == "local"
+        assert os.environ["NEXA_MODE"] == "local"
         assert data_dir.is_dir()
         assert (data_dir / "logs").is_dir()
         assert (data_dir / "secret.key").is_file()

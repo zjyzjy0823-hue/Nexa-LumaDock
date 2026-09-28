@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /app/backend
+COPY backend/requirements.txt backend/requirements-postgres.txt ./
+RUN pip install --no-cache-dir -r requirements-postgres.txt
+COPY backend/app ./app
+COPY backend/migrations ./migrations
+COPY backend/alembic.ini backend/core_entry.py ./
+COPY src/data/dashboard.json /app/src/data/dashboard.json
+
+EXPOSE 8000
+CMD ["python", "core_entry.py"]

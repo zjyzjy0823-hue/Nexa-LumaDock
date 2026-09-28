@@ -1,10 +1,9 @@
-import os
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, runtime_config
 from ..models import User
 from ..schemas import TokenResponse, UserCreate, UserLogin, UserPublic
 from ..security import create_access_token, current_user, hash_password, verify_password
@@ -17,7 +16,7 @@ v1_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 @router.post("/register", response_model=TokenResponse, status_code=201)
 @v1_router.post("/register", response_model=TokenResponse, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    if os.getenv("ALLOW_REGISTRATION", "true").lower() != "true":
+    if not runtime_config.allow_registration:
         raise HTTPException(status_code=403, detail="Public registration is disabled")
     if db.scalar(select(User).where(func.lower(User.username) == payload.username.lower())):
         raise HTTPException(status_code=409, detail="Username already exists")

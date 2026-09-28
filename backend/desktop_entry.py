@@ -34,6 +34,7 @@ def prepare_desktop(data_dir: Path) -> dict[str, str]:
     # SQLAlchemy's URL renderer handles drive letters, spaces, and backslashes.
     database_url = URL.create("sqlite", database=str(data_dir / "nexa.db")).render_as_string()
     config = {
+        "NEXA_MODE": "local",
         "DATABASE_URL": database_url,
         "JWT_SECRET": secret,
         "CORS_ORIGINS": DESKTOP_ORIGINS,

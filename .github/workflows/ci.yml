@@ -23,6 +23,41 @@ jobs:
       - run: python -m pip install -r backend/requirements.txt
       - run: python -m pytest -q
         working-directory: backend
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa-ci-password
+          POSTGRES_DB: nexa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexa -d nexa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      NEXA_MODE: core
+      DATABASE_URL: postgresql+psycopg://nexa:nexa-ci-password@127.0.0.1:5432/nexa
+      CORS_ORIGINS: http://localhost:5173
+      ALLOW_REGISTRATION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-postgres.txt
+      - run: python -m pip install -r backend/requirements-postgres.txt
+      - name: Generate temporary JWT secret
+        run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: python -m alembic -c alembic.ini upgrade head
+        working-directory: backend
+      - run: python tests/postgres_smoke.py
+        working-directory: backend
   device-client:
     runs-on: windows-latest
     steps:

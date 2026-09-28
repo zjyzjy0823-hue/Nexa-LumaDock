@@ -1,6 +1,5 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import os
 from decimal import Decimal
 from typing import Literal
 from uuid import uuid4
@@ -11,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..utils.time import iso_utc
-from ..database import get_db
+from ..database import get_db, runtime_config
 from ..models import LedgerCategory, LedgerTransaction, User
 from ..security import current_user
 
@@ -177,7 +176,7 @@ def delete_transaction(id: str, user: User = Depends(current_user), db: Session 
 @router.get("/summary")
 def summary(month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
             user: User = Depends(current_user), db: Session = Depends(get_db)):
-    month = month or datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Shanghai"))).strftime("%Y-%m")
+    month = month or datetime.now(ZoneInfo(runtime_config.app_timezone)).strftime("%Y-%m")
     items = db.scalars(select(LedgerTransaction).where(LedgerTransaction.user_id == user.id)).all()
     current = [item for item in items if item.occurred_at.strftime("%Y-%m") == month]
     income = sum((item.amount for item in current if item.type == "income"), Decimal("0"))

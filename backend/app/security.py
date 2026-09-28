@@ -1,6 +1,5 @@
 import hashlib
 import hmac
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -10,13 +9,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .database import get_db
+from .database import get_db, runtime_config
 from .models import Agent, ApiKey, Device, User, utcnow
 
 
-JWT_SECRET = os.getenv("JWT_SECRET")
-if not JWT_SECRET or len(JWT_SECRET) < 16:
-    raise RuntimeError("JWT_SECRET must be set to a secret of at least 16 characters")
+JWT_SECRET = runtime_config.jwt_secret
 JWT_ALGORITHM = "HS256"
 bearer = HTTPBearer(auto_error=False)
 

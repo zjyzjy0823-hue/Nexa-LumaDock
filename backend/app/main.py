@@ -1,4 +1,3 @@
-import os
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -20,8 +19,10 @@ from .api.devices.routes import router as devices_router, legacy_router as legac
 from .api.websites import router as websites_router
 from .realtime.events import Event
 from .resources import resource_path
+from .config import load_runtime_config
 
 logger = logging.getLogger(__name__)
+runtime_config = load_runtime_config()
 
 
 @asynccontextmanager
@@ -35,10 +36,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Nexa API", version="0.5.1", lifespan=lifespan)
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in origins],
+    allow_origins=list(runtime_config.cors_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -82,7 +82,7 @@ async def websocket_entry(websocket: WebSocket):
             message = await websocket.receive_json()
             if isinstance(message, dict) and message.get("type") == "ping":
                 payload = message.get("payload")
-                event = Event(type="pong", source="nexa", timestamp=datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Shanghai"))), payload=payload if isinstance(payload, dict) else {})
+                event = Event(type="pong", source="nexa", timestamp=datetime.now(ZoneInfo(runtime_config.app_timezone)), payload=payload if isinstance(payload, dict) else {})
                 await websocket.send_json(event.model_dump(mode="json"))
     except WebSocketDisconnect:
         pass
