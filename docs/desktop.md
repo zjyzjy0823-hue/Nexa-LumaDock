@@ -24,6 +24,8 @@ com.isidel.nexa/
 
 目前可通过 Local Backend API `POST /api/v1/core/connect` 加入 Core，随后使用 `GET /api/v1/core/connection` 和 `POST /api/v1/core/connection/test` 查询与验证连接；`DELETE /api/v1/core/connection` 只删除本地连接，不撤销远端 Client。需要远端撤销时，用 Core 用户 JWT 调用 `POST /api/v1/clients/{id}/revoke`。公网 Core 必须通过 HTTPS 暴露。Desktop UI 暂无连接设置页；Desktop 与 Core 仍不会自动交换 Dashboard、Ledger 等业务数据。Core 离线时这些本地页面照常可用。
 
+如果 Core 已注册本安装实例，而本地连接尚未保存成功，重新提供 Core 用户名和密码执行 `connect` 可恢复：Local 会查找同一 `installation.id`，显式轮换 Core 凭证并保存新连接。已撤销的 Client 不会自动恢复。本地连接元数据使用 `schemaVersion: 1` 严格验证，凭证由 `FileCredentialStore` 保存；未来可迁移至系统凭证库。已有 `connection.json` 时，普通 `connect` 不会覆盖，即使凭证文件遗失；该修复场景留给后续专门的 Repair 流程。
+
 ## 窗口、托盘与退出
 
 点击窗口右上角 X 会隐藏窗口，Backend 继续运行。从系统托盘的 Nexa 图标选择“打开 Nexa”可以恢复；选择“退出 Nexa”才会退出桌面程序并停止 Backend。再次从开始菜单启动 Nexa 时只会聚焦已有窗口，不会启动第二个 Backend。

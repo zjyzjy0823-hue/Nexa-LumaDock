@@ -40,6 +40,10 @@ Core 端以用户 JWT 调用 `POST /api/v1/clients/enroll`，首次返回明文 
 
 Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`，传入 `coreUrl`、Core 用户名和密码、`clientName`、`platform`、`appVersion`。它依次检查 Core 健康状态、登录、读取 Workspace、注册 Client、用新凭证验证 `/api/v1/client/me`，然后在 AppData 中保存非敏感的 `connection.json` 和单独的 `credential` 文件。用户名密码和临时 Core JWT 不落盘。`GET /api/v1/core/connection` 只返回元数据；`POST /api/v1/core/connection/test` 验证保存的凭证；`DELETE /api/v1/core/connection` 仅删除本地连接，不撤销远端 Client。Core 不开放这些 Local 接口。
 
+如果 Core 已完成 enrollment，但 Local 在保存连接前失败，用户可重新输入 Core 账号密码再调用 `connect`。Local 会在 Core 返回 409 后读取**当前用户 Personal Workspace** 的 Client 列表，只匹配本机 `installation.id`；未撤销的匹配项经显式 credential rotation 取得新凭证，旧凭证立即失效。已撤销的 Client 保持撤销状态；找不到匹配项时连接失败，不会轮换其他安装实例。已存在本地连接元数据时，普通 `connect` 仍拒绝覆盖。
+
+本地连接元数据使用严格验证的 `schemaVersion: 1`，不包含凭证。旧版无版本字段的有效连接元数据会在读取时升级。凭证通过 `CredentialStore` 接口保存；当前实现为原子写入的 `FileCredentialStore`，未来可替换为系统 Credential Manager 或 Keychain。本阶段没有同步游标或其他 Sync 状态。
+
 公网 Core 必须通过 HTTPS 暴露。HTTP 仅适用于可信 localhost/LAN 开发环境；连接流程不会跳过 TLS 证书验证或自动跟随重定向。Desktop 仍只请求 `127.0.0.1:17800`，由 Python Local Backend 请求 Core，WebView 不直连 Core。Client 凭证当前保存在受 AppData 用户权限保护的独立文件；未来可迁至 Windows Credential Manager、macOS Keychain、Android Keystore 或 iOS Keychain。`/connection/test` 对远端 401 统一报告 `unauthorized`，包括撤销情形，因为 Core 不泄露凭证失效原因。
 
 Phase 3 仍**没有 Local/Core 业务数据同步**，也没有 Workspace 切换、Client 配对或 Sync API。
