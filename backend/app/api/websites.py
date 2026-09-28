@@ -11,6 +11,7 @@ from ..utils.time import iso_utc
 from ..database import get_db
 from ..models import User, Website, WebsiteCategory
 from ..security import current_user
+from ..workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1", tags=["websites"])
 
@@ -124,7 +125,8 @@ def list_websites(categoryId: str | None = None, search: str | None = None,
 @router.post("/websites", status_code=201)
 def create_website(payload: WebsiteInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
     validate_category(db, user, payload.categoryId)
-    item = Website(id=str(uuid4()), user_id=user.id, category_id=payload.categoryId,
+    item = Website(id=str(uuid4()), user_id=user.id, workspace_id=get_personal_workspace(db, user).id,
+                   category_id=payload.categoryId,
                    name=payload.name.strip(), url=payload.url, icon=payload.icon,
                    description=payload.description, favorite=payload.favorite, order=payload.order)
     db.add(item)
@@ -177,7 +179,9 @@ def list_categories(user: User = Depends(current_user), db: Session = Depends(ge
 
 @router.post("/website-categories", status_code=201)
 def create_category(payload: CategoryInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = WebsiteCategory(id=str(uuid4()), user_id=user.id, name=payload.name.strip(), order=payload.order)
+    item = WebsiteCategory(id=str(uuid4()), user_id=user.id,
+                           workspace_id=get_personal_workspace(db, user).id,
+                           name=payload.name.strip(), order=payload.order)
     db.add(item)
     db.commit()
     db.refresh(item)

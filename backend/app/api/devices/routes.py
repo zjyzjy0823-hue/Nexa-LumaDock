@@ -13,6 +13,7 @@ from ...utils.time import iso_utc, aware_utc
 from ...database import get_db
 from ...models import Device, User
 from ...security import current_user, device_from_token, read_user_for
+from ...workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 legacy_router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -127,7 +128,8 @@ def list_devices_with_key(user: User = Depends(read_user_for("Devices")), db: Se
 
 @router.post("", status_code=201)
 def create_device(payload: DeviceInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = Device(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = Device(id=str(uuid4()), user_id=user.id,
+                  workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item)
     db.commit()
     db.refresh(item)

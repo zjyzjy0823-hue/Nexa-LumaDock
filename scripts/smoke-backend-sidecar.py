@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from contextlib import closing
 from pathlib import Path
+from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,11 +79,14 @@ def main() -> None:
             stop(first, data_dir)
         assert (data_dir / "nexa.db").is_file()
         assert (data_dir / "secret.key").is_file()
+        installation_id = (data_dir / "installation.id").read_text(encoding="ascii")
+        assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0].startswith("0008")
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0009_workspace_clients"
         second = launch(data_dir)
         try:
+            assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id
             result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": "password123"})
             assert result["access_token"]
             assert any(item["id"] == website["id"] for item in request("/api/v1/websites", token=token))

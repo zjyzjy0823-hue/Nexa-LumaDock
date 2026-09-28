@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy import create_engine, text
 
@@ -8,7 +9,8 @@ from desktop_entry import prepare_desktop
 
 def test_desktop_config_and_persistence(tmp_path: Path):
     data_dir = tmp_path / "Nexa Data"
-    original = {key: os.environ.get(key) for key in ("NEXA_MODE", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGINS")}
+    original = {key: os.environ.get(key) for key in ("NEXA_MODE", "DATABASE_URL", "JWT_SECRET",
+                                                    "CORS_ORIGINS", "NEXA_INSTALLATION_ID")}
     try:
         first = prepare_desktop(data_dir)
         assert first["NEXA_MODE"] == "local"
@@ -16,6 +18,9 @@ def test_desktop_config_and_persistence(tmp_path: Path):
         assert data_dir.is_dir()
         assert (data_dir / "logs").is_dir()
         assert (data_dir / "secret.key").is_file()
+        assert (data_dir / "installation.id").is_file()
+        assert str(UUID(first["NEXA_INSTALLATION_ID"])) == first["NEXA_INSTALLATION_ID"]
+        assert (data_dir / "installation.id").read_text(encoding="ascii") == first["NEXA_INSTALLATION_ID"]
         assert first["DATABASE_URL"].startswith("sqlite:///")
         assert "http://tauri.localhost" in first["CORS_ORIGINS"]
         assert len(bytes.fromhex(first["JWT_SECRET"])) >= 32
@@ -26,6 +31,7 @@ def test_desktop_config_and_persistence(tmp_path: Path):
         engine.dispose()
         second = prepare_desktop(data_dir)
         assert second["JWT_SECRET"] == first["JWT_SECRET"]
+        assert second["NEXA_INSTALLATION_ID"] == first["NEXA_INSTALLATION_ID"]
         with create_engine(second["DATABASE_URL"]).connect() as db:
             assert db.scalar(text("SELECT value FROM desktop_test")) == "persisted"
     finally:

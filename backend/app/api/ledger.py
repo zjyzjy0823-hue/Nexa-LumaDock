@@ -13,6 +13,7 @@ from ..utils.time import iso_utc
 from ..database import get_db, runtime_config
 from ..models import LedgerCategory, LedgerTransaction, User
 from ..security import current_user
+from ..workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1/ledger", tags=["ledger"])
 Kind = Literal["income", "expense"]
@@ -97,7 +98,8 @@ def list_categories(user: User = Depends(current_user), db: Session = Depends(ge
 
 @router.post("/categories", status_code=201)
 def create_category(payload: CategoryInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = LedgerCategory(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = LedgerCategory(id=str(uuid4()), user_id=user.id,
+                          workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return category_out(item)
 
@@ -136,7 +138,8 @@ def list_transactions(month: str | None = Query(default=None, pattern=r"^\d{4}-(
 @router.post("/transactions", status_code=201)
 def create_transaction(payload: TransactionInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
     check_category(db, user, payload.category_id, payload.type)
-    item = LedgerTransaction(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = LedgerTransaction(id=str(uuid4()), user_id=user.id,
+                             workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return transaction_out(item)
 

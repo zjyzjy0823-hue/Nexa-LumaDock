@@ -1,4 +1,4 @@
-# Nexa Core（v0.5.2 Phase 1）
+# Nexa Core（v0.5.2 Phase 2）
 
 Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -26,7 +26,15 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`，迁移版本为 `0008_agent_runtime`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。
+预期健康接口返回 `status: ok`，迁移版本为 `0009_workspace_clients`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。
+
+## Workspace 与 Client 身份
+
+每个用户现在有一个自动创建的 Personal Workspace，作为 Dashboard、网站、设备、智能体、数据、自动化和账本的归属边界。现有用户和资源由 `0009` 迁移回填。当前 API 自动选用该 Workspace；多 Workspace 创建和切换尚未实现。Agent 原有的 `workspace` 字符串仍是 UI 配置，独立于新的 `workspace_id`。
+
+Client 表示一份 Nexa 应用安装实例，与 Device（硬件及 Runtime 遥测）和 Agent（AI Runtime）是不同实体。Desktop 在 AppData 中保存稳定的 `installation.id` UUID。它只是身份标识，**不是认证凭证、Token、密钥或同步状态**。当前可用用户 JWT 访问 `GET/PATCH /api/v1/workspace`，以及 `GET/POST /api/v1/clients`、`GET /api/v1/clients/{id}`、`POST /api/v1/clients/{id}/revoke`。Client 管理只作用于当前用户的 Personal Workspace；撤销保留记录，再次用同一 installation ID 注册会返回 409。
+
+Phase 2 仍没有 Client Authentication、Enrollment 或 Local/Core 数据同步。Desktop 仍只请求本地后端。
 
 ## 配置
 

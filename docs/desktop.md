@@ -10,12 +10,13 @@ Windows 数据目录由 Tauri `app_data_dir()` 和稳定标识 `com.isidel.nexa`
 com.isidel.nexa/
 ├── nexa.db
 ├── secret.key
+├── installation.id
 └── logs/
     ├── backend.log
     └── desktop.log
 ```
 
-`nexa.db` 保存用户数据，`secret.key` 保存首次启动生成的 256 位随机 JWT 密钥。请同时备份这两个文件。Backend 日志轮转保留最近文件。密码、Token 和密钥不写入常规日志。
+`nexa.db` 保存用户数据，`secret.key` 保存首次启动生成的 256 位随机 JWT 密钥。Phase 2 的 `installation.id` 是本机安装实例的稳定 UUID，不是密钥或认证凭证；重新安装后沿用该文件可保留安装身份。请备份这三个文件。Backend 日志轮转保留最近文件。密码、Token 和密钥不写入常规日志。
 
 ## 窗口、托盘与退出
 

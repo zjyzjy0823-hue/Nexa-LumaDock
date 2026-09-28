@@ -7,6 +7,7 @@ from ..database import get_db, runtime_config
 from ..models import User
 from ..schemas import TokenResponse, UserCreate, UserLogin, UserPublic
 from ..security import create_access_token, current_user, hash_password, verify_password
+from ..workspaces import ensure_personal_workspace
 from .dashboard import ensure_dashboard
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -21,10 +22,15 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     if db.scalar(select(User).where(func.lower(User.username) == payload.username.lower())):
         raise HTTPException(status_code=409, detail="Username already exists")
     user = User(username=payload.username, email=f"{uuid4().hex}@nexa.local", password_hash=hash_password(payload.password))
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    ensure_dashboard(db, user)
+    try:
+        db.add(user)
+        db.flush()
+        ensure_personal_workspace(db, user)
+        ensure_dashboard(db, user, commit=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return TokenResponse(access_token=create_access_token(user.id))
 
 

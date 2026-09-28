@@ -2,7 +2,7 @@
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
-v0.5.2 Phase 1 开始提供独立的 PostgreSQL Nexa Core 运行基础，见 [Core 开发说明](docs/core.md)。Desktop 与 Core 当前没有数据同步。
+v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份，见 [Core 开发说明](docs/core.md)。Client、Device、Agent 是不同实体。Desktop 与 Core 当前没有数据同步，Client ID 也不是认证凭证。
 
 ## Nexa Desktop
 

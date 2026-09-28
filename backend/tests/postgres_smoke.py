@@ -16,9 +16,19 @@ from app import models  # noqa: F401
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_agent_runtime"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_workspace_clients"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
+    assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
+    assert any(set(constraint["column_names"]) == {"workspace_id", "installation_id"}
+               for constraint in inspector.get_unique_constraints("clients"))
+    assert any(fk["referred_table"] == "workspaces" and fk["constrained_columns"] == ["workspace_id"]
+               for fk in inspector.get_foreign_keys("clients"))
+    for name in ("dashboards", "website_categories", "websites", "devices", "agents",
+                 "data_collections", "automation_workflows", "ledger_categories", "ledger_transactions"):
+        assert not next(column for column in inspector.get_columns(name)
+                        if column["name"] == "workspace_id")["nullable"]
+        assert connection.scalar(text(f"SELECT count(*) FROM {name} WHERE workspace_id IS NULL")) == 0
     ledger_columns = {column["name"]: column for column in inspector.get_columns("ledger_transactions")}
     assert ledger_columns["amount"]["type"].precision == 14
     assert ledger_columns["amount"]["type"].scale == 2
@@ -37,8 +47,27 @@ with TestClient(app) as client:
     })
     assert registered.status_code == 201, registered.text
     token = registered.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    workspace = client.get("/api/v1/workspace", headers=headers)
+    assert workspace.status_code == 200, workspace.text
+    assert workspace.json()["kind"] == "personal"
     dashboard = client.get("/api/dashboard", headers={"Authorization": f"Bearer {token}"})
     assert dashboard.status_code == 200, dashboard.text
+    installation_id = str(uuid4())
+    created_client = client.post("/api/v1/clients", headers=headers, json={
+        "installationId": installation_id, "name": "Core smoke installation",
+        "platform": "linux", "appVersion": "0.5.2",
+    })
+    assert created_client.status_code == 201, created_client.text
+    clients = client.get("/api/v1/clients", headers=headers)
+    assert clients.status_code == 200, clients.text
+    assert any(item["id"] == created_client.json()["id"] for item in clients.json())
+
+with engine.connect() as connection:
+    assert connection.scalar(text("SELECT workspace_id FROM dashboards WHERE id = :id"),
+                             {"id": dashboard.json()["id"]}) == workspace.json()["id"]
+    assert connection.scalar(text("SELECT workspace_id FROM clients WHERE id = :id"),
+                             {"id": created_client.json()["id"]}) == workspace.json()["id"]
 
 with TestClient(app) as client:
     logged_in = client.post("/api/v1/auth/login", json={
@@ -46,4 +75,4 @@ with TestClient(app) as client:
     })
     assert logged_in.status_code == 200, logged_in.text
 
-print("PostgreSQL migration, ORM, FastAPI startup, health, registration, dashboard, login: PASS")
+print("PostgreSQL 0009 migration, workspace/client ownership, FastAPI startup and login: PASS")

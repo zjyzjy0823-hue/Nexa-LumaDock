@@ -8,6 +8,7 @@ from ...utils.time import iso_utc
 from ...database import get_db
 from ...models import DataCollection, DataRecord, User
 from ...security import current_user, read_user_for
+from ...workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 v1_router = APIRouter(prefix="/api/v1/data", tags=["data"])
@@ -96,7 +97,8 @@ def list_collections(user: User = Depends(current_user), db: Session = Depends(g
 
 @v1_router.post("/collections", status_code=201)
 def create_collection(payload: CollectionInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = DataCollection(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = DataCollection(id=str(uuid4()), user_id=user.id,
+                          workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return collection_out(item)
 

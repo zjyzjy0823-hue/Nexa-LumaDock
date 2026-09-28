@@ -8,6 +8,7 @@ from ...utils.time import iso_utc
 from ...database import get_db
 from ...models import AutomationWorkflow, AutomationExecution, User, utcnow
 from ...security import current_user, read_user_for
+from ...workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 v1_router = APIRouter(prefix="/api/v1/automations", tags=["automation"])
@@ -72,7 +73,8 @@ def list_workflows(user: User = Depends(current_user), db: Session = Depends(get
 
 @v1_router.post("", status_code=201)
 def create_workflow(payload: WorkflowInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = AutomationWorkflow(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = AutomationWorkflow(id=str(uuid4()), user_id=user.id,
+                              workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return workflow_out(item)
 

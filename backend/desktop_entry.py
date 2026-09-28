@@ -9,6 +9,7 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from sqlalchemy.engine import URL
 
@@ -31,6 +32,17 @@ def prepare_desktop(data_dir: Path) -> dict[str, str]:
     secret = secret_path.read_text(encoding="ascii").strip()
     if len(secret) < 64:
         raise RuntimeError("Desktop secret.key is invalid")
+    installation_path = data_dir / "installation.id"
+    if not installation_path.exists():
+        try:
+            with installation_path.open("x", encoding="ascii") as output:
+                output.write(str(uuid4()))
+        except FileExistsError:
+            pass
+    try:
+        installation_id = str(UUID(installation_path.read_text(encoding="ascii").strip()))
+    except (OSError, ValueError, UnicodeError):
+        raise RuntimeError("Desktop installation.id is invalid") from None
     # SQLAlchemy's URL renderer handles drive letters, spaces, and backslashes.
     database_url = URL.create("sqlite", database=str(data_dir / "nexa.db")).render_as_string()
     config = {
@@ -38,6 +50,7 @@ def prepare_desktop(data_dir: Path) -> dict[str, str]:
         "DATABASE_URL": database_url,
         "JWT_SECRET": secret,
         "CORS_ORIGINS": DESKTOP_ORIGINS,
+        "NEXA_INSTALLATION_ID": installation_id,
     }
     os.environ.update(config)
     return config

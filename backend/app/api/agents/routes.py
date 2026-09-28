@@ -13,6 +13,7 @@ from ...utils.time import iso_utc, aware_utc
 from ...database import get_db
 from ...models import Agent, AgentEvent, AgentTask, User
 from ...security import agent_from_token, current_user, read_user_for
+from ...workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 legacy_router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -183,7 +184,8 @@ def agents_for_user(user: User, db: Session):
 
 @router.post("", status_code=201)
 def create_agent(payload: AgentInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = Agent(id=str(uuid4()), user_id=user.id, **payload.model_dump())
+    item = Agent(id=str(uuid4()), user_id=user.id,
+                 workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
     db.add(item)
     add_event(db, item.id, "智能体已创建")
     db.commit()
