@@ -45,6 +45,22 @@ def record_ordinary_change(db: Session, item: LedgerCategory | LedgerTransaction
     append_change(db, state, item, operation)
 
 
+def ensure_core_sync_initialized(db: Session, workspace_id: str) -> SyncWorkspaceState:
+    """Adopt active revision-zero Ledger rows into Core history exactly once."""
+    state = lock_workspace_state(db, workspace_id)
+    if state.initialized_at is not None:
+        return state
+    for model in (LedgerCategory, LedgerTransaction):
+        rows = db.scalars(select(model).where(
+            model.workspace_id == workspace_id, model.sync_revision == 0,
+            model.deleted_at.is_(None)).order_by(model.created_at, model.id)).all()
+        for item in rows:
+            append_change(db, state, item, "upsert")
+    state.initialized_at = utcnow()
+    db.flush()
+    return state
+
+
 def _uuid(value: str) -> bool:
     try:
         return str(UUID(value)) == value
@@ -58,7 +74,7 @@ def apply_mutation(db: Session, client: Client, mutation: dict) -> dict:
     if not isinstance(mid, str) or not _uuid(mid):
         return {"mutationId": mid, "status": "rejected", "reason": "invalid_id"}
     try:
-        state = lock_workspace_state(db, client.workspace_id)
+        state = ensure_core_sync_initialized(db, client.workspace_id)
         prior = db.scalar(select(SyncMutation).where(
             SyncMutation.client_id == client.id, SyncMutation.mutation_id == mid))
         if prior is not None:

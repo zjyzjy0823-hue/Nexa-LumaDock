@@ -183,7 +183,7 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-v0.5.3 Phase 1 adds the [Core Sync Protocol v1](docs/sync.md) foundation for Ledger categories and transactions. Local automatic synchronization is not enabled yet.
+v0.5.3 Phase 2 adds a durable Local Ledger mutation queue and seeds legacy Core and Local Ledger data for future sync. Local automatic synchronization is not enabled yet; see [Sync Protocol v1](docs/sync.md).
 
 GitHub Actions runs frontend, backend SQLite, backend PostgreSQL, Windows device client, OpenClaw adapter, and desktop build checks on pushes and pull requests.
 

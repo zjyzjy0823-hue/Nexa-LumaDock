@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, UniqueConstraint, Numeric
 from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -334,6 +334,7 @@ class SyncWorkspaceState(Base):
     current_revision: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    initialized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SyncChange(Base):
@@ -367,3 +368,43 @@ class SyncMutation(Base):
     status: Mapped[str] = mapped_column(String(10))
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LocalSyncState(Base):
+    __tablename__ = "local_sync_state"
+    __table_args__ = (CheckConstraint("cursor >= 0", name="ck_local_sync_cursor_nonnegative"),)
+
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True)
+    cursor: Mapped[int] = mapped_column(BigInteger, default=0)
+    remote_core_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    remote_workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    remote_client_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    queue_seeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class LocalMutation(Base):
+    __tablename__ = "local_mutation_queue"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "entity_type", "entity_id", name="uq_local_mutation_entity"),
+        Index("ix_local_mutation_workspace_status", "workspace_id", "status"),
+        CheckConstraint("base_revision >= 0", name="ck_local_mutation_base_nonnegative"),
+        CheckConstraint("attempt_count >= 0", name="ck_local_mutation_attempt_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mutation_id: Mapped[str] = mapped_column(String(36), unique=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    entity_type: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    operation: Mapped[str] = mapped_column(String(10))
+    base_revision: Mapped[int] = mapped_column(BigInteger)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

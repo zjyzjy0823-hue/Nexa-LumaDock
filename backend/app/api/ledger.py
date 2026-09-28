@@ -11,12 +11,27 @@ from sqlalchemy.orm import Session
 
 from ..utils.time import iso_utc
 from ..database import get_db, runtime_config
-from ..models import LedgerCategory, LedgerTransaction, User, utcnow
+from ..models import LedgerCategory, LedgerTransaction, LocalSyncState, User, utcnow
 from ..security import current_user
+from ..sync.local import record_local_delete, record_local_upsert, seed_local_ledger_queue
 from ..sync.service import lock_workspace_state, record_ordinary_change
 from ..workspaces import get_personal_workspace
 
-router = APIRouter(prefix="/api/v1/ledger", tags=["ledger"])
+
+def ensure_local_ledger_ready(user: User = Depends(current_user), db: Session = Depends(get_db)) -> None:
+    if runtime_config.mode == "local":
+        workspace_id = get_personal_workspace(db, user).id
+        try:
+            state = db.get(LocalSyncState, workspace_id)
+            if state is None or state.queue_seeded_at is None:
+                seed_local_ledger_queue(db, workspace_id)
+                db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
+router = APIRouter(prefix="/api/v1/ledger", tags=["ledger"], dependencies=[Depends(ensure_local_ledger_ready)])
 Kind = Literal["income", "expense"]
 
 
@@ -102,6 +117,10 @@ def commit_ledger(db: Session, item: LedgerCategory | LedgerTransaction, operati
     try:
         if runtime_config.mode == "core":
             record_ordinary_change(db, item, operation)
+        elif operation == "delete":
+            record_local_delete(db, item)
+        else:
+            record_local_upsert(db, item)
         db.commit()
         db.refresh(item)
     except Exception:

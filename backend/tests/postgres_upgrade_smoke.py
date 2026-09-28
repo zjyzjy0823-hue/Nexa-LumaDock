@@ -95,20 +95,46 @@ try:
             assert connection.scalar(text("SELECT count(*) FROM ledger_transactions WHERE id='transaction-1'")) == 1
     finally:
         engine.dispose()
+    upgrade("0011_sync_foundation")
+    engine = create_engine(upgrade_url)
+    try:
+        with engine.begin() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
+            assert connection.scalar(text("SELECT sync_revision FROM ledger_transactions")) == 0
+            old_state = Table("sync_workspace_state", MetaData(), autoload_with=connection)
+            old_change = Table("sync_changes", MetaData(), autoload_with=connection)
+            old_mutation = Table("sync_mutations", MetaData(), autoload_with=connection)
+            connection.execute(old_state.insert().values(workspace_id=workspace_id, current_revision=1,
+                                                         created_at=now, updated_at=now))
+            connection.execute(old_change.insert().values(
+                id=str(uuid4()), workspace_id=workspace_id, revision=1,
+                entity_type="ledger.category", entity_id="ledger-category-1", operation="upsert",
+                payload_json={"name": "Food", "type": "expense", "icon": "shopping"},
+                origin_client_id="old-client", created_at=now))
+            connection.execute(old_mutation.insert().values(
+                id=str(uuid4()), workspace_id=workspace_id, client_id="old-client", mutation_id=str(uuid4()),
+                entity_type="ledger.category", entity_id="ledger-category-1", operation="upsert",
+                base_revision=0, result_revision=1, status="applied",
+                result_json={"status": "applied", "revision": 1}, created_at=now))
+    finally:
+        engine.dispose()
     upgrade("head")
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012_local_sync_queue"
             for name in ("ledger_categories", "ledger_transactions"):
                 assert connection.execute(text(f"SELECT sync_revision, deleted_at FROM {name}")).one() == (0, None)
+            assert connection.execute(text("SELECT current_revision, initialized_at FROM sync_workspace_state")).one() == (1, None)
+            assert connection.scalar(text("SELECT count(*) FROM sync_changes")) == 1
+            assert connection.scalar(text("SELECT count(*) FROM sync_mutations")) == 1
             assert connection.execute(text("SELECT name, token_hash, token_last4, token_created_at "
                                            "FROM clients WHERE id='old-client'")).one() == (
                 "Existing installation", None, None, None)
             assert connection.scalar(text("SELECT count(*) FROM websites WHERE id='website-1'")) == 1
     finally:
         engine.dispose()
-    print("PostgreSQL 0008 -> 0011 upgrade, Client and Ledger preservation: PASS")
+    print("PostgreSQL 0008 -> 0012 upgrade, Client, Ledger and Sync history preservation: PASS")
 finally:
     with admin_engine.connect() as connection:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE_NAME}" WITH (FORCE)'))

@@ -19,7 +19,7 @@ def client():
     Base.metadata.create_all(engine)
 
     def test_db():
-        with Session(engine) as session:
+        with Session(engine, autoflush=False, expire_on_commit=False) as session:
             yield session
 
     app.dependency_overrides[get_db] = test_db

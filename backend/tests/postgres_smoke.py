@@ -20,11 +20,15 @@ from app.sync.service import apply_mutation
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012_local_sync_queue"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
-    assert {"sync_workspace_state", "sync_changes", "sync_mutations"}.issubset(set(inspector.get_table_names()))
+    assert {"sync_workspace_state", "sync_changes", "sync_mutations",
+            "local_sync_state", "local_mutation_queue"}.issubset(set(inspector.get_table_names()))
+    assert "initialized_at" in {column["name"] for column in inspector.get_columns("sync_workspace_state")}
+    assert any(set(item["column_names"]) == {"workspace_id", "entity_type", "entity_id"}
+               for item in inspector.get_unique_constraints("local_mutation_queue"))
     assert any(set(item["column_names"]) == {"workspace_id", "revision"}
                for item in inspector.get_unique_constraints("sync_changes"))
     assert any(set(item["column_names"]) == {"client_id", "mutation_id"}
@@ -202,4 +206,51 @@ with TestClient(app) as client:
     assert ordinary_change[0]["entityId"] == ordinary.json()["id"]
     assert ordinary_change[0]["data"] == {"name": "Web category", "type": "expense", "icon": "shopping"}
 
-print("PostgreSQL 0011 migration, client lifecycle, sync, isolation and concurrency: PASS")
+with TestClient(app) as client:
+    legacy_user = client.post("/api/v1/auth/register", json={
+        "username": "legacy_seed_" + uuid4().hex[:12], "password": "smoke-test-password"})
+    assert legacy_user.status_code == 201, legacy_user.text
+    user_auth = {"Authorization": "Bearer " + legacy_user.json()["access_token"]}
+    workspace_id = client.get("/api/v1/workspace", headers=user_auth).json()["id"]
+
+    def legacy_client():
+        enrolled = client.post("/api/v1/clients/enroll", headers=user_auth, json={
+            "installationId": str(uuid4()), "name": "Legacy pull", "platform": "linux", "appVersion": "0.5.3"})
+        assert enrolled.status_code == 201, enrolled.text
+        return {"Authorization": "Bearer " + enrolled.json()["credential"]}
+
+    first_auth, second_auth = legacy_client(), legacy_client()
+    category_id, transaction_id = str(uuid4()), str(uuid4())
+    with SessionLocal() as db:
+        owner_id = db.get(models.Workspace, workspace_id).owner_user_id
+        db.add(models.LedgerCategory(id=category_id, user_id=owner_id, workspace_id=workspace_id,
+                                     name="Legacy food", type="expense", icon="shopping", sync_revision=0))
+        db.add(models.LedgerTransaction(id=transaction_id, user_id=owner_id, workspace_id=workspace_id,
+                                        category_id=category_id, type="expense", amount="12.50",
+                                        description="Legacy lunch", merchant="", note="",
+                                        occurred_at=models.utcnow(), sync_revision=0))
+        db.commit()
+    barrier = Barrier(2)
+
+    def first_pull(auth):
+        barrier.wait(timeout=10)
+        response = client.get("/api/v1/sync/changes?cursor=0", headers=auth)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(first_pull, first_auth), pool.submit(first_pull, second_auth)]
+        pulled = [future.result(timeout=20) for future in futures]
+    assert pulled[0] == pulled[1]
+    assert [(change["entityType"], change["revision"]) for change in pulled[0]["changes"]] == [
+        ("ledger.category", 1), ("ledger.transaction", 2)]
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM sync_changes WHERE workspace_id=:id"),
+                                 {"id": workspace_id}) == 2
+        assert connection.scalar(text("SELECT current_revision FROM sync_workspace_state WHERE workspace_id=:id"),
+                                 {"id": workspace_id}) == 2
+        assert connection.scalar(text("SELECT initialized_at FROM sync_workspace_state WHERE workspace_id=:id"),
+                                 {"id": workspace_id}) is not None
+        assert connection.scalar(text("SELECT count(*) FROM local_mutation_queue")) == 0
+
+print("PostgreSQL 0012 migration, sync, isolation, legacy seeding and concurrency: PASS")

@@ -32,7 +32,7 @@ def test_ledger_crud_summary_ownership_and_validation(client, users):
     assert client.get(f"{root}/summary?month=2026-13", headers=a).status_code == 422
     assert client.get(f"{root}/summary?month=2026-09", headers=b).json()["income"] == "0"
     assert client.delete(f"{root}/categories/{cid}", headers=a).status_code == 204
-    assert client.get(f"{root}/transactions/{tid}", headers=a).json()["categoryId"] == cid
+    assert client.get(f"{root}/transactions/{tid}", headers=a).json()["categoryId"] is None
     assert client.get(f"{root}/categories/{cid}", headers=a).status_code == 404
     assert client.delete(f"{root}/transactions/{tid}", headers=a).status_code == 204
     assert client.delete(f"{root}/transactions/{income.json()['id']}", headers=a).status_code == 204

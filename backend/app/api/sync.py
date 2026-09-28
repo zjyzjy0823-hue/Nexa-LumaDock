@@ -1,11 +1,16 @@
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Client
-from ..security import client_from_token
-from ..sync.service import apply_mutation, get_changes
+from ..models import Client, LocalMutation, LocalSyncState, User
+from ..runtime_mode import require_local_mode
+from ..security import client_from_token, current_user
+from ..sync.local import seed_local_ledger_queue
+from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
+from ..utils.time import iso_utc
+from ..workspaces import get_personal_workspace
 
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
@@ -27,4 +32,29 @@ def mutations(payload: MutationBatch, client: Client = Depends(client_from_token
 @router.get("/changes")
 def changes(cursor: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=100),
             client: Client = Depends(client_from_token), db: Session = Depends(get_db)):
+    try:
+        ensure_core_sync_initialized(db, client.workspace_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return get_changes(db, client.workspace_id, cursor, limit)
+
+
+@router.get("/status")
+def local_status(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    workspace_id = get_personal_workspace(db, user).id
+    try:
+        state = db.get(LocalSyncState, workspace_id)
+        if state is None or state.queue_seeded_at is None:
+            state = seed_local_ledger_queue(db, workspace_id)
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    counts = dict(db.execute(select(LocalMutation.status, func.count()).where(
+        LocalMutation.workspace_id == workspace_id).group_by(LocalMutation.status)).all())
+    return {"pending": counts.get("pending", 0), "conflicts": counts.get("conflict", 0),
+            "cursor": state.cursor, "queueSeeded": state.queue_seeded_at is not None,
+            "lastSuccessAt": iso_utc(state.last_success_at)}

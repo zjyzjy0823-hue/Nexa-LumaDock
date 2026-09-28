@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.api import ledger
 from app.database import get_db
 from app.main import app
-from app.models import LedgerCategory, LedgerTransaction, SyncChange, SyncMutation, SyncWorkspaceState
+from app.models import LedgerCategory, LedgerTransaction, SyncChange, SyncMutation, SyncWorkspaceState, Workspace, utcnow
 from app.runtime_mode import require_core_mode
 
 
@@ -167,3 +167,70 @@ def test_category_tombstone_and_core_ordinary_ledger(client, monkeypatch):
         assert db.get(LedgerTransaction, transaction["id"]).category_id == category["id"]
     finally:
         iterator.close()
+
+
+def test_core_legacy_seed_once_and_before_mutation(client):
+    app.dependency_overrides[require_core_mode] = lambda: None
+    auth = user(client, "core_legacy_seed")
+    credential = enroll(client, auth)
+    category_id, transaction_id, tombstone_id = str(uuid4()), str(uuid4()), str(uuid4())
+    workspace_id = client.get("/api/v1/workspace", headers=auth).json()["id"]
+    iterator, db = db_session()
+    try:
+        user_id = db.get(Workspace, workspace_id).owner_user_id
+        db.add_all([
+            LedgerCategory(id=category_id, user_id=user_id, workspace_id=workspace_id,
+                           name="Old food", type="expense", icon="shopping", sync_revision=0),
+            LedgerCategory(id=tombstone_id, user_id=user_id, workspace_id=workspace_id,
+                           name="Deleted old", type="expense", icon="shopping",
+                           sync_revision=0, deleted_at=utcnow()),
+            LedgerTransaction(id=transaction_id, user_id=user_id, workspace_id=workspace_id,
+                              category_id=category_id, type="expense", amount="12.50",
+                              description="Old lunch", merchant="", note="", occurred_at=utcnow(),
+                              sync_revision=0),
+        ])
+        db.commit()
+    finally:
+        iterator.close()
+    first = client.get(f"{ROOT}/changes?cursor=0", headers=credential).json()
+    assert [(row["entityType"], row["revision"]) for row in first["changes"]] == [
+        ("ledger.category", 1), ("ledger.transaction", 2)]
+    assert first["changes"][1]["data"]["categoryId"] == category_id
+    assert client.get(f"{ROOT}/changes?cursor=0", headers=credential).json() == first
+    iterator, db = db_session()
+    try:
+        assert db.get(LedgerCategory, category_id).sync_revision == 1
+        assert db.get(LedgerTransaction, transaction_id).sync_revision == 2
+        assert db.get(LedgerCategory, tombstone_id).sync_revision == 0
+        assert db.get(SyncWorkspaceState, workspace_id).initialized_at is not None
+        assert db.query(SyncChange).count() == 2
+    finally:
+        iterator.close()
+
+
+def test_core_legacy_seed_after_existing_revision_and_post_first(client):
+    app.dependency_overrides[require_core_mode] = lambda: None
+    auth = user(client, "core_legacy_mixed")
+    credential = enroll(client, auth)
+    workspace_id = client.get("/api/v1/workspace", headers=auth).json()["id"]
+    legacy_id = str(uuid4())
+    iterator, db = db_session()
+    try:
+        user_id = db.get(Workspace, workspace_id).owner_user_id
+        db.add(LedgerCategory(id=legacy_id, user_id=user_id, workspace_id=workspace_id,
+                              name="Legacy", type="expense", icon="shopping", sync_revision=0))
+        db.add(SyncWorkspaceState(workspace_id=workspace_id, current_revision=1))
+        db.add(SyncChange(id=str(uuid4()), workspace_id=workspace_id, revision=1,
+                          entity_type="ledger.category", entity_id=str(uuid4()), operation="upsert",
+                          payload_json={"name": "Earlier", "type": "expense", "icon": "shopping"}))
+        db.commit()
+    finally:
+        iterator.close()
+    # A base-zero create cannot overwrite an unseeded legacy UUID.
+    attempted = mutation("ledger.category", entity_id=legacy_id,
+                         data={"name": "Overwrite", "type": "expense", "icon": "shopping"})
+    result = push(client, credential, attempted)[0]
+    assert result["status"] == "conflict" and result["currentRevision"] == 2
+    changes = client.get(f"{ROOT}/changes?cursor=0", headers=credential).json()
+    assert [row["revision"] for row in changes["changes"]] == [1, 2]
+    assert changes["changes"][1]["data"]["name"] == "Legacy"
