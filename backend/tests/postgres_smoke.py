@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 import sys
 
@@ -10,17 +12,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.main import app
 from app import models  # noqa: F401
+from app.sync.service import apply_mutation
 
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
+    assert {"sync_workspace_state", "sync_changes", "sync_mutations"}.issubset(set(inspector.get_table_names()))
+    assert any(set(item["column_names"]) == {"workspace_id", "revision"}
+               for item in inspector.get_unique_constraints("sync_changes"))
+    assert any(set(item["column_names"]) == {"client_id", "mutation_id"}
+               for item in inspector.get_unique_constraints("sync_mutations"))
     assert any(set(constraint["column_names"]) == {"workspace_id", "installation_id"}
                for constraint in inspector.get_unique_constraints("clients"))
     assert any(fk["referred_table"] == "workspaces" and fk["constrained_columns"] == ["workspace_id"]
@@ -114,4 +122,84 @@ with TestClient(app) as client:
     })
     assert logged_in.status_code == 200, logged_in.text
 
-print("PostgreSQL 0010 migration, client credential lifecycle, FastAPI startup and login: PASS")
+def sync_mutation(entity_id, base=0, operation="upsert", description="Coffee"):
+    return {"mutationId": str(uuid4()), "entityType": "ledger.transaction", "entityId": entity_id,
+            "operation": operation, "baseRevision": base,
+            "data": {"categoryId": None, "type": "expense", "amount": "38.00",
+                     "description": description, "merchant": "", "note": "",
+                     "occurredAt": "2026-09-28T12:00:00Z"} if operation == "upsert" else None}
+
+
+with TestClient(app) as client:
+    def new_user():
+        response = client.post("/api/v1/auth/register", json={
+            "username": "sync_smoke_" + uuid4().hex[:12], "password": "smoke-test-password"})
+        assert response.status_code == 201, response.text
+        return {"Authorization": "Bearer " + response.json()["access_token"]}
+
+    def enroll(user_auth):
+        response = client.post("/api/v1/clients/enroll", headers=user_auth, json={
+            "installationId": str(uuid4()), "name": "Sync smoke", "platform": "linux", "appVersion": "0.5.3"})
+        assert response.status_code == 201, response.text
+        return response.json()["client"]["id"], {"Authorization": "Bearer " + response.json()["credential"]}
+
+    owner, stranger = new_user(), new_user()
+    client_a, auth_a = enroll(owner)
+    client_b, auth_b = enroll(owner)
+    _, auth_other = enroll(stranger)
+    entity_id = str(uuid4())
+    created = sync_mutation(entity_id)
+    response = client.post("/api/v1/sync/mutations", headers=auth_a, json={"mutations": [created]})
+    assert response.status_code == 200, response.text
+    first = response.json()["results"][0]
+    assert first["status"] == "applied" and first["revision"] == 1
+    retry = client.post("/api/v1/sync/mutations", headers=auth_a, json={"mutations": [created]})
+    assert retry.json()["results"][0] == first
+    assert client.get("/api/v1/sync/changes", headers=auth_other).json()["changes"] == []
+    assert client.get("/api/v1/sync/changes", headers=auth_b).json()["changes"][0]["revision"] == 1
+
+    barrier = Barrier(2)
+
+    def compete(client_id, payload):
+        with SessionLocal() as db:
+            item = db.get(models.Client, client_id)
+            barrier.wait(timeout=10)
+            return apply_mutation(db, item, payload)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(compete, client_a, sync_mutation(entity_id, 1, description="A")),
+                   pool.submit(compete, client_b, sync_mutation(entity_id, 1, description="B"))]
+        competing = [future.result(timeout=20) for future in futures]
+    assert sorted(result["status"] for result in competing) == ["applied", "conflict"]
+    assert next(result["revision"] for result in competing if result["status"] == "applied") == 2
+
+    barrier = Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(compete, client_a, sync_mutation(str(uuid4()))),
+                   pool.submit(compete, client_b, sync_mutation(str(uuid4())))]
+        independent = [future.result(timeout=20) for future in futures]
+    assert sorted(result["revision"] for result in independent) == [3, 4]
+
+    deletion = sync_mutation(entity_id, 2, operation="delete")
+    result = client.post("/api/v1/sync/mutations", headers=auth_a,
+                         json={"mutations": [deletion]}).json()["results"][0]
+    assert result["status"] == "applied" and result["revision"] == 5
+    assert client.post("/api/v1/sync/mutations", headers=auth_a,
+                       json={"mutations": [deletion]}).json()["results"][0] == result
+    assert client.get(f"/api/v1/ledger/transactions/{entity_id}", headers=owner).status_code == 404
+    changes = client.get("/api/v1/sync/changes?cursor=2&limit=2", headers=auth_b).json()
+    assert [row["revision"] for row in changes["changes"]] == [3, 4]
+    assert changes["hasMore"] is True and changes["cursor"] == 4
+    assert client.get("/api/v1/sync/changes?cursor=4", headers=auth_b).json()["changes"][0]["operation"] == "delete"
+    other_attempt = client.post("/api/v1/sync/mutations", headers=auth_other,
+                                json={"mutations": [sync_mutation(entity_id, 5)]}).json()["results"][0]
+    assert other_attempt["status"] == "rejected" and other_attempt["reason"] == "entity_id_unavailable"
+    ordinary = client.post("/api/v1/ledger/categories", headers=owner,
+                           json={"name": "Web category", "type": "expense"})
+    assert ordinary.status_code == 201, ordinary.text
+    ordinary_change = client.get("/api/v1/sync/changes?cursor=5", headers=auth_a).json()["changes"]
+    assert len(ordinary_change) == 1 and ordinary_change[0]["revision"] == 6
+    assert ordinary_change[0]["entityId"] == ordinary.json()["id"]
+    assert ordinary_change[0]["data"] == {"name": "Web category", "type": "expense", "icon": "shopping"}
+
+print("PostgreSQL 0011 migration, client lifecycle, sync, isolation and concurrency: PASS")

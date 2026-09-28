@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from ..utils.time import iso_utc
 from ..database import get_db, runtime_config
-from ..models import LedgerCategory, LedgerTransaction, User
+from ..models import LedgerCategory, LedgerTransaction, User, utcnow
 from ..security import current_user
+from ..sync.service import lock_workspace_state, record_ordinary_change
 from ..workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1/ledger", tags=["ledger"])
@@ -60,14 +61,20 @@ class TransactionPatch(BaseModel):
 
 
 def category_or_404(db: Session, user: User, id: str) -> LedgerCategory:
-    item = db.scalar(select(LedgerCategory).where(LedgerCategory.id == id, LedgerCategory.user_id == user.id))
+    workspace_id = get_personal_workspace(db, user).id
+    item = db.scalar(select(LedgerCategory).where(LedgerCategory.id == id, LedgerCategory.user_id == user.id,
+                                                  LedgerCategory.workspace_id == workspace_id,
+                                                  LedgerCategory.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Category not found")
     return item
 
 
 def transaction_or_404(db: Session, user: User, id: str) -> LedgerTransaction:
-    item = db.scalar(select(LedgerTransaction).where(LedgerTransaction.id == id, LedgerTransaction.user_id == user.id))
+    workspace_id = get_personal_workspace(db, user).id
+    item = db.scalar(select(LedgerTransaction).where(LedgerTransaction.id == id, LedgerTransaction.user_id == user.id,
+                                                     LedgerTransaction.workspace_id == workspace_id,
+                                                     LedgerTransaction.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Transaction not found")
     return item
@@ -91,21 +98,40 @@ def check_category(db: Session, user: User, category_id: str | None, kind: str):
             raise HTTPException(422, "Category type must match transaction type")
 
 
+def commit_ledger(db: Session, item: LedgerCategory | LedgerTransaction, operation: str = "upsert") -> None:
+    try:
+        if runtime_config.mode == "core":
+            record_ordinary_change(db, item, operation)
+        db.commit()
+        db.refresh(item)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def lock_core_write(db: Session, user: User) -> None:
+    if runtime_config.mode == "core":
+        lock_workspace_state(db, get_personal_workspace(db, user).id)
+
+
 @router.get("/categories")
 def list_categories(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [category_out(item) for item in db.scalars(select(LedgerCategory).where(LedgerCategory.user_id == user.id).order_by(LedgerCategory.created_at)).all()]
+    return [category_out(item) for item in db.scalars(select(LedgerCategory).where(
+        LedgerCategory.user_id == user.id, LedgerCategory.deleted_at.is_(None)).order_by(LedgerCategory.created_at)).all()]
 
 
 @router.post("/categories", status_code=201)
 def create_category(payload: CategoryInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    lock_core_write(db, user)
     item = LedgerCategory(id=str(uuid4()), user_id=user.id,
                           workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item); commit_ledger(db, item)
     return category_out(item)
 
 
 @router.patch("/categories/{id}")
 def patch_category(id: str, payload: CategoryPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    lock_core_write(db, user)
     item = category_or_404(db, user, id)
     values = payload.model_dump(exclude_unset=True)
     if "type" in values and values["type"] != item.type and item.transactions:
@@ -116,31 +142,34 @@ def patch_category(id: str, payload: CategoryPatch, user: User = Depends(current
         setattr(item, key, value.strip() if key == "name" else value)
     if not item.name:
         raise HTTPException(422, "Name is required")
-    db.commit(); db.refresh(item)
+    commit_ledger(db, item)
     return category_out(item)
 
 
 @router.delete("/categories/{id}", status_code=204)
 def delete_category(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    lock_core_write(db, user)
     item = category_or_404(db, user, id)
-    for transaction in item.transactions:
-        transaction.category_id = None
-    db.delete(item); db.commit()
+    item.deleted_at = utcnow()
+    commit_ledger(db, item, "delete")
 
 
 @router.get("/transactions")
 def list_transactions(month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
                       user: User = Depends(current_user), db: Session = Depends(get_db)):
-    items = db.scalars(select(LedgerTransaction).where(LedgerTransaction.user_id == user.id).order_by(LedgerTransaction.occurred_at.desc())).all()
+    items = db.scalars(select(LedgerTransaction).where(
+        LedgerTransaction.user_id == user.id, LedgerTransaction.deleted_at.is_(None))
+        .order_by(LedgerTransaction.occurred_at.desc())).all()
     return [transaction_out(item) for item in items if month is None or item.occurred_at.strftime("%Y-%m") == month]
 
 
 @router.post("/transactions", status_code=201)
 def create_transaction(payload: TransactionInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    lock_core_write(db, user)
     check_category(db, user, payload.category_id, payload.type)
     item = LedgerTransaction(id=str(uuid4()), user_id=user.id,
                              workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item); commit_ledger(db, item)
     return transaction_out(item)
 
 
@@ -156,31 +185,37 @@ def get_category(id: str, user: User = Depends(current_user), db: Session = Depe
 
 @router.patch("/transactions/{id}")
 def patch_transaction(id: str, payload: TransactionPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    lock_core_write(db, user)
     item = transaction_or_404(db, user, id)
     values = payload.model_dump(exclude_unset=True)
     kind = values.get("type", item.type)
     category_id = values.get("category_id", item.category_id)
     if kind is None:
         raise HTTPException(422, "type cannot be null")
-    check_category(db, user, category_id, kind)
+    if "category_id" in values or kind != item.type:
+        check_category(db, user, category_id, kind)
     for key, value in values.items():
         if value is None and key != "category_id":
             raise HTTPException(422, f"{key} cannot be null")
         setattr(item, key, value)
-    db.commit(); db.refresh(item)
+    commit_ledger(db, item)
     return transaction_out(item)
 
 
 @router.delete("/transactions/{id}", status_code=204)
 def delete_transaction(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(transaction_or_404(db, user, id)); db.commit()
+    lock_core_write(db, user)
+    item = transaction_or_404(db, user, id)
+    item.deleted_at = utcnow()
+    commit_ledger(db, item, "delete")
 
 
 @router.get("/summary")
 def summary(month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
             user: User = Depends(current_user), db: Session = Depends(get_db)):
     month = month or datetime.now(ZoneInfo(runtime_config.app_timezone)).strftime("%Y-%m")
-    items = db.scalars(select(LedgerTransaction).where(LedgerTransaction.user_id == user.id)).all()
+    items = db.scalars(select(LedgerTransaction).where(
+        LedgerTransaction.user_id == user.id, LedgerTransaction.deleted_at.is_(None))).all()
     current = [item for item in items if item.occurred_at.strftime("%Y-%m") == month]
     income = sum((item.amount for item in current if item.type == "income"), Decimal("0"))
     expense = sum((item.amount for item in current if item.type == "expense"), Decimal("0"))

@@ -44,7 +44,15 @@ def test_fresh_install_schema(tmp_path: Path):
             assert not column["nullable"]
         assert any(set(constraint["column_names"]) == {"workspace_id", "installation_id"}
                    for constraint in inspector.get_unique_constraints("clients"))
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010_client_auth"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0011_sync_foundation"
+        assert {"sync_workspace_state", "sync_changes", "sync_mutations"}.issubset(inspector.get_table_names())
+        for name in ("ledger_categories", "ledger_transactions"):
+            columns = {column["name"]: column for column in inspector.get_columns(name)}
+            assert not columns["sync_revision"]["nullable"] and columns["deleted_at"]["nullable"]
+        assert any(set(item["column_names"]) == {"workspace_id", "revision"}
+                   for item in inspector.get_unique_constraints("sync_changes"))
+        assert any(set(item["column_names"]) == {"client_id", "mutation_id"}
+                   for item in inspector.get_unique_constraints("sync_mutations"))
         client_columns = {column["name"]: column for column in inspector.get_columns("clients")}
         assert {"token_hash", "token_last4", "token_created_at"}.issubset(client_columns)
         assert all(client_columns[name]["nullable"] for name in ("token_hash", "token_last4", "token_created_at"))
@@ -156,7 +164,7 @@ def test_upgrade_0008_backfills_workspace_ownership_without_data_loss(tmp_path: 
         assert conn.scalar(text("SELECT workspace FROM agents WHERE id='agent-1'")) == "Legacy workspace label"
         assert conn.scalar(text("SELECT count(*) FROM agent_tasks WHERE id='task-1'")) == 1
         assert conn.scalar(text("SELECT amount FROM ledger_transactions WHERE id='transaction-1'")) == 12
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
     engine.dispose()
 
 
@@ -192,7 +200,7 @@ def test_upgrade_0009_to_0010_preserves_existing_client(tmp_path: Path):
         row = conn.execute(text("SELECT name, workspace_id, token_hash, token_last4, token_created_at "
                                 "FROM clients WHERE id='client-old'")).one()
         assert row == ("Old desktop", "workspace-old", None, None, None)
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
     engine.dispose()
 
 
@@ -213,4 +221,44 @@ def test_create_admin_initializes_personal_workspace(tmp_path: Path):
                                  "JOIN workspaces w ON w.owner_user_id=u.id")).one() == (
             "admin_owner", "personal", "个人工作区"
         )
+    engine.dispose()
+
+
+def test_upgrade_0010_to_0011_preserves_ledger(tmp_path: Path):
+    database = tmp_path / "sync-upgrade.db"
+    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+    backend = Path(__file__).parents[1]
+
+    def upgrade(revision):
+        result = subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", revision],
+                                cwd=backend, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    upgrade("0010_client_auth")
+    engine = create_engine(f"sqlite:///{database}")
+    now = datetime.now(timezone.utc)
+    with engine.begin() as conn:
+        metadata = MetaData()
+        for name, values in (
+            ("users", dict(id=1, username="sync-old", email="sync-old@example.test", password_hash="hash",
+                           created_at=now, updated_at=now)),
+            ("workspaces", dict(id="workspace-old", owner_user_id=1, name="Personal", kind="personal",
+                                created_at=now, updated_at=now)),
+            ("ledger_categories", dict(id="category-old", user_id=1, workspace_id="workspace-old",
+                                       name="Food", type="expense", icon="shopping", created_at=now)),
+            ("ledger_transactions", dict(id="transaction-old", user_id=1, workspace_id="workspace-old",
+                                         category_id="category-old", type="expense", amount=12.5,
+                                         description="Lunch", merchant="", note="", occurred_at=now,
+                                         created_at=now, updated_at=now)),
+        ):
+            conn.execute(Table(name, metadata, autoload_with=conn).insert().values(**values))
+    engine.dispose()
+    upgrade("head")
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT name, sync_revision, deleted_at FROM ledger_categories")).one() == (
+            "Food", 0, None)
+        assert conn.execute(text("SELECT description, category_id, sync_revision, deleted_at "
+                                 "FROM ledger_transactions")).one() == ("Lunch", "category-old", 0, None)
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
     engine.dispose()

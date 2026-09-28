@@ -87,18 +87,28 @@ try:
                 created_at=now, updated_at=now))
     finally:
         engine.dispose()
-    upgrade("head")
+    upgrade("0010_client_auth")
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_client_auth"
+            assert connection.scalar(text("SELECT count(*) FROM ledger_transactions WHERE id='transaction-1'")) == 1
+    finally:
+        engine.dispose()
+    upgrade("head")
+    engine = create_engine(upgrade_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_sync_foundation"
+            for name in ("ledger_categories", "ledger_transactions"):
+                assert connection.execute(text(f"SELECT sync_revision, deleted_at FROM {name}")).one() == (0, None)
             assert connection.execute(text("SELECT name, token_hash, token_last4, token_created_at "
                                            "FROM clients WHERE id='old-client'")).one() == (
                 "Existing installation", None, None, None)
             assert connection.scalar(text("SELECT count(*) FROM websites WHERE id='website-1'")) == 1
     finally:
         engine.dispose()
-    print("PostgreSQL 0008 -> 0009 backfill and 0009 -> 0010 Client preservation: PASS")
+    print("PostgreSQL 0008 -> 0011 upgrade, Client and Ledger preservation: PASS")
 finally:
     with admin_engine.connect() as connection:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE_NAME}" WITH (FORCE)'))

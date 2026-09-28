@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import api_keys, auth, client_runtime, clients, core, dashboard, ledger, settings, workspace
+from .api import api_keys, auth, client_runtime, clients, core, dashboard, ledger, settings, sync, workspace
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router, runtime_router as agent_runtime_router
 from .api.automation.routes import router as automation_router, v1_router as v1_automation_router
 from .api.data.routes import router as data_router, v1_router as v1_data_router
@@ -47,7 +47,7 @@ for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
     v1_data_router, v1_automation_router, settings.router, ledger.router,
-    workspace.router, clients.router, client_runtime.router, core.router,
+    workspace.router, clients.router, client_runtime.router, core.router, sync.router,
 ):
     app.include_router(router)
 

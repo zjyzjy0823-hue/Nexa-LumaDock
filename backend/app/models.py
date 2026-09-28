@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Numeric
 from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -302,6 +302,8 @@ class LedgerCategory(Base):
     type: Mapped[str] = mapped_column(String(10))
     icon: Mapped[str] = mapped_column(String(30), default="shopping")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sync_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     transactions: Mapped[list["LedgerTransaction"]] = relationship(back_populates="category")
 
 
@@ -319,4 +321,49 @@ class LedgerTransaction(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    sync_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     category: Mapped[LedgerCategory | None] = relationship(back_populates="transactions")
+
+
+class SyncWorkspaceState(Base):
+    __tablename__ = "sync_workspace_state"
+    __table_args__ = (CheckConstraint("current_revision >= 0", name="ck_sync_workspace_revision_nonnegative"),)
+
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True)
+    current_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SyncChange(Base):
+    __tablename__ = "sync_changes"
+    __table_args__ = (UniqueConstraint("workspace_id", "revision", name="uq_sync_changes_workspace_revision"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column(BigInteger)
+    entity_type: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    operation: Mapped[str] = mapped_column(String(10))
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    origin_client_id: Mapped[str | None] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SyncMutation(Base):
+    __tablename__ = "sync_mutations"
+    __table_args__ = (UniqueConstraint("client_id", "mutation_id", name="uq_sync_mutations_client_mutation"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    mutation_id: Mapped[str] = mapped_column(String(36))
+    entity_type: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    operation: Mapped[str] = mapped_column(String(10))
+    base_revision: Mapped[int] = mapped_column(BigInteger)
+    result_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str] = mapped_column(String(10))
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

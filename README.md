@@ -183,7 +183,9 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-GitHub Actions runs three jobs on pushes and pull requests: frontend build, backend pytest, and Windows device client compile/test.
+v0.5.3 Phase 1 adds the [Core Sync Protocol v1](docs/sync.md) foundation for Ledger categories and transactions. Local automatic synchronization is not enabled yet.
+
+GitHub Actions runs frontend, backend SQLite, backend PostgreSQL, Windows device client, OpenClaw adapter, and desktop build checks on pushes and pull requests.
 
 ## License
 
