@@ -42,6 +42,7 @@ const authReady = ref(false)
 const authStartupError = ref('')
 const desktopError = ref('')
 let backendTimer: ReturnType<typeof setInterval> | undefined
+let restoringSession = false
 const currentComponent = computed(() => ({
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
@@ -82,6 +83,8 @@ function onLocationChange() {
   window.scrollTo({ top: 0, behavior: 'instant' })
 }
 async function restoreSession() {
+  if (restoringSession) return
+  restoringSession = true
   authReady.value = false
   authStartupError.value = ''
   try { if (auth.token) await auth.restore() }
@@ -89,13 +92,14 @@ async function restoreSession() {
     if (auth.token) authStartupError.value = error instanceof ApiError && (error.status === 0 || error.status >= 500)
       ? '无法连接到 Nexa 后端，请确认服务已启动。'
       : error instanceof Error ? error.message : '无法连接到 Nexa 后端。'
-  } finally { authReady.value = true }
+  } finally { authReady.value = true; restoringSession = false }
 }
 async function checkDesktopBackend() {
   if (!isTauri()) return
   try {
     const status = await invoke<string>('backend_status')
     desktopError.value = status === 'ready' || status === 'starting' ? '' : status
+    if (status === 'ready' && !authReady.value) await restoreSession()
   } catch {
     desktopError.value = '无法读取 Nexa Backend 状态。请重新启动 Nexa。'
   }
@@ -114,9 +118,12 @@ async function create(kind: string) {
 onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
-  await checkDesktopBackend()
-  if (isTauri()) backendTimer = setInterval(checkDesktopBackend, 2000)
-  if (!desktopError.value) await restoreSession()
+  if (isTauri()) {
+    await checkDesktopBackend()
+    backendTimer = setInterval(checkDesktopBackend, 2000)
+  } else {
+    await restoreSession()
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
