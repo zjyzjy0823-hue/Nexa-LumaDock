@@ -152,7 +152,16 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
                     # The predecessor owns the unresolved conflict. Keep its
                     # editable tail blocked and avoid a second frozen row.
                     continue
-                if entry.status in ("pending", "in_flight") and entry.base_revision < revision:
+                if entry.status == "conflict" and revision <= max(
+                        entry.result_revision or 0,
+                        (entry.conflict_json or {}).get("currentRevision", 0)):
+                    # A push response can already know a revision beyond the
+                    # pull cursor. Older history must not regress that snapshot.
+                    continue
+                if entry.status == "conflict" or (
+                        entry.status in ("pending", "in_flight") and entry.base_revision < revision):
+                    # Keep the conflict owner's remote snapshot current without
+                    # changing the local edit, its base, or its blocked tail.
                     entry.status = "conflict"
                     entry.conflict_json = conflict
                     entry.result_revision = revision

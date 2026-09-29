@@ -120,14 +120,15 @@ try:
         engine.dispose()
     upgrade("0012_local_sync_queue")
     engine = create_engine(upgrade_url)
+    outbox_payload = {"categoryId": "ledger-category-1", "type": "expense",
+                      "amount": "12.00", "description": "Old transaction",
+                      "merchant": "", "note": "", "occurredAt": now.isoformat()}
     try:
         with engine.begin() as connection:
             connection.execute(Table("local_mutation_queue", MetaData(), autoload_with=connection).insert().values(
                 id="old-outbox", mutation_id="old-mutation", workspace_id=workspace_id,
                 entity_type="ledger.transaction", entity_id="transaction-1", operation="upsert",
-                base_revision=0, payload_json={"categoryId": "ledger-category-1", "type": "expense",
-                                               "amount": "12.00", "description": "Old transaction",
-                                               "merchant": "", "note": "", "occurredAt": now.isoformat()},
+                base_revision=0, payload_json=outbox_payload,
                 status="pending", attempt_count=0, created_at=now, updated_at=now))
     finally:
         engine.dispose()
@@ -136,9 +137,9 @@ try:
     try:
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_sync_engine"
-            assert connection.execute(text("SELECT mutation_id, base_revision, depends_on_mutation_id "
-                                           "FROM local_mutation_queue")).one() == ("old-mutation", 0, None)
-            assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue"))["amount"] == "12.00"
+            assert connection.execute(text("SELECT mutation_id, base_revision, status, depends_on_mutation_id "
+                                           "FROM local_mutation_queue")).one() == ("old-mutation", 0, "pending", None)
+            assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue")) == outbox_payload
             for name in ("ledger_categories", "ledger_transactions"):
                 assert connection.execute(text(f"SELECT sync_revision, deleted_at FROM {name}")).one() == (0, None)
             assert connection.execute(text("SELECT current_revision, initialized_at FROM sync_workspace_state")).one() == (1, None)

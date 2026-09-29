@@ -60,6 +60,8 @@ jobs:
         working-directory: backend
       - run: python tests/postgres_upgrade_smoke.py
         working-directory: backend
+      - run: python tests/postgres_sync_integration.py
+        working-directory: backend
   device-client:
     runs-on: windows-latest
     steps:

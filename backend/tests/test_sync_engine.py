@@ -221,6 +221,135 @@ def test_frozen_conflict_keeps_editable_tail_blocked(network):
         assert db.get(LedgerTransaction, item_id).description == "Later local edit"
 
 
+def conflicted_transaction(n):
+    item_id = create_transaction(n.a)
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["status"] == "ok"
+    edit(n.b, item_id, "Local 42")
+    edit(n.a, item_id, "Remote 40")
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["conflicts"] == 1
+    return item_id
+
+
+def test_conflict_snapshot_tracks_successive_remote_revisions(network):
+    n = network
+    item_id = conflicted_transaction(n)
+    original = queue(n.b, item_id)
+    for revision, description in ((3, "Remote 43"), (4, "Remote 45")):
+        edit(n.a, item_id, description)
+        assert n.sync(n.a, n.ta)["status"] == "ok"
+        assert n.sync(n.b, n.tb)["cursor"] == revision
+        with n.b.factory() as db:
+            item = db.get(LedgerTransaction, item_id)
+            conflict = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == item_id))
+            assert item.description == "Local 42" and item.sync_revision == 1
+            assert item.deleted_at is None
+            assert conflict.status == "conflict" and conflict.result_revision == revision
+            assert conflict.conflict_json["currentRevision"] == revision
+            assert conflict.conflict_json["current"]["description"] == description
+            assert conflict.conflict_json["deleted"] is False
+        assert queue(n.b, item_id) == original
+
+
+def test_conflict_snapshot_tracks_remote_delete_and_restore(network):
+    n = network
+    item_id = conflicted_transaction(n)
+    delete(n.a, item_id)
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["cursor"] == 3
+    with n.b.factory() as db:
+        conflict = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == item_id))
+        assert conflict.result_revision == 3
+        assert conflict.conflict_json == {"currentRevision": 3, "current": None, "deleted": True}
+        item = db.get(LedgerTransaction, item_id)
+        assert item.description == "Local 42" and item.sync_revision == 1
+        assert item.deleted_at is None
+    with n.a.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        item.deleted_at = None
+        item.description = "Remote restored"
+        record_local_upsert(db, item)
+        db.commit()
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["cursor"] == 4
+    with n.b.factory() as db:
+        conflict = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == item_id))
+        assert conflict.result_revision == 4 and conflict.conflict_json["currentRevision"] == 4
+        assert conflict.conflict_json["deleted"] is False
+        assert conflict.conflict_json["current"]["description"] == "Remote restored"
+        item = db.get(LedgerTransaction, item_id)
+        assert item.description == "Local 42" and item.sync_revision == 1
+        assert item.deleted_at is None
+
+
+def test_conflict_snapshot_does_not_regress_while_catching_up(network, monkeypatch):
+    from app.sync import engine
+
+    n = network
+    item_id = create_transaction(n.a)
+    n.sync(n.a, n.ta)
+    n.sync(n.b, n.tb)
+    edit(n.b, item_id, "Local 42")
+    _freeze(n.b.factory, n.b.workspace_id, queue(n.b, item_id)[0][0])
+    for description in ("Remote first", "Remote latest"):
+        edit(n.a, item_id, description)
+        n.sync(n.a, n.ta)
+    original_apply = engine._apply_change
+
+    def stop_before_latest(factory, user_id, workspace_id, change):
+        if change["revision"] == 3:
+            raise SyncRemoteError("unreachable")
+        return original_apply(factory, user_id, workspace_id, change)
+
+    monkeypatch.setattr(engine, "_apply_change", stop_before_latest)
+    # Retry receives conflict revision 3 before pull processes older revision 2.
+    result = n.sync(n.b, n.tb)
+    assert result["status"] == "error" and result["cursor"] == 2
+    with n.b.factory() as db:
+        entry = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == item_id))
+        assert entry.result_revision == 3 and entry.conflict_json["currentRevision"] == 3
+        assert entry.conflict_json["current"]["description"] == "Remote latest"
+        item = db.get(LedgerTransaction, item_id)
+        assert item.description == "Local 42" and item.sync_revision == 1
+    monkeypatch.setattr(engine, "_apply_change", original_apply)
+    assert n.sync(n.b, n.tb)["cursor"] == 3
+
+
+def test_conflict_refresh_preserves_frozen_request_and_pending_tail(network):
+    n = network
+    item_id = create_transaction(n.a)
+    n.sync(n.a, n.ta)
+    n.sync(n.b, n.tb)
+    edit(n.b, item_id, "Frozen attempt")
+    mutation_id = queue(n.b, item_id)[0][0]
+    _freeze(n.b.factory, n.b.workspace_id, mutation_id)
+    edit(n.b, item_id, "Editable tail")
+    edit(n.a, item_id, "Remote first")
+    n.sync(n.a, n.ta)
+    assert n.sync(n.b, n.tb)["conflicts"] == 1
+    original = queue(n.b, item_id)
+    for revision, description in ((3, "Remote latest"), (4, None)):
+        if description is None:
+            delete(n.a, item_id)
+        else:
+            edit(n.a, item_id, description)
+        n.sync(n.a, n.ta)
+        result = n.sync(n.b, n.tb)
+        assert result["cursor"] == revision and result["conflicts"] == 1 and result["pending"] == 1
+        assert queue(n.b, item_id) == original
+        with n.b.factory() as db:
+            conflict = db.scalar(select(LocalMutation).where(LocalMutation.mutation_id == mutation_id))
+            assert conflict.result_revision == revision
+            assert conflict.conflict_json["currentRevision"] == revision
+            assert conflict.conflict_json["deleted"] == (description is None)
+            current = conflict.conflict_json["current"]
+            assert current is None if description is None else current["description"] == description
+            item = db.get(LedgerTransaction, item_id)
+            assert item.description == "Editable tail" and item.sync_revision == 1
+            assert item.deleted_at is None
+
+
 def test_response_lost_freeze_tail_retry_and_idempotency(network):
     n = network
     item_id = create_transaction(n.a)

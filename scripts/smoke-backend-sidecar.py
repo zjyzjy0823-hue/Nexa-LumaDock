@@ -66,6 +66,7 @@ def main() -> None:
     try:
         first = launch(data_dir)
         try:
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.3"}
             with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                 "Origin": "http://tauri.localhost",
             }), timeout=2) as response:

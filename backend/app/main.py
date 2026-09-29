@@ -23,6 +23,7 @@ from .config import load_runtime_config
 
 logger = logging.getLogger(__name__)
 runtime_config = load_runtime_config()
+APP_VERSION = "0.5.3"
 
 
 @asynccontextmanager
@@ -35,7 +36,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Nexa API", version="0.5.1", lifespan=lifespan)
+app = FastAPI(title="Nexa API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(runtime_config.cors_origins),
@@ -54,7 +55,7 @@ for router in (
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "nexa", "version": "0.5.1"}
+    return {"status": "ok", "service": "nexa", "version": APP_VERSION}
 
 
 @app.exception_handler(RequestValidationError)

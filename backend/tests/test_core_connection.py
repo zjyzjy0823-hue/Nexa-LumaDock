@@ -20,7 +20,7 @@ def test_connect_status_disconnect_and_secret_storage(client, monkeypatch, tmp_p
         calls.append((request.method, request.url.path))
         path = request.url.path
         if path == "/api/health":
-            return httpx.Response(200, json={"status": "ok", "service": "nexa", "version": "0.5.1"})
+            return httpx.Response(200, json={"status": "ok", "service": "nexa", "version": "0.5.3"})
         if path == "/api/v1/auth/login":
             assert json.loads(request.content) == {"username": "remote_user", "password": "remote-password"}
             return httpx.Response(200, json={"access_token": "temporary-core-jwt"})

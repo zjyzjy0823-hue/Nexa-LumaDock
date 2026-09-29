@@ -1,4 +1,4 @@
-# Nexa Core（v0.5.2 Phase 3）
+# Nexa Core（v0.5.3）
 
 Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -7,7 +7,7 @@ Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Ale
 | Local | `Nexa.exe` → Tauri → `desktop_entry.py` sidecar | AppData 中的 SQLite | `127.0.0.1:17800` |
 | Core | Docker → `core_entry.py` → `app.main:app` | 持久化 PostgreSQL | 容器内 `0.0.0.0:8000` |
 
-Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 现在可以通过本地 Backend 加入 Core，并保存 Client Credential；**仍没有 Local ↔ Core 业务数据同步**。启动 Core 不会迁移或共享 Desktop 数据，关闭 Core 也不影响 Desktop 的本地业务。本阶段不改变 Tauri 到本地 sidecar 的网络连接。
+Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 通过本地 Backend 加入 Core并保存 Client Credential，可用 `POST /api/v1/sync/run` 手动双向同步 Ledger 分类和账单。Core 分配 authoritative revision；本地离线修改保存在 SQLite outbox 中，关闭 Core 不影响本地业务。Local 与 Core 的用户、Workspace ID 独立，远端账单在 Local 重新绑定本地归属。
 
 ## 启动 Core
 
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`，迁移版本为 `0013_sync_engine`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的 Ledger 同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok`、产品版本 `0.5.3`，迁移版本为 `0013_sync_engine`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的 Ledger 同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 
@@ -34,7 +34,7 @@ docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -At
 
 Client 表示一份 Nexa 应用安装实例，与 Device（硬件及 Runtime 遥测）和 Agent（AI Runtime）是不同实体。Desktop 在 AppData 中保存稳定的 `installation.id` UUID。它只是身份标识，**不是认证凭证、Token、密钥或同步状态**。当前可用用户 JWT 访问 `GET/PATCH /api/v1/workspace`，以及 `GET/POST /api/v1/clients`、`GET /api/v1/clients/{id}`、`POST /api/v1/clients/{id}/revoke`。Client 管理只作用于当前用户的 Personal Workspace；撤销保留记录，再次用同一 installation ID 注册会返回 409。
 
-`Client Identity` 是安装实例 UUID；`Client Credential` 是 Core 一次性签发的 `nc_live_` bearer secret。Core 仅存 SHA-256、末四位和签发时间。它与用户 JWT、`sk_live_` API Key、`nd_live_` Device Token、`na_live_` Agent Token 相互独立。用户 JWT 负责 enrollment、轮换和撤销；Client Credential 只可访问 `GET /api/v1/client/me` 与 `POST /api/v1/client/heartbeat`，未来 Sync 应从认证后的 `Client.workspace_id` 获取归属，不能信任客户端自报的 Workspace。
+`Client Identity` 是安装实例 UUID；`Client Credential` 是 Core 一次性签发的 `nc_live_` bearer secret。Core 仅存 SHA-256、末四位和签发时间。它与用户 JWT、`sk_live_` API Key、`nd_live_` Device Token、`na_live_` Agent Token 相互独立。用户 JWT 负责 enrollment、轮换和撤销；Client Credential 可访问 `GET /api/v1/client/me`、`POST /api/v1/client/heartbeat` 以及 Core Sync API。Sync 从认证后的 `Client.workspace_id` 获取归属，不接受客户端自报的归属 ID。
 
 Core 端以用户 JWT 调用 `POST /api/v1/clients/enroll`，首次返回明文 credential 一次，并设置 `Cache-Control: no-store`。再次 enrollment 返回 409；`POST /api/v1/clients/{id}/credential` 显式轮换并立即使旧凭证失效。`POST /api/v1/clients/{id}/revoke` 清除 hash，旧凭证立即失效，保留撤销记录。
 
@@ -42,11 +42,11 @@ Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`�
 
 如果 Core 已完成 enrollment，但 Local 在保存连接前失败，用户可重新输入 Core 账号密码再调用 `connect`。Local 会在 Core 返回 409 后读取**当前用户 Personal Workspace** 的 Client 列表，只匹配本机 `installation.id`；未撤销的匹配项经显式 credential rotation 取得新凭证，旧凭证立即失效。已撤销的 Client 保持撤销状态；找不到匹配项时连接失败，不会轮换其他安装实例。已存在本地连接元数据时，普通 `connect` 仍拒绝覆盖。
 
-本地连接元数据使用严格验证的 `schemaVersion: 1`，不包含凭证。旧版无版本字段的有效连接元数据会在读取时升级。凭证通过 `CredentialStore` 接口保存；当前实现为原子写入的 `FileCredentialStore`，未来可替换为系统 Credential Manager 或 Keychain。本阶段没有同步游标或其他 Sync 状态。
+本地连接元数据使用严格验证的 `schemaVersion: 1`，不包含凭证。旧版无版本字段的有效连接元数据会在读取时升级。凭证通过 `CredentialStore` 接口保存；当前实现为原子写入的 `FileCredentialStore`，未来可替换为系统 Credential Manager 或 Keychain。游标、outbox 和同步诊断保存在 Local SQLite 中，不写入连接元数据。
 
 公网 Core 必须通过 HTTPS 暴露。HTTP 仅适用于可信 localhost/LAN 开发环境；连接流程不会跳过 TLS 证书验证或自动跟随重定向。Desktop 仍只请求 `127.0.0.1:17800`，由 Python Local Backend 请求 Core，WebView 不直连 Core。Client 凭证当前保存在受 AppData 用户权限保护的独立文件；未来可迁至 Windows Credential Manager、macOS Keychain、Android Keystore 或 iOS Keychain。`/connection/test` 对远端 401 统一报告 `unauthorized`，包括撤销情形，因为 Core 不泄露凭证失效原因。
 
-Phase 3 仍**没有 Local/Core 业务数据同步**，也没有 Workspace 切换、Client 配对或 Sync API。
+v0.5.3 仅提供手动双向 Ledger 同步。冲突持久保留本地编辑，其 remote snapshot 随 Core 后续 revision 刷新；后台同步、同步 UI、冲突解决 UI、Workspace 切换和其他模块同步尚未启用。
 
 ## 配置
 

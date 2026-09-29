@@ -1,4 +1,4 @@
-# Nexa Desktop — Nexa-LumaDock v0.5.1
+# Nexa Desktop — Nexa-LumaDock v0.5.3
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
@@ -6,7 +6,7 @@ v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Wo
 
 ## Nexa Desktop
 
-推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`；跨设备能力将在后续阶段处理。
+推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 手动同步 Ledger。
 
 开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
 
@@ -183,7 +183,7 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-v0.5.3 Phase 3 adds manual bidirectional Local-first Ledger synchronization through Core, with durable offline edits and conflict recording. It synchronizes Ledger categories and transactions only; background synchronization and a sync UI are not enabled. See [Sync Protocol v1](docs/sync.md).
+v0.5.3 provides manual bidirectional Local-first Ledger synchronization through Core. Offline edits remain durable; Core assigns authoritative revisions, and persistent conflicts track the latest remote snapshot while preserving local edits. It synchronizes Ledger categories and transactions only; background synchronization and a sync UI are not enabled. Real HTTP/PostgreSQL/two-SQLite integration coverage runs in `backend-postgres` CI. See [Sync Protocol v1](docs/sync.md).
 
 GitHub Actions runs frontend, backend SQLite, backend PostgreSQL, Windows device client, OpenClaw adapter, and desktop build checks on pushes and pull requests.
 
