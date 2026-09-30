@@ -83,19 +83,6 @@ function onLocationChange() {
   currentPage.value = pageFromLocation()
   window.scrollTo({ top: 0, behavior: 'instant' })
 }
-function onExternalLink(event: MouseEvent) {
-  if (!isTauri() || event.defaultPrevented || ![0, 1].includes(event.button)) return
-  const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null
-  if (!anchor) return
-  const url = new URL(anchor.href)
-  if (url.origin === window.location.origin) return
-  event.preventDefault()
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    showToast('只能在浏览器中打开 HTTP 或 HTTPS 网站。')
-    return
-  }
-  void invoke('open_external_url', { url: url.href }).catch(() => showToast('无法打开默认浏览器，请检查 Windows 默认应用设置。'))
-}
 async function restoreSession() {
   if (restoringSession) return
   restoringSession = true
@@ -130,8 +117,6 @@ async function create(kind: string) {
   pageRef.value?.openCreate?.()
 }
 onMounted(async () => {
-  document.addEventListener('click', onExternalLink)
-  document.addEventListener('auxclick', onExternalLink)
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
   if (isTauri()) {
@@ -142,8 +127,6 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
-  document.removeEventListener('click', onExternalLink)
-  document.removeEventListener('auxclick', onExternalLink)
   window.removeEventListener('popstate', onLocationChange)
   window.removeEventListener('hashchange', onLocationChange)
   if (toastTimer) clearTimeout(toastTimer)

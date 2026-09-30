@@ -65,6 +65,7 @@ function actionFor(id: string, event: string, value?: string) {
         :datasource="widget.datasource"
         @add="actionFor(widget.id, 'add')"
         @select="(name: string) => actionFor(widget.id, 'select', name)"
+        @action="emit('action', $event)"
       />
       <GlassCard v-else :title="widget.title"><p>尚未安装 {{ widget.type }} 组件。</p></GlassCard>
     </ResizableWidget>
