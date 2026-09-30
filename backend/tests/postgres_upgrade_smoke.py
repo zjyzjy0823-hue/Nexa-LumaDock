@@ -136,7 +136,7 @@ try:
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_sync_engine"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0014_multi_entity_sync"
             assert connection.execute(text("SELECT mutation_id, base_revision, status, depends_on_mutation_id "
                                            "FROM local_mutation_queue")).one() == ("old-mutation", 0, "pending", None)
             assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue")) == outbox_payload
@@ -151,7 +151,20 @@ try:
             assert connection.scalar(text("SELECT count(*) FROM websites WHERE id='website-1'")) == 1
     finally:
         engine.dispose()
-    print("PostgreSQL 0008 -> 0013 upgrade, Client, Ledger and Sync history preservation: PASS")
+    # Exercise the already initialized 0013 -> 0014 path on real PostgreSQL too.
+    sys.path.insert(0, str(BACKEND / "tests"))
+    sys.path.insert(0, str(BACKEND))
+    from test_multi_entity_upgrade import verify_upgrade
+    for mode in ("local", "core"):
+        multi_database = "nexa_multi_upgrade_" + uuid4().hex[:12]
+        with admin_engine.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{multi_database}"'))
+        try:
+            verify_upgrade(base_url.set(database=multi_database).render_as_string(hide_password=False), BACKEND, mode)
+        finally:
+            with admin_engine.connect() as connection:
+                connection.execute(text(f'DROP DATABASE "{multi_database}" WITH (FORCE)'))
+    print("PostgreSQL 0008 -> 0014 upgrade, Client, Ledger and Sync history preservation: PASS")
 finally:
     with admin_engine.connect() as connection:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE_NAME}" WITH (FORCE)'))

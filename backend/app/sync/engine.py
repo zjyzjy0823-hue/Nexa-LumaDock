@@ -7,11 +7,12 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from ..models import (LedgerCategory, LedgerTransaction, LocalMutation,
+from ..models import (LocalMutation,
                       LocalSyncState, utcnow)
-from .ledger import REGISTRY, apply_data
-from .local import (PUSH_PRIORITY, bind_local_sync_state, get_local_sync_state,
-                    ordered_pending_mutations, seed_local_ledger_queue)
+from .adapters import get_adapter
+from .local import (bind_local_sync_state, get_local_sync_state,
+                    ordered_pending_mutations, seed_local_queue)
+from .protocol import SYNC_PROTOCOL_VERSION
 from .remote import SyncRemoteClient, SyncRemoteError
 
 
@@ -69,9 +70,10 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
             revision = result.get("revision")
             if type(revision) is not int or revision <= entry.base_revision:
                 raise SyncRemoteError("invalid_response")
-            model = REGISTRY[entry.entity_type][0]
+            adapter = get_adapter(entry.entity_type)
+            model = adapter.model
             item = db.get(model, entry.entity_id)
-            if item is None or item.workspace_id != workspace_id:
+            if item is None or adapter.workspace_id(db, item) != workspace_id:
                 raise SyncRemoteError("invalid_local_state")
             item.sync_revision = revision
             tails = [value for value in _entries(db, workspace_id, entry.entity_type, entry.entity_id)
@@ -87,6 +89,7 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
             revision = result.get("currentRevision")
             if type(revision) is not int or revision < 0 or type(result.get("deleted")) is not bool:
                 raise SyncRemoteError("invalid_response")
+            _validate_snapshot(get_adapter(entry.entity_type), result.get("current"), result["deleted"])
             entry.status = "conflict"
             entry.conflict_json = {"currentRevision": revision, "current": result.get("current"),
                                    "deleted": result["deleted"]}
@@ -94,12 +97,30 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
             entry.last_error = None
         else:
             reason = result.get("reason")
-            if not isinstance(reason, str) or not reason.isascii() or not reason.replace("_", "").isalnum() or len(reason) > 80:
+            if not isinstance(reason, str) or reason not in REJECTION_REASONS:
                 raise SyncRemoteError("invalid_response")
             entry.status = "rejected"
             entry.last_error = reason
         db.commit()
     return status
+
+
+REJECTION_REASONS = frozenset({"invalid_id", "invalid_fields", "unknown_entity_type",
+    "invalid_operation", "invalid_base_revision", "invalid_data", "entity_id_unavailable",
+    "category_not_found", "category_type_mismatch", "category_has_transactions",
+    "collection_not_found", "collection_id_immutable"})
+
+
+def _validate_snapshot(adapter, payload, deleted):
+    if payload is None:
+        # A conflict may represent an entity that has never existed on Core.
+        return
+    if deleted:
+        raise SyncRemoteError("invalid_response")
+    try:
+        adapter.schema.model_validate(payload)
+    except ValidationError:
+        raise SyncRemoteError("invalid_response") from None
 
 
 def _send(factory, workspace_id: str, remote, mutation_id: str) -> str:
@@ -126,16 +147,21 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
         raise SyncRemoteError("invalid_response")
     entity_type, entity_id = change.get("entityType"), change.get("entityId")
     operation, revision = change.get("operation"), change.get("revision")
-    if (entity_type not in REGISTRY or not isinstance(entity_id, str) or
+    adapter = get_adapter(entity_type)
+    if (not isinstance(entity_id, str) or
             operation not in ("upsert", "delete") or type(revision) is not int or revision <= 0):
         raise SyncRemoteError("invalid_response")
+    if operation == "upsert" and change.get("data") is None:
+        raise SyncRemoteError("invalid_response")
+    _validate_snapshot(adapter, change.get("data"), operation == "delete")
     with factory() as db:
         state = get_local_sync_state(db, workspace_id)
         if revision != state.cursor + 1:
             raise SyncRemoteError("invalid_response")
-        model, schema = REGISTRY[entity_type]
+        adapter = get_adapter(entity_type)
+        model, schema = adapter.model, adapter.schema
         item = db.get(model, entity_id)
-        if item is not None and item.workspace_id != workspace_id:
+        if item is not None and adapter.workspace_id(db, item) != workspace_id:
             raise SyncRemoteError("ownership_conflict")
         if item is not None and revision <= item.sync_revision:
             # Core echoes our own acknowledged mutation. The local pending tail wins.
@@ -173,14 +199,13 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
                 data = schema.model_validate(change.get("data"))
             except ValidationError:
                 raise SyncRemoteError("invalid_response") from None
-            if entity_type == "ledger.transaction" and data.categoryId is not None:
-                category = db.get(LedgerCategory, data.categoryId)
-                if category is None or category.workspace_id != workspace_id:
-                    raise SyncRemoteError("missing_category")
+            reason = adapter.remote_dependency_error(db, workspace_id, data, item)
+            if reason:
+                raise SyncRemoteError("missing_category" if reason == "category_not_found" else reason)
             if item is None:
-                item = model(id=entity_id, user_id=user_id, workspace_id=workspace_id)
+                item = adapter.create(db, entity_id, user_id, workspace_id, data)
                 db.add(item)
-            apply_data(item, data)
+            adapter.apply_data(item, data)
             item.deleted_at = None
         elif item is None:
             raise SyncRemoteError("invalid_local_state")
@@ -197,6 +222,8 @@ def _pull(factory, remote, user_id: int, workspace_id: str) -> tuple[int, int]:
         with factory() as db:
             cursor = get_local_sync_state(db, workspace_id).cursor
         page = remote.get_changes(cursor, 100)
+        if page.get("protocolVersion") != SYNC_PROTOCOL_VERSION:
+            raise SyncRemoteError("protocol_mismatch")
         changes = page.get("changes")
         if not isinstance(changes, list) or len(changes) > 100:
             raise SyncRemoteError("invalid_response")
@@ -216,18 +243,8 @@ def _ready_pending(db, workspace_id: str) -> list[LocalMutation]:
     entries = ordered_pending_mutations(db, workspace_id)
     ready = []
     for entry in entries:
-        if entry.entity_type == "ledger.transaction" and entry.operation == "upsert":
-            category_id = (entry.payload_json or {}).get("categoryId")
-            if category_id is not None:
-                category = db.get(LedgerCategory, category_id)
-                if category is None or category.workspace_id != workspace_id:
-                    raise SyncRemoteError("missing_category")
-                if category.sync_revision == 0 or any(
-                    related.status in ("pending", "in_flight", "conflict", "rejected")
-                    for related in _entries(db, workspace_id, "ledger.category", category_id)
-                ):
-                    continue
-        ready.append(entry)
+        if get_adapter(entry.entity_type).push_ready(db, workspace_id, entry):
+            ready.append(entry)
     return ready
 
 
@@ -243,8 +260,9 @@ def _repair_acknowledged_tails(factory, workspace_id: str) -> None:
                 LocalMutation.mutation_id == tail.depends_on_mutation_id))
             if predecessor is not None:
                 continue
-            item = db.get(REGISTRY[tail.entity_type][0], tail.entity_id)
-            if item is None or item.workspace_id != workspace_id or item.sync_revision <= tail.base_revision:
+            adapter = get_adapter(tail.entity_type)
+            item = db.get(adapter.model, tail.entity_id)
+            if item is None or adapter.workspace_id(db, item) != workspace_id or item.sync_revision <= tail.base_revision:
                 raise SyncRemoteError("invalid_local_state")
             tail.base_revision = item.sync_revision
             tail.depends_on_mutation_id = None
@@ -275,16 +293,20 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
     try:
         with factory() as db:
             bind_local_sync_state(db, workspace_id, metadata)
-            seed_local_ledger_queue(db, workspace_id)
+            seed_local_queue(db, workspace_id)
             db.commit()
         context = nullcontext(remote) if remote is not None else SyncRemoteClient(metadata.coreUrl, credential)
         with context as transport:
+            with factory() as db:
+                cursor = get_local_sync_state(db, workspace_id).cursor
+            if transport.get_changes(cursor, 1).get("protocolVersion") != SYNC_PROTOCOL_VERSION:
+                raise SyncRemoteError("protocol_mismatch")
             with factory() as db:
                 inflight = db.scalars(select(LocalMutation).where(
                     LocalMutation.workspace_id == workspace_id,
                     LocalMutation.status == "in_flight")).all()
                 inflight_ids = [entry.mutation_id for entry in sorted(inflight, key=lambda entry: (
-                    PUSH_PRIORITY[(entry.entity_type, entry.operation)], entry.created_at, entry.id))]
+                    get_adapter(entry.entity_type).push_priority(entry.operation), entry.created_at, entry.id))]
             for mutation_id in inflight_ids:
                 outcome = _send(factory, workspace_id, transport, mutation_id)
                 pushed += outcome == "applied"

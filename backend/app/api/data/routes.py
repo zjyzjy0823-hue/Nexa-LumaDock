@@ -8,6 +8,7 @@ from ...utils.time import iso_utc
 from ...database import get_db
 from ...models import DataCollection, DataRecord, User
 from ...security import current_user, read_user_for
+from ...sync.publisher import prepare_write, publish, delete_entity
 from ...workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/data", tags=["data"])
@@ -59,14 +60,14 @@ class RecordPatch(BaseModel):
 
 
 def collection_or_404(db: Session, user: User, id: str) -> DataCollection:
-    item = db.scalar(select(DataCollection).where(DataCollection.id == id, DataCollection.user_id == user.id))
+    item = db.scalar(select(DataCollection).where(DataCollection.id == id, DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Collection not found")
     return item
 
 
 def record_or_404(db: Session, user: User, id: str) -> DataRecord:
-    item = db.scalar(select(DataRecord).join(DataCollection).where(DataRecord.id == id, DataCollection.user_id == user.id))
+    item = db.scalar(select(DataRecord).join(DataCollection).where(DataRecord.id == id, DataRecord.deleted_at.is_(None), DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Record not found")
     return item
@@ -79,27 +80,30 @@ def record_out(item: DataRecord) -> dict:
 
 def collection_out(item: DataCollection) -> dict:
     return {"id": item.id, "name": item.name, "description": item.description, "icon": item.icon,
-            "tone": item.tone, "recordCount": len(item.records), "records": [record_out(record) for record in item.records],
+            "tone": item.tone, "recordCount": sum(record.deleted_at is None for record in item.records), "records": [record_out(record) for record in item.records if record.deleted_at is None],
             "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
 
 
 @router.get("")
 def legacy_data(user: User = Depends(read_user_for("Data")), db: Session = Depends(get_db)):
-    items = db.scalars(select(DataCollection).where(DataCollection.user_id == user.id)).all()
+    items = db.scalars(select(DataCollection).where(DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None))).all()
     return {"collections": [collection_out(item) for item in items], "totalCollections": len(items),
-            "totalRecords": sum(len(item.records) for item in items)}
+            "totalRecords": sum(sum(record.deleted_at is None for record in item.records) for item in items)}
 
 
 @v1_router.get("/collections")
 def list_collections(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [collection_out(item) for item in db.scalars(select(DataCollection).where(DataCollection.user_id == user.id).order_by(DataCollection.created_at.desc())).all()]
+    return [collection_out(item) for item in db.scalars(select(DataCollection).where(DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)).order_by(DataCollection.created_at.desc())).all()]
 
 
 @v1_router.post("/collections", status_code=201)
 def create_collection(payload: CollectionInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = DataCollection(id=str(uuid4()), user_id=user.id,
                           workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item)
+    publish(db, item)
+    db.commit(); db.refresh(item)
     return collection_out(item)
 
 
@@ -110,6 +114,7 @@ def get_collection(id: str, user: User = Depends(current_user), db: Session = De
 
 @v1_router.patch("/collections/{id}")
 def patch_collection(id: str, payload: CollectionPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = collection_or_404(db, user, id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
@@ -117,30 +122,37 @@ def patch_collection(id: str, payload: CollectionPatch, user: User = Depends(cur
         setattr(item, key, value.strip() if key == "name" else value)
     if not item.name:
         raise HTTPException(422, "Name is required")
+    publish(db, item)
     db.commit(); db.refresh(item)
     return collection_out(item)
 
 
 @v1_router.delete("/collections/{id}", status_code=204)
 def delete_collection(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(collection_or_404(db, user, id)); db.commit()
+    prepare_write(db, user)
+    delete_entity(db, collection_or_404(db, user, id))
+    db.commit()
 
 
 @v1_router.get("/collections/{id}/records")
 def list_records(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [record_out(item) for item in collection_or_404(db, user, id).records]
+    return [record_out(item) for item in collection_or_404(db, user, id).records if item.deleted_at is None]
 
 
 @v1_router.post("/collections/{id}/records", status_code=201)
 def create_record(id: str, payload: RecordInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     collection_or_404(db, user, id)
     item = DataRecord(id=str(uuid4()), collection_id=id, **payload.model_dump())
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item)
+    publish(db, item)
+    db.commit(); db.refresh(item)
     return record_out(item)
 
 
 @v1_router.patch("/records/{id}")
 def patch_record(id: str, payload: RecordPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = record_or_404(db, user, id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
@@ -148,6 +160,7 @@ def patch_record(id: str, payload: RecordPatch, user: User = Depends(current_use
         setattr(item, key, value.strip() if key == "name" else value)
     if not item.name:
         raise HTTPException(422, "Name is required")
+    publish(db, item)
     db.commit(); db.refresh(item)
     return record_out(item)
 
@@ -159,4 +172,6 @@ def get_record(id: str, user: User = Depends(current_user), db: Session = Depend
 
 @v1_router.delete("/records/{id}", status_code=204)
 def delete_record(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(record_or_404(db, user, id)); db.commit()
+    prepare_write(db, user)
+    delete_entity(db, record_or_404(db, user, id))
+    db.commit()

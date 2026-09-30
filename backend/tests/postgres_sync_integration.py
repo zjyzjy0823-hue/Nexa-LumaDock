@@ -32,10 +32,11 @@ os.environ.update(NEXA_MODE="local", DATABASE_URL="sqlite://", JWT_SECRET=secret
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from app.api import ledger, sync  # noqa: E402
+from app.api import ledger, sync, websites
+from app.api.data import routes as data_routes  # noqa: E402
 from app.core_connection import CoreConnectionMetadata, _persist_connection  # noqa: E402
 from app.database import get_db  # noqa: E402
-from app.models import LedgerCategory, LedgerTransaction, LocalMutation, User, Workspace  # noqa: E402
+from app.models import LedgerCategory, LedgerTransaction, LocalMutation, User, Workspace, Website, WebsiteCategory, DataCollection, DataRecord  # noqa: E402
 from app.security import create_access_token  # noqa: E402
 
 
@@ -69,7 +70,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.3"}
+                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.4"}
                             break
                     except httpx.RequestError:
                         pass
@@ -108,6 +109,9 @@ class Replica:
         app = FastAPI()
         app.include_router(ledger.router)
         app.include_router(sync.router)
+        app.include_router(websites.router)
+        app.include_router(data_routes.v1_router)
+        app.include_router(data_routes.router)
 
         def database():
             with self.factory() as db:
@@ -124,13 +128,13 @@ class Replica:
     def connect(self, core, origin, headers):
         enrolled = checked(core, "POST", "/api/v1/clients/enroll", expected=201, headers=headers, json={
             "installationId": self.installation_id, "name": self.directory.name,
-            "platform": "windows", "appVersion": "0.5.3"})
+            "platform": "windows", "appVersion": "0.5.4"})
         self.client_id = enrolled["client"]["id"]
         self.core_workspace_id = enrolled["client"]["workspaceId"]
         metadata = CoreConnectionMetadata.model_validate({
             "schemaVersion": 1, "coreUrl": origin, "clientId": self.client_id,
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
-            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.3",
+            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.4",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
         os.environ["NEXA_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])
@@ -161,7 +165,7 @@ def main():
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_sync_engine"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0014_multi_entity_sync"
     with TemporaryDirectory(prefix="nexa-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)
@@ -248,6 +252,43 @@ def main():
                         assert snapshot["currentRevision"] == remote_revision
                         assert snapshot["deleted"] == (description is None)
                         assert snapshot["current"] is None if description is None else snapshot["current"]["description"] == description
+
+                # Website/Data use the same production HTTP transport and isolated ownership.
+                wc = a.request("POST", "/api/v1/website-categories", expected=201, json={"name": "Sites"})["id"]
+                site = a.request("POST", "/api/v1/websites", expected=201, json={"name": "Example", "url": "https://example.com", "categoryId": wc, "favorite": True, "order": 2})["id"]
+                dc = a.request("POST", "/api/v1/data/collections", expected=201, json={"name": "Inventory"})["id"]
+                dr = a.request("POST", f"/api/v1/data/collections/{dc}/records", expected=201, json={"name": "Record", "data_json": {"value": 42}})["id"]
+                a.run(); b.run()
+                for replica, owner, workspace in ((a, a.user_id, a.workspace_id), (b, b.user_id, b.workspace_id)):
+                    with replica.factory() as db:
+                        assert db.get(Website, site).workspace_id == workspace
+                        assert db.get(WebsiteCategory, wc).user_id == owner
+                        assert db.get(DataCollection, dc).workspace_id == workspace
+                        assert db.get(DataRecord, dr).collection_id == dc
+                with core_factory() as db:
+                    assert db.get(Website, site).workspace_id == a.core_workspace_id
+                    assert db.get(DataCollection, dc).user_id == core_user_id
+                    assert db.get(DataRecord, dr).collection_id == dc
+                b.request("PATCH", f"/api/v1/websites/{site}", json={"favorite": False, "order": 9})
+                visited = b.request("POST", f"/api/v1/websites/{site}/visit")["lastVisitedAt"]
+                b.request("PATCH", f"/api/v1/data/records/{dr}", json={"name": "B edit", "data_json": {"value": 99}})
+                b.run(); a.run()
+                assert a.request("GET", f"/api/v1/websites/{site}")["lastVisitedAt"] == visited
+                assert a.request("GET", f"/api/v1/data/collections/{dc}/records")[0]["dataJson"] == {"value": 99}
+                a.request("DELETE", f"/api/v1/website-categories/{wc}", expected=204)
+                a.request("DELETE", f"/api/v1/data/collections/{dc}", expected=204)
+                a.run(); b.run()
+                assert b.request("GET", f"/api/v1/websites/{site}")["categoryId"] is None
+                assert b.request("GET", "/api/v1/data/collections") == []
+                assert b.request("GET", "/api/data")["totalRecords"] == 0
+                with core_factory() as db:
+                    assert db.get(DataRecord, dr).deleted_at is not None
+                    assert db.get(DataCollection, dc).deleted_at is not None
+                core_site = checked(core, "POST", "/api/v1/websites", expected=201, headers=headers, json={"name": "Core site", "url": "https://core.example"})["id"]
+                core_data = checked(core, "POST", "/api/v1/data/collections", expected=201, headers=headers, json={"name": "Core collection"})["id"]
+                a.run(); b.run()
+                assert b.request("GET", f"/api/v1/websites/{core_site}")["name"] == "Core site"
+                assert b.request("GET", f"/api/v1/data/collections/{core_data}")["name"] == "Core collection"
 
                 ordinary = checked(core, "POST", "/api/v1/ledger/transactions", expected=201,
                     headers=headers, json={"type": "expense", "amount": "7.00", "description": "Core ordinary",

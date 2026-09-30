@@ -1,4 +1,4 @@
-# Nexa Core（v0.5.3）
+# Nexa Core（v0.5.4）
 
 Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -7,7 +7,7 @@ Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Ale
 | Local | `Nexa.exe` → Tauri → `desktop_entry.py` sidecar | AppData 中的 SQLite | `127.0.0.1:17800` |
 | Core | Docker → `core_entry.py` → `app.main:app` | 持久化 PostgreSQL | 容器内 `0.0.0.0:8000` |
 
-Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 通过本地 Backend 加入 Core并保存 Client Credential，可用 `POST /api/v1/sync/run` 手动双向同步 Ledger 分类和账单。Core 分配 authoritative revision；本地离线修改保存在 SQLite outbox 中，关闭 Core 不影响本地业务。Local 与 Core 的用户、Workspace ID 独立，远端账单在 Local 重新绑定本地归属。
+Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 通过本地 Backend 加入 Core并保存 Client Credential，可用 `POST /api/v1/sync/run` 手动双向同步 Ledger、Websites 和 Data。Core 分配 authoritative revision；本地离线修改保存在 SQLite outbox 中，关闭 Core 不影响本地业务。Local 与 Core 的用户、Workspace ID 独立，远端实体在 Local 重新绑定本地归属；DataRecord 通过 DataCollection 解析归属。
 
 ## 启动 Core
 
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`、产品版本 `0.5.3`，迁移版本为 `0013_sync_engine`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的 Ledger 同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok`、产品版本 `0.5.4`，迁移版本为 `0014_multi_entity_sync`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 
@@ -46,7 +46,7 @@ Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`�
 
 公网 Core 必须通过 HTTPS 暴露。HTTP 仅适用于可信 localhost/LAN 开发环境；连接流程不会跳过 TLS 证书验证或自动跟随重定向。Desktop 仍只请求 `127.0.0.1:17800`，由 Python Local Backend 请求 Core，WebView 不直连 Core。Client 凭证当前保存在受 AppData 用户权限保护的独立文件；未来可迁至 Windows Credential Manager、macOS Keychain、Android Keystore 或 iOS Keychain。`/connection/test` 对远端 401 统一报告 `unauthorized`，包括撤销情形，因为 Core 不泄露凭证失效原因。
 
-v0.5.3 仅提供手动双向 Ledger 同步。冲突持久保留本地编辑，其 remote snapshot 随 Core 后续 revision 刷新；后台同步、同步 UI、冲突解决 UI、Workspace 切换和其他模块同步尚未启用。
+v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`。冲突持久保留本地编辑，其 remote snapshot 随 Core 后续 revision 刷新；后台同步、同步 UI、冲突解决 UI、Workspace 切换尚未启用。Settings、Device、Agent、Automation 与 Dashboard 尚未同步。
 
 ## 配置
 
@@ -61,3 +61,11 @@ v0.5.3 仅提供手动双向 Ledger 同步。冲突持久保留本地编辑，�
 | `NEXA_HOST` / `NEXA_PORT` | Desktop 固定 `127.0.0.1:17800` | 入口默认 `0.0.0.0:8000`；Docker Compose 的端口映射和健康检查按 8000 配置 |
 
 Core 也可在 `backend` 目录安装 `requirements-postgres.txt` 后运行 `python core_entry.py`；此时设置 `NEXA_MODE=core`、PostgreSQL URL 和 JWT secret。配置错误会在连接数据库前退出，错误消息不会打印数据库密码。
+
+## v0.5.4 升级与协议兼容
+
+0014 为 WebsiteCategory、Website、DataCollection、DataRecord 增加 `sync_revision` 和 `deleted_at`。`bootstrap_version` 将已完成 v0.5.3 Ledger 初始化的 Core 标记为 generation 1，首次 v2 请求仅接纳 generation 2 的 Website/Data；现有 Ledger revision/change 不重建。bootstrap 和普通 API 发布均持有 Workspace 锁，实体更新、revision 分配与 change 同事务提交。
+
+Sync 请求必须显式声明 `protocolVersion=2`（GET query / POST JSON）；缺省按旧版 v1 处理并返回 HTTP 409 `sync_protocol_mismatch`，不引导 bootstrap 或写入 mutation history。响应为 v2，旧 Client 无法跳过新实体 revision。升级 Client 请求旧 Core 时在 freeze/replay 前检测响应版本，报告 `protocol_mismatch` 并保留 queue/cursor。连接元数据的 `schemaVersion: 1` 不随 Sync 协议变更。
+
+Settings 仍为 Local-only：整数主键的 UserPreference/settings_json 同时承载用户偏好与本机连接、安全信息，本版不迁移、不注册 Adapter。未来可能同步 theme、language、timezone、notifications、appearance；sync、security、Core URL、Client credential、installation id、DB path 和设备配置必须留在本机。密码、token、Core JWT 和 `nc_live_` 凭证不作为系统业务字段发布。

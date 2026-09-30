@@ -4,9 +4,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import (Client, LedgerCategory, LedgerTransaction, SyncChange,
+from ..models import (Client, SyncChange,
                       SyncMutation, SyncWorkspaceState, Workspace, utcnow)
-from .ledger import REGISTRY, apply_data, category_error, serialize
+from .protocol import SYNC_PROTOCOL_VERSION
+from .adapters import REGISTRY, adapter_for, get_adapter, seed_version
 
 
 def lock_workspace_state(db: Session, workspace_id: str) -> SyncWorkspaceState:
@@ -24,38 +25,39 @@ def lock_workspace_state(db: Session, workspace_id: str) -> SyncWorkspaceState:
 
 
 def append_change(db: Session, state: SyncWorkspaceState,
-                  item: LedgerCategory | LedgerTransaction, operation: str,
+                  item, operation: str,
                   client_id: str | None = None) -> int:
+    db.flush()
     state.current_revision += 1
     state.updated_at = utcnow()
     item.sync_revision = state.current_revision
-    entity_type = "ledger.category" if isinstance(item, LedgerCategory) else "ledger.transaction"
+    entity_type = adapter_for(item).entity_type
     db.add(SyncChange(id=str(uuid4()), workspace_id=state.workspace_id,
                       revision=state.current_revision, entity_type=entity_type,
                       entity_id=item.id, operation=operation,
-                      payload_json=serialize(item) if operation == "upsert" else None,
+                      payload_json=adapter_for(item).serialize(item) if operation == "upsert" else None,
                       origin_client_id=client_id))
     db.flush()
     return state.current_revision
 
 
-def record_ordinary_change(db: Session, item: LedgerCategory | LedgerTransaction,
+def record_ordinary_change(db: Session, item,
                            operation: str) -> None:
-    state = lock_workspace_state(db, item.workspace_id)
+    state = lock_workspace_state(db, adapter_for(item).workspace_id(db, item))
     append_change(db, state, item, operation)
 
 
 def ensure_core_sync_initialized(db: Session, workspace_id: str) -> SyncWorkspaceState:
-    """Adopt active revision-zero Ledger rows into Core history exactly once."""
+    """Adopt active revision-zero rows from unseeded generations into Core history."""
     state = lock_workspace_state(db, workspace_id)
-    if state.initialized_at is not None:
+    if state.bootstrap_version >= seed_version():
         return state
-    for model in (LedgerCategory, LedgerTransaction):
-        rows = db.scalars(select(model).where(
-            model.workspace_id == workspace_id, model.sync_revision == 0,
-            model.deleted_at.is_(None)).order_by(model.created_at, model.id)).all()
-        for item in rows:
+    for adapter in REGISTRY.values():
+        if adapter.generation <= state.bootstrap_version:
+            continue
+        for item in adapter.legacy_rows(db, workspace_id):
             append_change(db, state, item, "upsert")
+    state.bootstrap_version = seed_version()
     state.initialized_at = utcnow()
     db.flush()
     return state
@@ -103,20 +105,21 @@ def apply_mutation(db: Session, client: Client, mutation: dict) -> dict:
         elif operation == "delete" and mutation.get("data") is not None:
             reject("invalid_data")
         else:
-            model, schema = REGISTRY[etype]
+            adapter = get_adapter(etype)
+            model, schema = adapter.model, adapter.schema
             # Global IDs are unique. Never return another workspace's record data.
             item = db.get(model, eid)
-            if item is not None and item.workspace_id != client.workspace_id:
+            if item is not None and adapter.workspace_id(db, item) != client.workspace_id:
                 reject("entity_id_unavailable")
             else:
                 current_revision = item.sync_revision if item is not None else 0
                 if (item is None and (base != 0 or operation == "delete")) or (item is not None and base != current_revision):
                     result.update(status="conflict", currentRevision=current_revision,
-                                  current=serialize(item) if item is not None and item.deleted_at is None else None,
+                                  current=adapter_for(item).serialize(item) if item is not None and item.deleted_at is None else None,
                                   deleted=bool(item is not None and item.deleted_at is not None))
                 elif item is not None and base == 0 and operation == "upsert":
                     result.update(status="conflict", currentRevision=current_revision,
-                                  current=serialize(item) if item.deleted_at is None else None,
+                                  current=adapter_for(item).serialize(item) if item.deleted_at is None else None,
                                   deleted=item.deleted_at is not None)
                 elif operation == "upsert":
                     try:
@@ -124,25 +127,21 @@ def apply_mutation(db: Session, client: Client, mutation: dict) -> dict:
                     except ValidationError:
                         reject("invalid_data")
                     else:
-                        if etype == "ledger.transaction":
-                            reason = category_error(db, client.workspace_id, data.categoryId, data.type)
-                        elif item is not None and item.type != data.type and db.scalar(
-                                select(LedgerTransaction.id).where(LedgerTransaction.category_id == eid).limit(1)):
-                            reason = "category_has_transactions"
-                        else:
-                            reason = None
+                        reason = adapter.dependency_error(db, client.workspace_id, data, item)
                         if reason:
                             reject(reason)
                         else:
                             if item is None:
-                                item = model(id=eid, workspace_id=client.workspace_id,
-                                             user_id=db.get(Workspace, client.workspace_id).owner_user_id)
+                                item = adapter.create(db, eid, db.get(Workspace, client.workspace_id).owner_user_id,
+                                                      client.workspace_id, data)
                                 db.add(item)
-                            apply_data(item, data)
+                            adapter.apply_data(item, data)
                             item.deleted_at = None
                             revision = append_change(db, state, item, "upsert", client.id)
                             result.update(status="applied", revision=revision)
                 else:
+                    adapter.prepare_delete(db, item, lambda db, child, op:
+                        append_change(db, state, child, op, client.id))
                     item.deleted_at = utcnow()
                     revision = append_change(db, state, item, "delete", client.id)
                     result.update(status="applied", revision=revision)
@@ -171,6 +170,6 @@ def get_changes(db: Session, workspace_id: str, cursor: int, limit: int) -> dict
     changes = [{"revision": row.revision, "entityType": row.entity_type,
                 "entityId": row.entity_id, "operation": row.operation, "data": row.payload_json}
                for row in rows[:limit]]
-    return {"protocolVersion": 1, "changes": changes,
+    return {"protocolVersion": SYNC_PROTOCOL_VERSION, "changes": changes,
             "cursor": changes[-1]["revision"] if changes else cursor,
             "hasMore": len(rows) > limit, "workspaceRevision": workspace_revision}

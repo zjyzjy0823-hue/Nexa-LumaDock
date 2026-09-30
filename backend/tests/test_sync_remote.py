@@ -15,11 +15,13 @@ def test_client_credential_and_http_safety(monkeypatch):
         assert request.headers["Authorization"] == "Bearer nc_live_test"
         if request.method == "POST":
             body = json.loads(request.read())
+            assert body["protocolVersion"] == 2
             assert set(body["mutations"][0]) == {"mutationId", "entityType", "entityId",
                                                   "operation", "baseRevision", "data"}
-            return httpx.Response(200, json={"protocolVersion": 1, "results": [
+            return httpx.Response(200, json={"protocolVersion": 2, "results": [
                 {"mutationId": "test-id", "status": "applied", "revision": 1}]})
-        return httpx.Response(200, json={"protocolVersion": 1, "changes": [],
+        assert request.url.params["protocolVersion"] == "2"
+        return httpx.Response(200, json={"protocolVersion": 2, "changes": [],
                                          "cursor": 0, "hasMore": False, "workspaceRevision": 1})
 
     def client_factory(**kwargs):
@@ -49,3 +51,14 @@ def test_safe_remote_error_codes(monkeypatch, status, code):
             remote.get_changes(0)
     assert error.value.code == code
     assert "nc_live_" not in str(error.value)
+
+
+@pytest.mark.parametrize("status,body", [(200, {"protocolVersion": 1}),
+                                        (409, {"detail": "sync_protocol_mismatch"})])
+def test_protocol_mismatch_is_safe(monkeypatch, status, body):
+    original_client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)), **kwargs))
+    with SyncRemoteClient("https://core.example", "nc_live_test") as remote:
+        with pytest.raises(SyncRemoteError, match="protocol_mismatch"):
+            remote.get_changes(0)

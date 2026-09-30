@@ -1,1 +1,1 @@
-"""Nexa Sync Protocol v1 Core services."""
+"""Nexa Sync Protocol v2 engine, adapters and Core services."""

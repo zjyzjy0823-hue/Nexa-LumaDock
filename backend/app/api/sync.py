@@ -8,7 +8,9 @@ from .. import core_connection
 from ..models import Client, LocalMutation, LocalSyncState, User
 from ..runtime_mode import require_local_mode
 from ..security import client_from_token, current_user
-from ..sync.local import seed_local_ledger_queue
+from ..sync.protocol import SYNC_PROTOCOL_VERSION
+from ..sync.adapters import seed_version
+from ..sync.local import seed_local_queue
 from ..sync.engine import run_sync_cycle
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
 from ..utils.time import iso_utc
@@ -20,20 +22,25 @@ router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
 class MutationBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    protocolVersion: int = Field(default=1, ge=1, le=1)
+    protocolVersion: int = 1
     mutations: list[dict] = Field(min_length=1, max_length=100)
 
 
 @router.post("/mutations")
 def mutations(payload: MutationBatch, client: Client = Depends(client_from_token),
               db: Session = Depends(get_db)):
-    return {"protocolVersion": 1,
+    if payload.protocolVersion != SYNC_PROTOCOL_VERSION:
+        raise HTTPException(409, "sync_protocol_mismatch")
+    return {"protocolVersion": SYNC_PROTOCOL_VERSION,
             "results": [apply_mutation(db, client, mutation) for mutation in payload.mutations]}
 
 
 @router.get("/changes")
 def changes(cursor: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=100),
+            protocolVersion: int = Query(default=1),
             client: Client = Depends(client_from_token), db: Session = Depends(get_db)):
+    if protocolVersion != SYNC_PROTOCOL_VERSION:
+        raise HTTPException(409, "sync_protocol_mismatch")
     try:
         ensure_core_sync_initialized(db, client.workspace_id)
         db.commit()
@@ -49,8 +56,8 @@ def local_status(_local: None = Depends(require_local_mode), user: User = Depend
     workspace_id = get_personal_workspace(db, user).id
     try:
         state = db.get(LocalSyncState, workspace_id)
-        if state is None or state.queue_seeded_at is None:
-            state = seed_local_ledger_queue(db, workspace_id)
+        if state is None or state.queue_seed_version < seed_version():
+            state = seed_local_queue(db, workspace_id)
             db.commit()
     except Exception:
         db.rollback()

@@ -23,7 +23,7 @@ from .config import load_runtime_config
 
 logger = logging.getLogger(__name__)
 runtime_config = load_runtime_config()
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 
 
 @asynccontextmanager

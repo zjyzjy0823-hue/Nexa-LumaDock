@@ -13,8 +13,9 @@ from ..utils.time import iso_utc
 from ..database import get_db, runtime_config
 from ..models import LedgerCategory, LedgerTransaction, LocalSyncState, User, utcnow
 from ..security import current_user
+from ..sync.adapters import seed_version
 from ..sync.local import record_local_delete, record_local_upsert, seed_local_ledger_queue
-from ..sync.service import lock_workspace_state, record_ordinary_change
+from ..sync.service import ensure_core_sync_initialized, record_ordinary_change
 from ..workspaces import get_personal_workspace
 
 
@@ -23,7 +24,7 @@ def ensure_local_ledger_ready(user: User = Depends(current_user), db: Session = 
         workspace_id = get_personal_workspace(db, user).id
         try:
             state = db.get(LocalSyncState, workspace_id)
-            if state is None or state.queue_seeded_at is None:
+            if state is None or state.queue_seed_version < seed_version():
                 seed_local_ledger_queue(db, workspace_id)
                 db.commit()
         except Exception:
@@ -130,7 +131,7 @@ def commit_ledger(db: Session, item: LedgerCategory | LedgerTransaction, operati
 
 def lock_core_write(db: Session, user: User) -> None:
     if runtime_config.mode == "core":
-        lock_workspace_state(db, get_personal_workspace(db, user).id)
+        ensure_core_sync_initialized(db, get_personal_workspace(db, user).id)
 
 
 @router.get("/categories")

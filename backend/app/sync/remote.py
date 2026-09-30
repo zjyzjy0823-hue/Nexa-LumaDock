@@ -1,6 +1,7 @@
-"""Protocol v1 HTTP transport. Only a Client credential crosses this boundary."""
+"""Protocol v2 HTTP transport. Only a Client credential crosses this boundary."""
 
 import httpx
+from .protocol import SYNC_PROTOCOL_VERSION
 
 
 class SyncRemoteError(Exception):
@@ -31,6 +32,8 @@ class SyncRemoteClient:
         except httpx.RequestError as error:
             raise SyncRemoteError("timeout" if isinstance(error, httpx.TimeoutException)
                                   else "unreachable") from None
+        if response.status_code == 409:
+            raise SyncRemoteError("protocol_mismatch")
         if response.status_code == 401:
             raise SyncRemoteError("unauthorized")
         if response.status_code in (502, 503, 504):
@@ -41,13 +44,15 @@ class SyncRemoteClient:
             body = response.json()
         except (ValueError, UnicodeError):
             raise SyncRemoteError("invalid_response") from None
-        if not isinstance(body, dict) or body.get("protocolVersion") != 1:
+        if not isinstance(body, dict):
             raise SyncRemoteError("invalid_response")
+        if body.get("protocolVersion") != SYNC_PROTOCOL_VERSION:
+            raise SyncRemoteError("protocol_mismatch")
         return body
 
     def push_mutation(self, mutation: dict) -> dict:
         response = self._request("POST", "/api/v1/sync/mutations",
-                                 json={"protocolVersion": 1, "mutations": [mutation]})
+                                 json={"protocolVersion": SYNC_PROTOCOL_VERSION, "mutations": [mutation]})
         results = response.get("results")
         if (not isinstance(results, list) or len(results) != 1 or
                 not isinstance(results[0], dict) or results[0].get("mutationId") != mutation["mutationId"]):
@@ -56,7 +61,7 @@ class SyncRemoteClient:
 
     def get_changes(self, cursor: int, limit: int = 100) -> dict:
         response = self._request("GET", "/api/v1/sync/changes",
-                                 params={"cursor": cursor, "limit": limit})
+                                 params={"cursor": cursor, "limit": limit, "protocolVersion": SYNC_PROTOCOL_VERSION})
         if (not isinstance(response.get("changes"), list) or
                 not isinstance(response.get("cursor"), int) or
                 not isinstance(response.get("workspaceRevision"), int) or

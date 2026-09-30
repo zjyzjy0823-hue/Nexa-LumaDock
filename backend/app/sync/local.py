@@ -1,4 +1,4 @@
-"""Local replica state and durable Ledger outbox; this module performs no network I/O."""
+"""Local replica state and durable multi-entity outbox; this module performs no network I/O."""
 
 from uuid import uuid4
 
@@ -6,16 +6,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import LedgerCategory, LedgerTransaction, LocalMutation, LocalSyncState, utcnow
-from .ledger import REGISTRY, serialize
-
-
-PUSH_PRIORITY = {
-    ("ledger.category", "upsert"): 0,
-    ("ledger.transaction", "upsert"): 1,
-    ("ledger.transaction", "delete"): 2,
-    ("ledger.category", "delete"): 3,
-}
+from ..models import LocalMutation, LocalSyncState, utcnow
+from .adapters import REGISTRY, adapter_for, get_adapter, seed_version
 
 
 def get_local_sync_state(db: Session, workspace_id: str) -> LocalSyncState:
@@ -38,42 +30,42 @@ def bind_local_sync_state(db: Session, workspace_id: str, metadata) -> LocalSync
     return state
 
 
-def entity_type(item: LedgerCategory | LedgerTransaction) -> str:
-    return "ledger.category" if isinstance(item, LedgerCategory) else "ledger.transaction"
+def entity_type(item) -> str:
+    return adapter_for(item).entity_type
 
 
-def queued_entries(db: Session, item: LedgerCategory | LedgerTransaction) -> list[LocalMutation]:
+def queued_entries(db: Session, item) -> list[LocalMutation]:
     return db.scalars(select(LocalMutation).where(
-        LocalMutation.workspace_id == item.workspace_id,
+        LocalMutation.workspace_id == adapter_for(item).workspace_id(db, item),
         LocalMutation.entity_type == entity_type(item), LocalMutation.entity_id == item.id)).all()
 
 
-def queued(db: Session, item: LedgerCategory | LedgerTransaction) -> LocalMutation | None:
+def queued(db: Session, item) -> LocalMutation | None:
     """Return the editable tail if present, otherwise its frozen predecessor."""
     entries = queued_entries(db, item)
     return next((entry for entry in entries if entry.status == "pending"), entries[0] if entries else None)
 
 
-def _new_mutation(item: LedgerCategory | LedgerTransaction, operation: str,
+def _new_mutation(db, item, operation: str,
                   payload: dict | None) -> LocalMutation:
     return LocalMutation(id=str(uuid4()), mutation_id=str(uuid4()),
-                         workspace_id=item.workspace_id, entity_type=entity_type(item),
+                         workspace_id=adapter_for(item).workspace_id(db, item), entity_type=entity_type(item),
                          entity_id=item.id, operation=operation, base_revision=item.sync_revision,
                          payload_json=payload, status="pending", attempt_count=0)
 
 
-def record_local_upsert(db: Session, item: LedgerCategory | LedgerTransaction) -> LocalMutation:
+def record_local_upsert(db: Session, item) -> LocalMutation:
     if item.sync_revision is None:
         # SQLAlchemy column defaults are assigned at flush; production sessions
         # disable autoflush, so a newly created Local row needs its initial zero now.
         item.sync_revision = 0
-    payload = serialize(item)
-    # The outbox sends the exact same complete business shape as Protocol v1.
-    REGISTRY[entity_type(item)][1].model_validate(payload)
+    payload = adapter_for(item).serialize(item)
+    # The outbox sends the exact same complete business shape as Protocol v2.
+    adapter_for(item).schema.model_validate(payload)
     entries = queued_entries(db, item)
     entry = next((value for value in entries if value.status == "pending"), None)
     if entry is None:
-        entry = _new_mutation(item, "upsert", payload)
+        entry = _new_mutation(db, item, "upsert", payload)
         predecessor = next((value for value in entries if value.status != "pending"), None)
         if predecessor is not None:
             entry.depends_on_mutation_id = predecessor.mutation_id
@@ -87,17 +79,11 @@ def record_local_upsert(db: Session, item: LedgerCategory | LedgerTransaction) -
     return entry
 
 
-def record_local_delete(db: Session, item: LedgerCategory | LedgerTransaction) -> None:
-    if isinstance(item, LedgerCategory) and item.sync_revision == 0:
-        active = db.scalars(select(LedgerTransaction).where(
-            LedgerTransaction.workspace_id == item.workspace_id,
-            LedgerTransaction.category_id == item.id,
-            LedgerTransaction.deleted_at.is_(None)).order_by(LedgerTransaction.id)).all()
-        if any(transaction.sync_revision > 0 for transaction in active):
-            raise HTTPException(409, "Unsynced category has a synced transaction")
-        for transaction in active:
-            transaction.category_id = None
-            record_local_upsert(db, transaction)
+def record_local_delete(db: Session, item) -> None:
+    def publish(db, child, operation):
+        db.flush()
+        record_local_upsert(db, child) if operation == "upsert" else record_local_delete(db, child)
+    adapter_for(item).prepare_delete(db, item, publish)
 
     entries = queued_entries(db, item)
     pending = next((value for value in entries if value.status == "pending"), None)
@@ -110,7 +96,7 @@ def record_local_delete(db: Session, item: LedgerCategory | LedgerTransaction) -
         # A legacy local tombstone has no known Core identity.
         return
     if pending is None:
-        pending = _new_mutation(item, "delete", None)
+        pending = _new_mutation(db, item, "delete", None)
         if predecessor is not None:
             pending.depends_on_mutation_id = predecessor.mutation_id
         db.add(pending)
@@ -122,24 +108,19 @@ def record_local_delete(db: Session, item: LedgerCategory | LedgerTransaction) -
         pending.updated_at = utcnow()
 
 
-def seed_local_ledger_queue(db: Session, workspace_id: str) -> LocalSyncState:
-    """One-time, idempotent adoption of active revision-zero Local Ledger rows."""
+def seed_local_queue(db: Session, workspace_id: str) -> LocalSyncState:
+    """One-time, idempotent adoption of active revision-zero Local rows in unseeded generations."""
     state = get_local_sync_state(db, workspace_id)
-    if state.queue_seeded_at is not None:
+    if state.queue_seed_version >= seed_version():
         return state
-    for model in (LedgerCategory, LedgerTransaction):
-        rows = db.scalars(select(model).where(
-            model.workspace_id == workspace_id, model.sync_revision == 0,
-            model.deleted_at.is_(None)).order_by(model.created_at, model.id)).all()
-        for item in rows:
-            repaired_reference = False
-            if isinstance(item, LedgerTransaction) and item.category_id is not None:
-                category = db.get(LedgerCategory, item.category_id)
-                if category is not None and category.sync_revision == 0 and category.deleted_at is not None:
-                    item.category_id = None
-                    repaired_reference = True
-            if repaired_reference or queued(db, item) is None:
+    for adapter in REGISTRY.values():
+        if adapter.generation <= state.queue_seed_version:
+            continue
+        for item in adapter.legacy_rows(db, workspace_id):
+            repaired = adapter.prepare_local_seed(db, item)
+            if repaired or queued(db, item) is None:
                 record_local_upsert(db, item)
+    state.queue_seed_version = seed_version()
     state.queue_seeded_at = utcnow()
     db.flush()
     return state
@@ -151,4 +132,7 @@ def ordered_pending_mutations(db: Session, workspace_id: str) -> list[LocalMutat
         LocalMutation.workspace_id == workspace_id, LocalMutation.status == "pending",
         LocalMutation.depends_on_mutation_id.is_(None))).all()
     return sorted(entries, key=lambda entry: (
-        PUSH_PRIORITY[(entry.entity_type, entry.operation)], entry.created_at, entry.id))
+        get_adapter(entry.entity_type).push_priority(entry.operation), entry.created_at, entry.id))
+
+# Compatibility for existing Ledger callers.
+seed_local_ledger_queue = seed_local_queue

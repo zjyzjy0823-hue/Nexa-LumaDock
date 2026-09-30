@@ -11,6 +11,7 @@ from ..utils.time import iso_utc
 from ..database import get_db
 from ..models import User, Website, WebsiteCategory
 from ..security import current_user
+from ..sync.publisher import prepare_write, publish, delete_entity
 from ..workspaces import get_personal_workspace
 
 router = APIRouter(prefix="/api/v1", tags=["websites"])
@@ -45,7 +46,7 @@ class WebsiteInput(BaseModel):
 
 class WebsitePatch(WebsiteInput):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    url: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
 
 
 def website_json(item: Website) -> dict:
@@ -86,14 +87,14 @@ def category_json(item: WebsiteCategory) -> dict:
 
 
 def owned_website(db: Session, user: User, id: str) -> Website:
-    item = db.scalar(select(Website).where(Website.id == id, Website.user_id == user.id))
+    item = db.scalar(select(Website).where(Website.id == id, Website.user_id == user.id, Website.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Website not found")
     return item
 
 
 def owned_category(db: Session, user: User, id: str) -> WebsiteCategory:
-    item = db.scalar(select(WebsiteCategory).where(WebsiteCategory.id == id, WebsiteCategory.user_id == user.id))
+    item = db.scalar(select(WebsiteCategory).where(WebsiteCategory.id == id, WebsiteCategory.user_id == user.id, WebsiteCategory.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Category not found")
     return item
@@ -108,7 +109,7 @@ def validate_category(db: Session, user: User, id: str | None):
 def list_websites(categoryId: str | None = None, search: str | None = None,
                   favorite: bool | None = None, sort: str = Query("order", pattern="^(order|name|createdAt|updatedAt|recent)$"),
                   user: User = Depends(current_user), db: Session = Depends(get_db)):
-    query = select(Website).where(Website.user_id == user.id)
+    query = select(Website).where(Website.user_id == user.id, Website.deleted_at.is_(None))
     if categoryId:
         query = query.where(Website.category_id == categoryId)
     if search:
@@ -124,12 +125,14 @@ def list_websites(categoryId: str | None = None, search: str | None = None,
 
 @router.post("/websites", status_code=201)
 def create_website(payload: WebsiteInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     validate_category(db, user, payload.categoryId)
     item = Website(id=str(uuid4()), user_id=user.id, workspace_id=get_personal_workspace(db, user).id,
                    category_id=payload.categoryId,
                    name=payload.name.strip(), url=payload.url, icon=payload.icon,
                    description=payload.description, favorite=payload.favorite, order=payload.order)
     db.add(item)
+    publish(db, item)
     db.commit()
     db.refresh(item)
     return website_json(item)
@@ -142,8 +145,10 @@ def get_website(id: str, user: User = Depends(current_user), db: Session = Depen
 
 @router.post("/websites/{id}/visit")
 def visit_website(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = owned_website(db, user, id)
     item.last_visited_at = datetime.now(timezone.utc)
+    publish(db, item)
     db.commit()
     db.refresh(item)
     return website_json(item)
@@ -151,6 +156,7 @@ def visit_website(id: str, user: User = Depends(current_user), db: Session = Dep
 
 @router.patch("/websites/{id}")
 def update_website(id: str, payload: WebsitePatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = owned_website(db, user, id)
     changes = payload.model_dump(exclude_unset=True)
     if "categoryId" in changes:
@@ -160,6 +166,7 @@ def update_website(id: str, payload: WebsitePatch, user: User = Depends(current_
         if value is None and key in ("name", "url", "favorite", "order"):
             raise HTTPException(422, f"{key} cannot be null")
         setattr(item, key, value.strip() if key == "name" else value)
+    publish(db, item)
     db.commit()
     db.refresh(item)
     return website_json(item)
@@ -167,22 +174,25 @@ def update_website(id: str, payload: WebsitePatch, user: User = Depends(current_
 
 @router.delete("/websites/{id}", status_code=204)
 def delete_website(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(owned_website(db, user, id))
+    prepare_write(db, user)
+    delete_entity(db, owned_website(db, user, id))
     db.commit()
 
 
 @router.get("/website-categories")
 def list_categories(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return [category_json(item) for item in db.scalars(select(WebsiteCategory).where(
-        WebsiteCategory.user_id == user.id).order_by(WebsiteCategory.order, WebsiteCategory.id))]
+        WebsiteCategory.user_id == user.id, WebsiteCategory.deleted_at.is_(None)).order_by(WebsiteCategory.order, WebsiteCategory.id))]
 
 
 @router.post("/website-categories", status_code=201)
 def create_category(payload: CategoryInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = WebsiteCategory(id=str(uuid4()), user_id=user.id,
                            workspace_id=get_personal_workspace(db, user).id,
                            name=payload.name.strip(), order=payload.order)
     db.add(item)
+    publish(db, item)
     db.commit()
     db.refresh(item)
     return category_json(item)
@@ -190,11 +200,13 @@ def create_category(payload: CategoryInput, user: User = Depends(current_user), 
 
 @router.patch("/website-categories/{id}")
 def update_category(id: str, payload: CategoryPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = owned_category(db, user, id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
             raise HTTPException(422, f"{key} cannot be null")
         setattr(item, key, value.strip() if key == "name" else value)
+    publish(db, item)
     db.commit()
     db.refresh(item)
     return category_json(item)
@@ -202,8 +214,7 @@ def update_category(id: str, payload: CategoryPatch, user: User = Depends(curren
 
 @router.delete("/website-categories/{id}", status_code=204)
 def delete_category(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = owned_category(db, user, id)
-    for website in db.scalars(select(Website).where(Website.category_id == id, Website.user_id == user.id)):
-        website.category_id = None
-    db.delete(item)
+    delete_entity(db, item)
     db.commit()

@@ -48,7 +48,7 @@ def test_desktop_config_and_persistence(tmp_path: Path):
 def test_health_is_public(client):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "nexa", "version": "0.5.3"}
+    assert response.json() == {"status": "ok", "service": "nexa", "version": "0.5.4"}
 
 
 def test_desktop_cors_origin(monkeypatch):

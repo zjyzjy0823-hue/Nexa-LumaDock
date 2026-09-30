@@ -20,7 +20,7 @@ from app.sync.service import apply_mutation
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013_sync_engine"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0014_multi_entity_sync"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
@@ -63,7 +63,7 @@ username = f"core_smoke_{uuid4().hex[:12]}"
 with TestClient(app) as client:
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.3"}
+    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.4"}
     registered = client.post("/api/v1/auth/register", json={
         "username": username, "password": "smoke-test-password",
     })
@@ -158,14 +158,14 @@ with TestClient(app) as client:
     _, auth_other = enroll(stranger)
     entity_id = str(uuid4())
     created = sync_mutation(entity_id)
-    response = client.post("/api/v1/sync/mutations", headers=auth_a, json={"mutations": [created]})
+    response = client.post("/api/v1/sync/mutations", headers=auth_a, json={"protocolVersion": 2, "mutations": [created]})
     assert response.status_code == 200, response.text
     first = response.json()["results"][0]
     assert first["status"] == "applied" and first["revision"] == 1
-    retry = client.post("/api/v1/sync/mutations", headers=auth_a, json={"mutations": [created]})
+    retry = client.post("/api/v1/sync/mutations", headers=auth_a, json={"protocolVersion": 2, "mutations": [created]})
     assert retry.json()["results"][0] == first
-    assert client.get("/api/v1/sync/changes", headers=auth_other).json()["changes"] == []
-    assert client.get("/api/v1/sync/changes", headers=auth_b).json()["changes"][0]["revision"] == 1
+    assert client.get("/api/v1/sync/changes?protocolVersion=2", headers=auth_other).json()["changes"] == []
+    assert client.get("/api/v1/sync/changes?protocolVersion=2", headers=auth_b).json()["changes"][0]["revision"] == 1
 
     barrier = Barrier(2)
 
@@ -191,22 +191,22 @@ with TestClient(app) as client:
 
     deletion = sync_mutation(entity_id, 2, operation="delete")
     result = client.post("/api/v1/sync/mutations", headers=auth_a,
-                         json={"mutations": [deletion]}).json()["results"][0]
+                         json={"protocolVersion": 2, "mutations": [deletion]}).json()["results"][0]
     assert result["status"] == "applied" and result["revision"] == 5
     assert client.post("/api/v1/sync/mutations", headers=auth_a,
-                       json={"mutations": [deletion]}).json()["results"][0] == result
+                       json={"protocolVersion": 2, "mutations": [deletion]}).json()["results"][0] == result
     assert client.get(f"/api/v1/ledger/transactions/{entity_id}", headers=owner).status_code == 404
-    changes = client.get("/api/v1/sync/changes?cursor=2&limit=2", headers=auth_b).json()
+    changes = client.get("/api/v1/sync/changes?protocolVersion=2&cursor=2&limit=2", headers=auth_b).json()
     assert [row["revision"] for row in changes["changes"]] == [3, 4]
     assert changes["hasMore"] is True and changes["cursor"] == 4
-    assert client.get("/api/v1/sync/changes?cursor=4", headers=auth_b).json()["changes"][0]["operation"] == "delete"
+    assert client.get("/api/v1/sync/changes?protocolVersion=2&cursor=4", headers=auth_b).json()["changes"][0]["operation"] == "delete"
     other_attempt = client.post("/api/v1/sync/mutations", headers=auth_other,
-                                json={"mutations": [sync_mutation(entity_id, 5)]}).json()["results"][0]
+                                json={"protocolVersion": 2, "mutations": [sync_mutation(entity_id, 5)]}).json()["results"][0]
     assert other_attempt["status"] == "rejected" and other_attempt["reason"] == "entity_id_unavailable"
     ordinary = client.post("/api/v1/ledger/categories", headers=owner,
                            json={"name": "Web category", "type": "expense"})
     assert ordinary.status_code == 201, ordinary.text
-    ordinary_change = client.get("/api/v1/sync/changes?cursor=5", headers=auth_a).json()["changes"]
+    ordinary_change = client.get("/api/v1/sync/changes?protocolVersion=2&cursor=5", headers=auth_a).json()["changes"]
     assert len(ordinary_change) == 1 and ordinary_change[0]["revision"] == 6
     assert ordinary_change[0]["entityId"] == ordinary.json()["id"]
     assert ordinary_change[0]["data"] == {"name": "Web category", "type": "expense", "icon": "shopping"}
@@ -239,7 +239,7 @@ with TestClient(app) as client:
 
     def first_pull(auth):
         barrier.wait(timeout=10)
-        response = client.get("/api/v1/sync/changes?cursor=0", headers=auth)
+        response = client.get("/api/v1/sync/changes?protocolVersion=2&cursor=0", headers=auth)
         assert response.status_code == 200, response.text
         return response.json()
 
@@ -258,4 +258,4 @@ with TestClient(app) as client:
                                  {"id": workspace_id}) is not None
         assert connection.scalar(text("SELECT count(*) FROM local_mutation_queue")) == 0
 
-print("PostgreSQL 0013 migration, sync, isolation, legacy seeding and concurrency: PASS")
+print("PostgreSQL 0014 migration, sync, isolation, legacy seeding and concurrency: PASS")

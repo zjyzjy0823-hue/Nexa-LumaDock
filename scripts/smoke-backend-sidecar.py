@@ -66,7 +66,7 @@ def main() -> None:
     try:
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.3"}
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.4"}
             with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                 "Origin": "http://tauri.localhost",
             }), timeout=2) as response:
@@ -74,7 +74,12 @@ def main() -> None:
             result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": "password123"})
             assert result["access_token"]
             token = result["access_token"]
-            website = request("/api/v1/websites", {"name": "Smoke Site", "url": "https://example.com"}, token)
+            website_category = request("/api/v1/website-categories", {"name": "Smoke Sites"}, token)
+            website = request("/api/v1/websites", {"name": "Smoke Site", "url": "https://example.com",
+                              "categoryId": website_category["id"]}, token)
+            collection = request("/api/v1/data/collections", {"name": "Smoke Data"}, token)
+            record = request(f"/api/v1/data/collections/{collection['id']}/records",
+                             {"name": "Smoke Record", "data_json": {"value": 42}}, token)
             device = request("/api/v1/devices", {"name": "Smoke Device", "kind": "desktop", "system": "Windows", "ip": "127.0.0.1"}, token)
             agent = request("/api/v1/agents", {"name": "Smoke Agent"}, token)
             assert request("/api/dashboard", token=token)["id"]
@@ -82,7 +87,7 @@ def main() -> None:
             transaction = request("/api/v1/ledger/transactions", {
                 "category_id": category["id"], "type": "expense", "amount": "38.00",
                 "description": "Offline lunch", "occurred_at": "2026-09-28T12:00:00Z"}, token)
-            assert request("/api/v1/sync/status", token=token)["pending"] == 2
+            assert request("/api/v1/sync/status", token=token)["pending"] == 6
         finally:
             stop(first, data_dir)
         assert (data_dir / "nexa.db").is_file()
@@ -91,14 +96,18 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0013_sync_engine"
-            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 2
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0014_multi_entity_sync"
+            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 6
+            assert connection.execute("SELECT queue_seed_version FROM local_sync_state").fetchone()[0] == 2
         second = launch(data_dir)
         try:
             assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id
             result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": "password123"})
             assert result["access_token"]
             assert any(item["id"] == website["id"] for item in request("/api/v1/websites", token=token))
+            assert request(f"/api/v1/data/collections/{collection['id']}", token=token)["recordCount"] == 1
+            assert request(f"/api/v1/data/collections/{collection['id']}/records", token=token)[0]["id"] == record["id"]
+            assert request(f"/api/v1/websites/{website['id']}/visit", token=token, method="POST")["lastVisitedAt"]
             assert any(item["id"] == device["id"] for item in request("/api/v1/devices", token=token))
             assert any(item["id"] == agent["id"] for item in request("/api/v1/agents", token=token))
             assert any(item["id"] == transaction["id"] for item in request("/api/v1/ledger/transactions", token=token))
@@ -109,6 +118,13 @@ def main() -> None:
                 "type": "expense", "amount": "1.00", "description": "Transient",
                 "occurred_at": "2026-09-28T12:00:00Z"}, token)
             request(f"/api/v1/ledger/transactions/{transient['id']}", token=token, method="DELETE")
+            assert request("/api/v1/sync/status", token=token)["pending"] == 6
+            request(f"/api/v1/website-categories/{website_category['id']}", token=token, method="DELETE")
+            assert request(f"/api/v1/websites/{website['id']}", token=token)["categoryId"] is None
+            request(f"/api/v1/data/collections/{collection['id']}", token=token, method="DELETE")
+            assert request("/api/data", token=token)["totalRecords"] == 0
+            request(f"/api/v1/websites/{website['id']}", token=token, method="DELETE")
+            assert request("/api/v1/websites", token=token) == []
             assert request("/api/v1/sync/status", token=token)["pending"] == 2
         finally:
             stop(second, data_dir)
@@ -121,7 +137,7 @@ def main() -> None:
             assert connection.execute("SELECT sync_revision FROM ledger_transactions WHERE id=?",
                                       (transaction["id"],)).fetchone()[0] == 0
         assert token not in (data_dir / "logs" / "backend.log").read_text(encoding="utf-8")
-        print("Packaged sidecar: offline Ledger outbox, persistence, login PASS")
+        print("Packaged sidecar: six-entity offline outbox, Website/Data tombstones, persistence, login PASS")
     finally:
         temp_root = Path(tempfile.gettempdir()).resolve()
         if data_dir.parent != temp_root or not data_dir.name.startswith("NexaDesktopSmoke-"):
