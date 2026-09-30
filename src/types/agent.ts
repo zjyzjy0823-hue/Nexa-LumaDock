@@ -41,6 +41,7 @@ export interface AgentApiCall {
 }
 
 export interface Agent {
+  dataScopes: string[]
   id: string
   name: string
   role: string
@@ -71,4 +72,4 @@ export interface Agent {
   updatedAt: string
 }
 
-export type AgentInput = Pick<Agent, 'name' | 'role' | 'description' | 'model' | 'workspace' | 'avatar'>
+export type AgentInput = Pick<Agent, 'name' | 'role' | 'description' | 'model' | 'workspace' | 'avatar' | 'dataScopes'>

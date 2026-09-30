@@ -1,4 +1,4 @@
-# Nexa Core（v0.5.4）
+# Nexa Core（v0.5.5）
 
 Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`、产品版本 `0.5.4`，迁移版本为 `0014_multi_entity_sync`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok`、产品版本 `0.5.5`，迁移版本为 `0015_agent_data_actions`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 
@@ -62,10 +62,14 @@ v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`
 
 Core 也可在 `backend` 目录安装 `requirements-postgres.txt` 后运行 `python core_entry.py`；此时设置 `NEXA_MODE=core`、PostgreSQL URL 和 JWT secret。配置错误会在连接数据库前退出，错误消息不会打印数据库密码。
 
-## v0.5.4 升级与协议兼容
+## v0.5.5 升级与协议兼容
 
 0014 为 WebsiteCategory、Website、DataCollection、DataRecord 增加 `sync_revision` 和 `deleted_at`。`bootstrap_version` 将已完成 v0.5.3 Ledger 初始化的 Core 标记为 generation 1，首次 v2 请求仅接纳 generation 2 的 Website/Data；现有 Ledger revision/change 不重建。bootstrap 和普通 API 发布均持有 Workspace 锁，实体更新、revision 分配与 change 同事务提交。
 
 Sync 请求必须显式声明 `protocolVersion=2`（GET query / POST JSON）；缺省按旧版 v1 处理并返回 HTTP 409 `sync_protocol_mismatch`，不引导 bootstrap 或写入 mutation history。响应为 v2，旧 Client 无法跳过新实体 revision。升级 Client 请求旧 Core 时在 freeze/replay 前检测响应版本，报告 `protocol_mismatch` 并保留 queue/cursor。连接元数据的 `schemaVersion: 1` 不随 Sync 协议变更。
 
 Settings 仍为 Local-only：整数主键的 UserPreference/settings_json 同时承载用户偏好与本机连接、安全信息，本版不迁移、不注册 Adapter。未来可能同步 theme、language、timezone、notifications、appearance；sync、security、Core URL、Client credential、installation id、DB path 和设备配置必须留在本机。密码、token、Core JWT 和 `nc_live_` 凭证不作为系统业务字段发布。
+
+## Agent Data Actions
+
+v0.5.5 的 `0015_agent_data_actions` 为 Agent 添加默认空的 dataScopes 和持久化安全 Action receipts。已有 Agent 不自动授权。`/api/agent/actions/*` 只在 Nexa Local 可用，Core 返回 404；普通 Core CRUD 与 Runtime API 保持原有行为。业务服务与普通 REST 共享，Agent 业务写入与本地 outbox/audit 同事务提交，仍由用户手动 sync。安装、权限与幂等说明见 [Agent Data Actions](agent-data-actions.md)。

@@ -1,14 +1,14 @@
 """Publish ordinary business writes inside the caller's database transaction."""
 from ..database import runtime_config
 from ..models import LocalSyncState
-from ..workspaces import get_personal_workspace
+from ..services.ownership import owner_workspace
 from .adapters import adapter_for, seed_version
 from .local import record_local_delete, record_local_upsert, seed_local_queue
 from .service import ensure_core_sync_initialized, record_ordinary_change
 
 
 def prepare_write(db, user):
-    workspace_id = get_personal_workspace(db, user).id
+    workspace_id = owner_workspace(db, user)
     if runtime_config.mode == "core":
         # Adopt legacy parents before an ordinary child write can enter history.
         ensure_core_sync_initialized(db, workspace_id)

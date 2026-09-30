@@ -1,0 +1,1157 @@
+[
+  {
+    "action": "ledger.categories.list",
+    "toolName": "nexa_ledger_categories_list",
+    "effect": "read",
+    "description": "ledger.categories.list. Requires ledger:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.transactions.list",
+    "toolName": "nexa_ledger_transactions_list",
+    "effect": "read",
+    "description": "ledger.transactions.list. Requires ledger:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "month": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Month"
+        }
+      },
+      "title": "MonthArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.summary.get",
+    "toolName": "nexa_ledger_summary_get",
+    "effect": "read",
+    "description": "ledger.summary.get. Requires ledger:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "month": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Month"
+        }
+      },
+      "title": "MonthArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.categories.list",
+    "toolName": "nexa_website_categories_list",
+    "effect": "read",
+    "description": "website.categories.list. Requires websites:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.list",
+    "toolName": "nexa_website_list",
+    "effect": "read",
+    "description": "website.list. Requires websites:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "categoryId": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categoryid"
+        },
+        "search": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search"
+        },
+        "favorite": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Favorite"
+        },
+        "sort": {
+          "default": "order",
+          "enum": [
+            "order",
+            "name",
+            "createdAt",
+            "updatedAt",
+            "recent"
+          ],
+          "title": "Sort",
+          "type": "string"
+        }
+      },
+      "title": "WebsiteList",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.get",
+    "toolName": "nexa_website_get",
+    "effect": "read",
+    "description": "website.get. Requires websites:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.visit",
+    "toolName": "nexa_website_visit",
+    "effect": "write",
+    "description": "website.visit. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.collections.list",
+    "toolName": "nexa_data_collections_list",
+    "effect": "read",
+    "description": "data.collections.list. Requires data:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.collection.get",
+    "toolName": "nexa_data_collection_get",
+    "effect": "read",
+    "description": "data.collection.get. Requires data:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.records.list",
+    "toolName": "nexa_data_records_list",
+    "effect": "read",
+    "description": "data.records.list. Requires data:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "collectionId": {
+          "format": "uuid",
+          "title": "Collectionid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "collectionId"
+      ],
+      "title": "RecordsList",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.record.get",
+    "toolName": "nexa_data_record_get",
+    "effect": "read",
+    "description": "data.record.get. Requires data:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.category.create",
+    "toolName": "nexa_ledger_category_create",
+    "effect": "write",
+    "description": "ledger.category.create. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "income",
+            "expense"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "icon": {
+          "default": "shopping",
+          "maxLength": 30,
+          "title": "Icon",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "ledger_categoryCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.category.update",
+    "toolName": "nexa_ledger_category_update",
+    "effect": "write",
+    "description": "ledger.category.update. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "income",
+                "expense"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "maxLength": 30,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ledger_categoryUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.category.delete",
+    "toolName": "nexa_ledger_category_delete",
+    "effect": "delete",
+    "description": "ledger.category.delete. Requires ledger:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.transaction.create",
+    "toolName": "nexa_ledger_transaction_create",
+    "effect": "write",
+    "description": "ledger.transaction.create. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content. Supply type (income/expense), positive amount, description and ISO occurredAt. categoryId is optional; list categories first to select a matching type.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "categoryId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categoryid"
+        },
+        "type": {
+          "enum": [
+            "income",
+            "expense"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,12}|(?=[\\d.]{1,15}0*$)\\d{0,12}\\.\\d{0,2}0*$)",
+              "type": "string"
+            }
+          ],
+          "title": "Amount"
+        },
+        "description": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "occurredAt": {
+          "format": "date-time",
+          "title": "Occurredat",
+          "type": "string"
+        },
+        "merchant": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Merchant",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "amount",
+        "description",
+        "occurredAt"
+      ],
+      "title": "ledger_transactionCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.transaction.update",
+    "toolName": "nexa_ledger_transaction_update",
+    "effect": "write",
+    "description": "ledger.transaction.update. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "categoryId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categoryid"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "income",
+                "expense"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,12}|(?=[\\d.]{1,15}0*$)\\d{0,12}\\.\\d{0,2}0*$)",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amount"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "occurredAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurredat"
+        },
+        "merchant": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merchant"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ledger_transactionUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "ledger.transaction.delete",
+    "toolName": "nexa_ledger_transaction_delete",
+    "effect": "delete",
+    "description": "ledger.transaction.delete. Requires ledger:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.category.create",
+    "toolName": "nexa_website_category_create",
+    "effect": "write",
+    "description": "website.category.create. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "order": {
+          "default": 0,
+          "title": "Order",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "website_categoryCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.category.update",
+    "toolName": "nexa_website_category_update",
+    "effect": "write",
+    "description": "website.category.update. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Order"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "website_categoryUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.category.delete",
+    "toolName": "nexa_website_category_delete",
+    "effect": "delete",
+    "description": "website.category.delete. Requires websites:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.create",
+    "toolName": "nexa_website_create",
+    "effect": "write",
+    "description": "website.create. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2048,
+          "title": "Url",
+          "type": "string"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "categoryId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categoryid"
+        },
+        "favorite": {
+          "default": false,
+          "title": "Favorite",
+          "type": "boolean"
+        },
+        "order": {
+          "default": 0,
+          "title": "Order",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "websiteCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.update",
+    "toolName": "nexa_website_update",
+    "effect": "write",
+    "description": "website.update. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "categoryId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categoryid"
+        },
+        "favorite": {
+          "default": false,
+          "title": "Favorite",
+          "type": "boolean"
+        },
+        "order": {
+          "default": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "websiteUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "website.delete",
+    "toolName": "nexa_website_delete",
+    "effect": "delete",
+    "description": "website.delete. Requires websites:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.collection.create",
+    "toolName": "nexa_data_collection_create",
+    "effect": "write",
+    "description": "data.collection.create. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Description",
+          "type": "string"
+        },
+        "icon": {
+          "default": "custom",
+          "maxLength": 30,
+          "title": "Icon",
+          "type": "string"
+        },
+        "tone": {
+          "default": "blue",
+          "maxLength": 30,
+          "title": "Tone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "data_collectionCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.collection.update",
+    "toolName": "nexa_data_collection_update",
+    "effect": "write",
+    "description": "data.collection.update. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "maxLength": 30,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "tone": {
+          "anyOf": [
+            {
+              "maxLength": 30,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tone"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "data_collectionUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.collection.delete",
+    "toolName": "nexa_data_collection_delete",
+    "effect": "delete",
+    "description": "data.collection.delete. Requires data:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.record.create",
+    "toolName": "nexa_data_record_create",
+    "effect": "write",
+    "description": "data.record.create. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content. Supply collectionId from nexa_data_collections_list; dataJson is a structured object.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "default": "active",
+          "maxLength": 40,
+          "title": "Status",
+          "type": "string"
+        },
+        "category": {
+          "default": "",
+          "maxLength": 80,
+          "title": "Category",
+          "type": "string"
+        },
+        "dataJson": {
+          "additionalProperties": true,
+          "title": "Datajson",
+          "type": "object"
+        },
+        "collectionId": {
+          "format": "uuid",
+          "title": "Collectionid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "collectionId"
+      ],
+      "title": "data_recordCreate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.record.update",
+    "toolName": "nexa_data_record_update",
+    "effect": "write",
+    "description": "data.record.update. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "dataJson": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datajson"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "data_recordUpdate",
+      "type": "object"
+    }
+  },
+  {
+    "action": "data.record.delete",
+    "toolName": "nexa_data_record_delete",
+    "effect": "delete",
+    "description": "data.record.delete. Requires data:delete. Destructive deletion; requires separate delete permission.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "IdArguments",
+      "type": "object"
+    }
+  }
+]

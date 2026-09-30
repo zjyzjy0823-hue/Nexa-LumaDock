@@ -72,7 +72,10 @@ def configure_logging(data_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--port", type=int, default=17800, help="Loopback port (default 17800; use an isolated port for smoke tests)")
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
     data_dir = args.data_dir.expanduser().resolve()
     try:
         prepare_desktop(data_dir)
@@ -82,7 +85,7 @@ def main() -> None:
         import uvicorn
         shutdown_file = data_dir / "backend.shutdown"
         shutdown_file.unlink(missing_ok=True)
-        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=17800, log_config=None, access_log=False))
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_config=None, access_log=False))
 
         def watch_shutdown() -> None:
             while not server.should_exit:

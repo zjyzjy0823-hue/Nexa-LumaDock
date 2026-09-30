@@ -18,6 +18,10 @@ device-client/.pytest_cache/
 agent-adapters/openclaw/config.json
 agent-adapters/openclaw/**/__pycache__/
 agent-adapters/openclaw/.pytest_cache/
+agent-adapters/openclaw/plugin/dist/
+output/openclaw-sdk/
+output/openclaw-*.tgz
+output/node-runtime/
 backend/build/
 backend/dist/
 src-tauri/target/

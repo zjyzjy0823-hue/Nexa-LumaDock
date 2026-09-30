@@ -1,8 +1,8 @@
-# Nexa Desktop — Nexa-LumaDock v0.5.4
+# Nexa Desktop — Nexa-LumaDock v0.5.5
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
-v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。
+v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。v0.5.5 新增 Local-only Agent Data Actions、显式 dataScopes、原子审计/幂等 receipt 和 OpenClaw 原生 typed Tool Plugin；已有 Agent 默认无数据权限，write 不包含 delete。详见 [Agent Data Actions](docs/agent-data-actions.md)。
 
 ## Nexa Desktop
 
@@ -200,3 +200,7 @@ npm run build
 cd backend
 python -m pytest -q
 ```
+
+## v0.5.5 Agent Data Actions
+
+The native OpenClaw plugin exposes 29 typed Ledger/Website/Data tools plus `nexa_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Nexa Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. Product version is 0.5.5; Alembic head is `0015_agent_data_actions`; Sync Protocol remains v2. Settings and other management resources are excluded. See [architecture and installation](docs/agent-data-actions.md).

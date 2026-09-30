@@ -194,6 +194,7 @@ class Agent(Base):
     workspace: Mapped[str] = mapped_column(String(120), default="个人工作区")
     avatar: Mapped[str] = mapped_column(String(20), default="spark")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    data_scopes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     runtime_status: Mapped[str] = mapped_column(String(20), default="idle")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
@@ -209,6 +210,27 @@ class Agent(Base):
     user: Mapped[User] = relationship(back_populates="agents")
     tasks: Mapped[list["AgentTask"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     events: Mapped[list["AgentEvent"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+
+
+class AgentActionLog(Base):
+    __tablename__ = "agent_action_logs"
+    __table_args__ = (UniqueConstraint("agent_id", "action_id", name="uq_agent_action_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    action_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    action_type: Mapped[str] = mapped_column(String(80))
+    required_scope: Mapped[str] = mapped_column(String(40))
+    target_entity_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    target_entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20))
+    error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    result_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentTask(Base):
