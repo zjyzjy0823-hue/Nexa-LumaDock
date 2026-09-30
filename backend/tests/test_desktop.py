@@ -1,4 +1,7 @@
 import os
+import json
+import re
+from urllib.parse import urlsplit
 from pathlib import Path
 from uuid import UUID
 
@@ -49,6 +52,17 @@ def test_health_is_public(client):
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "nexa", "version": "0.5.5"}
+
+
+def test_desktop_csp_allows_weather_service_origins():
+    root = Path(__file__).resolve().parents[2]
+    service = (root / "src/services/weather.ts").read_text(encoding="utf-8")
+    origins = {f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
+               for url in re.findall(r"https://[^'\"]+", service)}
+    config = json.loads((root / "src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    for mode in ("csp", "devCsp"):
+        allowed = config["app"]["security"][mode]["connect-src"].split()
+        assert origins <= set(allowed), f"{mode} blocks weather origins: {origins - set(allowed)}"
 
 
 def test_desktop_cors_origin(monkeypatch):

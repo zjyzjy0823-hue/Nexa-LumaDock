@@ -1,3 +1,4 @@
+import { version } from '../../package.json'
 import type {
   AboutInfo, AccentColor, AppearanceConfig, BackgroundChoice, GlassTheme,
   NotificationChannel, NotificationConfig, NotificationEvent, SecurityConfig,
@@ -64,4 +65,4 @@ export const notificationChannelOptions: { id: NotificationChannel; label: strin
 ]
 
 
-export const aboutInfo: AboutInfo = { product: 'Nexa', version: '0.3.0', build: '2026.09.27' }
+export const aboutInfo: AboutInfo = { product: 'Nexa', version, build: '2026.09.30' }

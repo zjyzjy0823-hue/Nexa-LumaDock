@@ -25,13 +25,13 @@
     "security": {
       "csp": {
         "default-src": "'self'",
-        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:17800 ws://127.0.0.1:17800 https://api.open-meteo.com https://geocoding-api.open-meteo.com",
+        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:17800 ws://127.0.0.1:17800 https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net",
         "img-src": "'self' data: https: http:",
         "style-src": "'self' 'unsafe-inline'"
       },
       "devCsp": {
         "default-src": "'self'",
-        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:17800 ws://127.0.0.1:5173 ws://127.0.0.1:17800 https://api.open-meteo.com https://geocoding-api.open-meteo.com",
+        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:17800 ws://127.0.0.1:5173 ws://127.0.0.1:17800 https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net",
         "img-src": "'self' data: https: http:",
         "style-src": "'self' 'unsafe-inline'"
       }

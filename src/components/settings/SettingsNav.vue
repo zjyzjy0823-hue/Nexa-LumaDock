@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { Bell, HardDrive, Info, Palette, RefreshCw, ShieldCheck, UserRound } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import { settingsNavigation } from '../../mock/settings'
+import { aboutInfo, settingsNavigation } from '../../mock/settings'
 import type { SettingsSectionId } from '../../types/settings'
 
 const props = defineProps<{ active: SettingsSectionId; query?: string }>()
@@ -33,7 +33,7 @@ function onSelect(event: Event) {
         <option v-for="item in settingsNavigation" :key="item.id" :value="item.id">{{ item.label }}</option>
       </select>
     </label>
-    <div class="settings-nav__foot"><span class="settings-nav__foot-dot" />Nexa 0.1.0</div>
+    <div class="settings-nav__foot"><span class="settings-nav__foot-dot" />Nexa {{ aboutInfo.version }}</div>
   </GlassCard>
 </template>
 

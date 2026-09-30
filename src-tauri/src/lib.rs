@@ -8,6 +8,7 @@ use std::{
 
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+use tauri_plugin_opener::OpenerExt;
 
 struct DesktopState {
     child: Mutex<Option<CommandChild>>,
@@ -28,6 +29,20 @@ impl Default for DesktopState {
 #[tauri::command]
 fn backend_status(state: tauri::State<'_, DesktopState>) -> String {
     state.status.lock().unwrap().clone()
+}
+
+fn browser_url(value: &str) -> Result<tauri::Url, String> {
+    let url = tauri::Url::parse(value).map_err(|_| "Invalid website URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("Only HTTP and HTTPS websites can be opened".into());
+    }
+    Ok(url)
+}
+
+#[tauri::command]
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let url = browser_url(&url)?;
+    app.opener().open_url(url.as_str(), None::<&str>).map_err(|_| "Unable to open the default browser".into())
 }
 
 fn set_status(app: &tauri::AppHandle, value: &str) {
@@ -201,8 +216,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(DesktopState::default())
-        .invoke_handler(tauri::generate_handler![backend_status])
+        .invoke_handler(tauri::generate_handler![backend_status, open_external_url])
         .setup(|app| {
             setup_tray(app)?;
             start_backend(app.handle().clone());
@@ -226,4 +242,24 @@ pub fn run() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_url;
+
+    #[test]
+    fn accepts_browser_websites_and_preserves_query_and_fragment() {
+        for value in ["https://example.com/docs?q=hello%20world#intro", "http://localhost:8080/"] {
+            assert_eq!(browser_url(value).unwrap().as_str(), value);
+        }
+    }
+
+    #[test]
+    fn rejects_files_commands_custom_protocols_and_relative_paths() {
+        for value in ["file:///C:/Windows/System32/cmd.exe", "javascript:alert(1)",
+                      "ms-settings:defaultapps", "mailto:test@example.com", "C:\\Windows\\System32\\cmd.exe", "/websites", "invalid"] {
+            assert!(browser_url(value).is_err(), "accepted unsupported link: {value}");
+        }
+    }
 }

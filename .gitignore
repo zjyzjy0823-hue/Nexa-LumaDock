@@ -2,6 +2,7 @@ node_modules/
 dist/
 .playwright-cli/
 output/playwright/
+output/windows-qa*/
 output/nexa-*.png
 *.local
 backend/*.db

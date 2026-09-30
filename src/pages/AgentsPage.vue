@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import {
@@ -199,7 +200,7 @@ async function saveAgent() {
 
 async function removeAgent() {
   const item = selectedAgent.value
-  if (!auth.token || !item || !window.confirm(`删除「${item.name}」及其任务？`)) return
+  if (!auth.token || !item || !(await confirmAction(`删除「${item.name}」及其任务？`))) return
   try { await store.remove(auth.token, item.id); showToast('智能体已删除。') }
   catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
 }
@@ -223,7 +224,7 @@ async function createTask() {
 
 async function removeTask(task: AgentTask) {
   const item = selectedAgent.value
-  if (!auth.token || !item || !window.confirm(`删除任务「${task.title}」？`)) return
+  if (!auth.token || !item || !(await confirmAction(`删除任务「${task.title}」？`))) return
   try { await store.removeTask(auth.token, item.id, task.id); showToast('任务已删除。') }
   catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
 }
@@ -394,7 +395,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
     </div>
 
     <div v-if="createAgentOpen || createTaskOpen" class="agents-modal-backdrop" @click.self="createAgentOpen = false; createTaskOpen = false">
-      <form class="agents-modal" @submit.prevent="createAgentOpen ? saveAgent() : createTask()">
+      <form class="agents-modal" role="dialog" aria-modal="true" aria-label="智能体或任务" @keydown.esc="createAgentOpen = false; createTaskOpen = false" @submit.prevent="createAgentOpen ? saveAgent() : createTask()">
         <div class="agents-modal__head"><span class="agents-modal__icon"><Bot v-if="createAgentOpen" :size="21" /><Zap v-else :size="21" /></span><button type="button" aria-label="关闭" @click="createAgentOpen = false; createTaskOpen = false"><X :size="18" /></button></div>
         <h2>{{ createAgentOpen ? agentDialogMode === 'edit' ? '编辑智能体' : '添加智能体' : '创建新任务' }}</h2>
         <p>{{ createAgentOpen ? '保存智能体资料，运行连接可稍后接入。' : `将任务加入 ${selectedAgent?.name ?? '智能体'} 的队列。` }}</p>
@@ -421,7 +422,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 <style scoped>
 .runtime-token-panel { display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin:15px 0; padding:12px; border:1px solid var(--agent-tile-border); border-radius:12px; background:var(--agent-tile-bg); color:#435570; font-size:11px; }
 .runtime-token-panel code { max-width:100%; overflow-wrap:anywhere; }
-.runtime-token-panel button { padding:5px 9px; border:1px solid #cbd8ef; border-radius:7px; background:#f3f6ff; color:#435570; cursor:pointer; }
+.runtime-token-panel button { padding:5px 9px; border:1px solid rgba(145,169,216,.4); border-radius:7px; background:rgba(243,246,255,.65); color:#435570; cursor:pointer; }
 .agents-page { width:100%; min-width:0; padding-bottom:28px; color:#263653; --agent-tile-bg:var(--glass-tile-background); --agent-tile-border:rgba(255,255,255,.68); --agent-tile-shadow:var(--glass-tile-shadow); }
 .agent-state { display:flex; align-items:center; justify-content:center; gap:10px; min-height:220px; padding:28px; border:1px solid rgba(255,255,255,.55); border-radius:18px; background:rgba(218,229,255,.3); color:white; font-size:13px; text-align:center; }
 .agent-state button { padding:6px 11px; border:1px solid rgba(255,255,255,.55); border-radius:8px; background:rgba(255,255,255,.25); color:white; }
@@ -597,7 +598,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 .usage-chart__bar:nth-child(2n) span { background:linear-gradient(180deg,#90aaf2,#81c6e8); }
 .usage-chart__bar small { flex:none; color:#596882; font-size:9px; }
 .agents-modal-backdrop { position:fixed; z-index:100; inset:0; display:grid; place-items:center; padding:16px; background:rgba(30,43,79,.36); backdrop-filter:blur(8px); }
-.agents-modal { width:min(100%,410px); padding:24px; border:1px solid rgba(255,255,255,.86); border-radius:23px; background:linear-gradient(145deg,#fbfcff,#eef3ff); box-shadow:0 25px 80px rgba(37,51,95,.28); }
+.agents-modal { width:min(100%,410px); padding:24px; border:1px solid rgba(255,255,255,.86); border-radius:23px; background:var(--glass-dialog-background); box-shadow:0 25px 80px rgba(37,51,95,.28);  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .agents-modal__head { display:flex; align-items:center; justify-content:space-between; }
 .agents-modal__icon { display:grid; width:42px; height:42px; place-items:center; border-radius:13px; color:#6c81da; background:#e7edff; }
 .agents-modal__head button { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:8px; color:#94a2b7; background:transparent; }
@@ -605,7 +606,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 .agents-modal h2 { margin:16px 0 5px; color:#2d3e5e; font-size:20px; }
 .agents-modal p { margin:0 0 23px; color:#8795aa; font-size:11px; }
 .agents-modal label { display:block; margin-bottom:14px; color:#647590; font-size:11px; font-weight:700; }
-.agents-modal input { display:block; width:100%; height:41px; margin-top:7px; padding:0 12px; border:1px solid #d9e2f2; border-radius:11px; outline:0; background:white; color:#344664; font-size:12px; }
+.agents-modal input { display:block; width:100%; height:41px; margin-top:7px; padding:0 12px; border:1px solid #d9e2f2; border-radius:11px; outline:0; background:rgba(255,255,255,.55); color:#344664; font-size:12px; }
 .agents-modal input:focus { border-color:#98aaeb; box-shadow:0 0 0 3px rgba(133,154,235,.13); }
 .agents-modal input::placeholder { color:#aeb9c8; }
 .agents-modal__actions { display:flex; justify-content:flex-end; gap:8px; margin-top:23px; }

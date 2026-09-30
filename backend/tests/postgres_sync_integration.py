@@ -219,7 +219,7 @@ def agent_tool_offline_creates(replica):
     return ids, category, collection
 
 
-def main():
+def main(skip_agent_tools=False):
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
@@ -364,7 +364,7 @@ def main():
             assert a.request("GET", f"/api/v1/ledger/transactions/{offline}")["description"] == "Offline edit"
             # Core remains stopped: actual Node Nexa tool client -> Local HTTP ->
             # SQLite/outbox. Recovery uses the production manual sync transport.
-            agent_ids, agent_category, agent_collection = agent_tool_offline_creates(a)
+            agent_ids, agent_category, agent_collection = ({}, None, None) if skip_agent_tools else agent_tool_offline_creates(a)
             with core_server(directory, port) as (core, _, _):
                 assert a.run()["pending"] == 0
                 b.run()
@@ -379,8 +379,9 @@ def main():
                             assert item is not None and adapter_for(item).workspace_id(db, item) == workspace
                             if model is not DataRecord:
                                 assert item.user_id == owner
-                        assert db.get(Website, agent_ids[Website]).category_id == agent_category
-                        assert db.get(DataRecord, agent_ids[DataRecord]).collection_id == agent_collection
+                        if agent_ids:
+                            assert db.get(Website, agent_ids[Website]).category_id == agent_category
+                            assert db.get(DataRecord, agent_ids[DataRecord]).collection_id == agent_collection
                 a.edit(y, "Preserve after revoke")
                 before = a.request("GET", "/api/v1/sync/status")
                 checked(core, "POST", f"/api/v1/clients/{a.client_id}/revoke", headers=headers)
@@ -394,8 +395,12 @@ def main():
             a.close()
             b.close()
             core_engine.dispose()
-    print("Real Node Agent Tool -> Local HTTP/SQLite -> manual sync -> PostgreSQL -> Replica, plus CRUD/conflict/offline/revoke regression: PASS")
+    prefix = "Local HTTP/SQLite" if skip_agent_tools else "Real Node Agent Tool -> Local HTTP/SQLite"
+    print(prefix + " -> manual sync -> PostgreSQL -> Replica, plus CRUD/conflict/offline/revoke regression: PASS")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-agent-tools", action="store_true", help="Run the full CRUD/sync regression without the OpenClaw Node bridge")
+    main(skip_agent_tools=parser.parse_args().skip_agent_tools)

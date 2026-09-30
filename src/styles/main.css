@@ -14,6 +14,9 @@
   --card-glow: rgba(132, 161, 255, .16);
   --radius-card: 18px;
   --glass-blur: 18px;
+  --glass-dialog-background: linear-gradient(145deg, rgba(248,251,255,.76), rgba(215,229,255,.66) 65%, rgba(243,219,239,.7));
+  --glass-popover-background: linear-gradient(145deg, rgba(248,251,255,.8), rgba(222,232,255,.72));
+  --glass-overlay-filter: blur(var(--glass-blur)) saturate(145%);
   --shadow-card: 0 13px 35px rgba(26, 41, 86, .12), inset 0 1px 0 rgba(255,255,255,.2);
   --shadow-card-hover: 0 17px 40px rgba(26, 41, 86, .18), inset 0 1px 0 rgba(255,255,255,.27);
   --glass-card-border: 1px solid rgba(255,255,255,.48);

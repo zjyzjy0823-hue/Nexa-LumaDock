@@ -5,6 +5,7 @@ import {
   MonitorUp, RefreshCw, ServerCog, ShieldCheck, Webhook, Workflow,
 } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
+import ActionButton from '../ui/ActionButton.vue'
 import type { AutomationIcon, AutomationItem } from '../../mock/automation'
 
 defineProps<{ automation: AutomationItem }>()
@@ -42,7 +43,7 @@ const icons: Record<AutomationIcon, Component> = {
       <span><MonitorUp :size="13" :stroke-width="1.8" />{{ automation.trigger }}</span>
       <span>上次执行 · {{ automation.lastExecution }}</span>
     </div>
-    <div class="automation-card__footer"><button type="button" @click="emit('select', automation.id)">查看</button><button type="button" @click="emit('edit', automation.id)">编辑</button><button type="button" @click="emit('test', automation.id)">试运行</button><button type="button" @click="emit('remove', automation.id)">删除</button></div>
+    <div class="automation-card__actions"><ActionButton variant="secondary" size="sm" @click="emit('select', automation.id)">查看</ActionButton><ActionButton variant="secondary" size="sm" @click="emit('edit', automation.id)">编辑</ActionButton><ActionButton size="sm" @click="emit('test', automation.id)">试运行</ActionButton><ActionButton variant="danger" size="sm" @click="emit('remove', automation.id)">删除</ActionButton></div>
   </GlassCard>
 </template>
 
@@ -67,5 +68,6 @@ const icons: Record<AutomationIcon, Component> = {
 .automation-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; padding-top: 12px; color: #4a5d79; font-size: 10px; font-weight: 570; }
 .automation-card__footer span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
 .automation-card__footer span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.automation-card__actions { display:flex; flex-wrap:wrap; gap:6px; padding-top:12px; }
 @media (max-width: 550px) { .automation-card { min-height: 165px; } }
 </style>

@@ -72,7 +72,7 @@ defineExpose({ closeMenus })
 .notification-dot { position: absolute; top: 8px; right: 7px; width: 10px; height: 10px; border-radius: 50%; background: #ff647d; box-shadow: 0 0 0 2px rgba(90,111,174,.8); }
 .topbar__new { border: 1px solid rgba(255,255,255,.38); border-radius: 15px; background: rgba(218,230,255,.23); box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 8px 20px rgba(22,37,84,.13); backdrop-filter: blur(16px); }
 .topbar__new:hover { transform: translateY(-2px); background: rgba(235,242,255,.31); box-shadow: 0 10px 24px rgba(22,37,84,.2); }
-.toolbar-popover { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: 280px; padding: 12px; color: #fff; border: 1px solid rgba(255,255,255,.28); border-radius: 18px; background: rgba(43,59,103,.92); box-shadow: 0 20px 45px rgba(20,31,67,.35), inset 0 1px 0 rgba(255,255,255,.12); backdrop-filter: blur(28px); }
+.toolbar-popover { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: 280px; padding: 12px; color: #fff; border: 1px solid rgba(255,255,255,.28); border-radius: 18px; background: rgba(43,59,103,.72); box-shadow: 0 20px 45px rgba(20,31,67,.35), inset 0 1px 0 rgba(255,255,255,.12); backdrop-filter: blur(28px); }
 .popover-heading { display: flex; justify-content: space-between; padding: 4px 7px 10px; color: rgba(255,255,255,.6); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .popover-heading span { color: #a7d9ff; }
 .notification-item { display: flex; align-items: flex-start; gap: 9px; padding: 11px 6px; border-top: 1px solid rgba(255,255,255,.14); }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FileText, Layers3 } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
+import ActionButton from '../ui/ActionButton.vue'
 import StatusBadge from '../ui/StatusBadge.vue'
 import type { CollectionRecord, DataCollection } from '../../types/data'
 
@@ -24,7 +25,7 @@ const emit = defineEmits<{ edit: [record: CollectionRecord]; remove: [record: Co
             <td><StatusBadge :label="record.status" :tone="record.statusTone" /></td>
             <td><span class="data-table__category">{{ record.category }}</span></td>
             <td><time>{{ record.updatedAt }}</time></td>
-            <td><button type="button" @click="emit('edit', record)">编辑</button> <button type="button" @click="emit('remove', record)">删除</button></td>
+            <td><div class="data-table__actions"><ActionButton variant="secondary" size="sm" @click="emit('edit', record)">编辑</ActionButton><ActionButton variant="danger" size="sm" @click="emit('remove', record)">删除</ActionButton></div></td>
           </tr>
         </tbody>
       </table>
@@ -54,6 +55,7 @@ tbody tr:hover { background:rgba(255,255,255,.45); }
 .data-table__file { display:grid; width:28px; height:28px; flex:none; place-items:center; border:1px solid rgba(124,153,215,.2); border-radius:8px; color:#748fe0; background:rgba(229,237,255,.72); }
 .data-table__category { display:inline-block; padding:6px 9px; border-radius:7px; color:#63718a; background:rgba(237,241,250,.76); white-space:nowrap; }
 time { color:#64758f; white-space:nowrap; }
+.data-table__actions { display:flex; gap:6px; }
 .data-table__empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; min-height:210px; color:#91a0b5; font-size:11px; }
 .data-table__empty strong { color:#526580; font-size:13px; }
 .data-table__footer { display:flex; justify-content:space-between; gap:12px; padding:13px 1px 2px; color:rgba(255,255,255,.78); font-size:10px; }

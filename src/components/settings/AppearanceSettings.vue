@@ -32,8 +32,8 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
 
         <div class="settings-card appearance-adjustments">
           <div class="settings-card__heading"><span>玻璃效果</span><SlidersHorizontal :size="16" /></div>
-          <label class="appearance-slider"><span><Droplets :size="15" />玻璃透明度<strong>{{ config.transparency }}%</strong></span><input :value="config.transparency" type="range" min="20" max="90" step="1" @input="update('transparency', Number(($event.target as HTMLInputElement).value))" /></label>
-          <label class="appearance-slider"><span><CircleHelp :size="15" />模糊强度<strong>{{ config.blur }}px</strong></span><input :value="config.blur" type="range" min="0" max="32" step="1" @input="update('blur', Number(($event.target as HTMLInputElement).value))" /></label>
+          <label class="appearance-slider"><span><Droplets :size="15" />玻璃透明度<strong>{{ config.transparency }}%</strong></span><input :value="config.transparency" type="range" min="20" max="90" step="1" @change="update('transparency', Number(($event.target as HTMLInputElement).value))" /></label>
+          <label class="appearance-slider"><span><CircleHelp :size="15" />模糊强度<strong>{{ config.blur }}px</strong></span><input :value="config.blur" type="range" min="0" max="32" step="1" @change="update('blur', Number(($event.target as HTMLInputElement).value))" /></label>
           <div class="appearance-color-heading">强调色</div>
           <div class="accent-options" role="group" aria-label="强调色">
             <button v-for="option in accentOptions" :key="option.id" type="button" class="accent-option"
@@ -62,7 +62,7 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
           <div class="appearance-preview__orb" />
           <div class="appearance-preview__panel"><div class="appearance-preview__top"><span class="appearance-preview__logo">✦</span><span class="appearance-preview__dots">•••</span></div><strong>Nexa</strong><small>Everything in its place.</small><div class="appearance-preview__line"><span /></div><div class="appearance-preview__tiles"><i /><i /><i /></div></div>
         </div>
-        <p class="appearance-preview-note">选择会立即呈现在预览中。当前设置仅保存在本次会话。</p>
+        <p class="appearance-preview-note">偏好会保存到当前账户，目前仅影响此预览；全局主题切换尚未提供。</p>
       </div>
     </div>
   </SettingsSection>
