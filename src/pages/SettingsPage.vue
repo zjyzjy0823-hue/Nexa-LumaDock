@@ -45,16 +45,16 @@ onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
 async function saveSettings(payload: Parameters<typeof store.update>[1]) {
   if (!auth.token) return
   saving.value = true
-  try { await store.update(auth.token, payload); emit('action', '设置已保存。') }
-  catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') }
+  try { await store.update(auth.token, payload); emit('action', '设置已保存。'); return true }
+  catch (error) { emit('action', error instanceof Error ? error.message : '保存失败'); return false }
   finally { saving.value = false }
 }
 async function updateProfile(value: UserProfile) {
   if (!auth.token) return
   try {
     if (value.username !== profile.value.username) auth.user = await settingsService.account(auth.token, { username: value.username })
-    await saveSettings({ timezone: value.timezone, language: value.language })
-  } catch (error) { emit('action', error instanceof Error ? error.message : '账户保存失败') }
+    return await saveSettings({ timezone: value.timezone, language: value.language })
+  } catch (error) { emit('action', error instanceof Error ? error.message : '账户保存失败'); return false }
 }
 async function updateAvatar(url: string) {
   if (!auth.token) return
@@ -109,9 +109,9 @@ async function importData(file: File) {
   try {
     const data = JSON.parse(await file.text()) as Record<string, unknown>
     if (data.product !== 'Nexa' || !data.profile || !data.appearance || !data.sync || !data.security || !data.notifications) throw new Error('Invalid settings file')
-    await updateProfile(data.profile as UserProfile)
-    await saveSettings({ appearance: data.appearance as AppearanceConfig, sync: data.sync as SyncConfig,
-      security: data.security as SecurityConfig, notifications: data.notifications as NotificationConfig })
+    if (!await updateProfile(data.profile as UserProfile)) throw new Error('Profile import failed')
+    if (!await saveSettings({ appearance: data.appearance as AppearanceConfig, sync: data.sync as SyncConfig,
+      security: data.security as SecurityConfig, notifications: data.notifications as NotificationConfig })) throw new Error('Settings import failed')
     emit('action', '设置已导入并保存。')
   } catch {
     emit('action', '无法读取设置文件，请使用 Nexa 导出的 JSON 文件。')
@@ -137,7 +137,7 @@ async function importData(file: File) {
 
     <div v-if="store.loaded" class="settings-layout">
       <SettingsNav :active="activeSection" :query="searchQuery" @select="selectSection" />
-      <div class="settings-content" :key="activeSection">
+      <div class="settings-content" :key="activeSection" :inert="saving">
         <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="updateProfile" @avatar="updateAvatar" @password="passwordOpen = true" />
         <AppearanceSettings v-else-if="activeSection === 'appearance'" :config="appearance" @update:config="saveSettings({ theme: $event.theme === 'auto' ? 'system' : $event.theme, appearance: $event })" />
         <SyncSettings v-else-if="activeSection === 'sync'" :config="syncConfig" :syncing="syncing" @update:config="saveSettings({ sync: $event })" @sync="syncNow" />

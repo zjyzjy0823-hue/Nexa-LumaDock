@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import AuthGate from './components/auth/AuthGate.vue'
+import ConfirmDialog from './components/ui/ConfirmDialog.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import TopSearchBar from './components/layout/TopSearchBar.vue'
 import DashboardPage from './pages/DashboardPage.vue'
@@ -82,6 +83,19 @@ function onLocationChange() {
   currentPage.value = pageFromLocation()
   window.scrollTo({ top: 0, behavior: 'instant' })
 }
+function onExternalLink(event: MouseEvent) {
+  if (!isTauri() || event.defaultPrevented || ![0, 1].includes(event.button)) return
+  const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null
+  if (!anchor) return
+  const url = new URL(anchor.href)
+  if (url.origin === window.location.origin) return
+  event.preventDefault()
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    showToast('只能在浏览器中打开 HTTP 或 HTTPS 网站。')
+    return
+  }
+  void invoke('open_external_url', { url: url.href }).catch(() => showToast('无法打开默认浏览器，请检查 Windows 默认应用设置。'))
+}
 async function restoreSession() {
   if (restoringSession) return
   restoringSession = true
@@ -116,6 +130,8 @@ async function create(kind: string) {
   pageRef.value?.openCreate?.()
 }
 onMounted(async () => {
+  document.addEventListener('click', onExternalLink)
+  document.addEventListener('auxclick', onExternalLink)
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
   if (isTauri()) {
@@ -126,6 +142,8 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  document.removeEventListener('click', onExternalLink)
+  document.removeEventListener('auxclick', onExternalLink)
   window.removeEventListener('popstate', onLocationChange)
   window.removeEventListener('hashchange', onLocationChange)
   if (toastTimer) clearTimeout(toastTimer)
@@ -134,9 +152,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="desktopError" class="auth-loading auth-loading--error" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></div>
+  <ConfirmDialog />
+  <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
   <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
-  <div v-else-if="authStartupError" class="auth-loading auth-loading--error" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></div>
+  <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></section></div>
   <AuthGate v-else-if="!auth.user" />
   <DashboardPage v-else-if="currentPage === 'Home'" @navigate="navigate" @create="create" />
   <div v-else class="workspace-shell nexa-shell">
@@ -145,15 +164,16 @@ onUnmounted(() => {
       <TopSearchBar v-if="currentPage !== 'API' && currentPage !== 'Settings'" :current-page="currentPage" @navigate="navigate" @create="create" />
       <div class="workspace-content"><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" @navigate="navigate" /></div>
     </main>
-    <Transition name="workspace-toast"><div v-if="toast" class="workspace-toast" role="status">✦ <span>{{ toast }}</span></div></Transition>
   </div>
+  <Transition name="workspace-toast"><div v-if="toast" class="workspace-toast" role="status">✦ <span>{{ toast }}</span></div></Transition>
 </template>
 
 <style scoped>
 .auth-loading { display:grid; min-height:100dvh; place-items:center; color:white; background:#1c2a5e url('/nexa-wallpaper.png') center/cover; font-size:14px; }
 .auth-loading--error { align-content:center; gap:14px; }
 .auth-loading--error p { margin:0; }
-.auth-loading--error button { padding:9px 16px; border:1px solid white; border-radius:9px; color:#30436c; background:white; cursor:pointer; }
+.auth-error-panel { display:grid; justify-items:center; gap:18px; width:min(520px,calc(100vw - 40px)); padding:28px; border:var(--glass-card-border); border-radius:var(--radius-xl); background:var(--glass-dialog-background); color:var(--text-primary); box-shadow:var(--shadow-glass); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); line-height:1.7; text-align:center; }
+.auth-loading--error button { padding:9px 16px; border:var(--glass-tile-border); border-radius:9px; color:#30436c; background:var(--glass-tile-background); cursor:pointer; }
 .workspace-main { min-width:0; }
 .workspace-content { min-width:0; padding-bottom:12px; }
 .workspace-toast { position:fixed; z-index:80; right:28px; bottom:25px; display:flex; gap:8px; align-items:center; max-width:min(360px,calc(100vw - 32px)); padding:12px 16px; border:1px solid rgba(255,255,255,.64); border-radius:14px; color:#314263; background:rgba(249,251,255,.9); box-shadow:0 15px 32px rgba(30,42,89,.22); backdrop-filter:blur(22px); font-size:12px; font-weight:630; }

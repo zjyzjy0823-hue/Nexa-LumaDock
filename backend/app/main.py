@@ -17,13 +17,14 @@ from .api.automation.routes import router as automation_router, v1_router as v1_
 from .api.data.routes import router as data_router, v1_router as v1_data_router
 from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router, runtime_router as device_runtime_router
 from .api.websites import router as websites_router
+from .api.agent_actions import router as agent_actions_router
 from .realtime.events import Event
 from .resources import resource_path
 from .config import load_runtime_config
 
 logger = logging.getLogger(__name__)
 runtime_config = load_runtime_config()
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.5"
 
 
 @asynccontextmanager
@@ -48,7 +49,7 @@ for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
     v1_data_router, v1_automation_router, settings.router, ledger.router,
-    workspace.router, clients.router, client_runtime.router, core.router, sync.router,
+    workspace.router, clients.router, client_runtime.router, core.router, sync.router, agent_actions_router,
 ):
     app.include_router(router)
 

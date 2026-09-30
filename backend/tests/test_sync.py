@@ -140,6 +140,8 @@ def test_validation_isolation_and_independent_batch(client):
 def test_category_tombstone_and_core_ordinary_ledger(client, monkeypatch):
     app.dependency_overrides[require_core_mode] = lambda: None
     monkeypatch.setattr(ledger, "runtime_config", replace(ledger.runtime_config, mode="core"))
+    from app.sync import publisher
+    monkeypatch.setattr(publisher, "runtime_config", replace(publisher.runtime_config, mode="core"))
     auth = user(client, "sync_web")
     credential = enroll(client, auth)
     category = client.post("/api/v1/ledger/categories", headers=auth,

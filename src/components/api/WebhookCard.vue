@@ -53,7 +53,7 @@ onUnmounted(() => {
 .webhook-card__title span { color:var(--text-secondary); font-size:9px; }
 .webhook-card__more-wrap { position:relative; flex:none; }
 .webhook-card__more { width:24px; height:24px; border-radius:7px; }
-.webhook-card__menu { position:absolute; z-index:10; top:29px; right:0; min-width:142px; padding:5px; border:var(--glass-tile-border); border-radius:10px; background:rgba(251,252,255,.97); box-shadow:0 10px 22px rgba(31,46,88,.2); }
+.webhook-card__menu { position:absolute; z-index:10; top:29px; right:0; min-width:142px; padding:5px; border:var(--glass-tile-border); border-radius:10px; background:var(--glass-popover-background); box-shadow:0 10px 22px rgba(31,46,88,.2);  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .webhook-card__menu button { display:flex; align-items:center; gap:7px; width:100%; padding:7px; border:0; border-radius:7px; color:var(--text-primary); background:transparent; font-size:10px; text-align:left; white-space:nowrap; }
 .webhook-card__menu button:hover { background:rgba(109,140,224,.12); }
 .webhook-card__endpoint { display:flex; align-items:center; gap:6px; min-width:0; margin-top:11px; padding:7px 8px; border:1px solid rgba(143,165,208,.19); border-radius:8px; background:rgba(255,255,255,.42); }

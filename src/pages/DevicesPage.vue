@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity, Battery, Check, ChevronDown, CircleAlert, Clock3, Cpu,
@@ -126,7 +127,7 @@ async function saveDevice() {
 
 async function removeDevice() {
   const item = selectedDevice.value
-  if (!auth.token || !item || !window.confirm(`删除「${item.name}」？`)) return
+  if (!auth.token || !item || !(await confirmAction(`删除「${item.name}」？`))) return
   try { await store.remove(auth.token, item.id); emit('action', '设备已删除。') }
   catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
 }
@@ -143,7 +144,7 @@ async function generateToken() {
 }
 async function revokeToken() {
   const item = selectedDevice.value
-  if (!auth.token || !item?.tokenLast4 || tokenBusy.value || !window.confirm(`撤销「${item.name}」的 Device Token？当前客户端将无法继续上报。`)) return
+  if (!auth.token || !item?.tokenLast4 || tokenBusy.value || !(await confirmAction(`撤销「${item.name}」的 Device Token？当前客户端将无法继续上报。`))) return
   tokenBusy.value = true
   tokenError.value = ''
   try {
@@ -353,7 +354,7 @@ async function copyToken() {
 .detail-trend svg { width: 100%; height: 35px; }
 .detail-trend polyline { fill: none; stroke: #879eec; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .device-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(33,49,92,.27); backdrop-filter: blur(9px); }
-.device-dialog { width: min(100%, 470px); padding: 25px; border: 1px solid rgba(255,255,255,.86); border-radius: 25px; background: linear-gradient(145deg, rgba(251,253,255,.98), rgba(236,242,255,.97)); box-shadow: 0 25px 75px rgba(26,44,97,.25), inset 0 1px 0 #fff; }
+.device-dialog { width: min(100%, 470px); padding: 25px; border: 1px solid rgba(255,255,255,.86); border-radius: 25px; background:var(--glass-dialog-background); box-shadow: 0 25px 75px rgba(26,44,97,.25), inset 0 1px 0 #fff;  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); max-height:calc(100dvh - 40px); overflow-y:auto; }
 .device-dialog__header { display: flex; justify-content: space-between; align-items: start; }
 .device-dialog__header span { color: #8a9ad0; font-size: 10px; font-weight: 740; letter-spacing: .16em; }
 .device-dialog__header h2 { margin: 6px 0 5px; color: #263653; font-size: 23px; letter-spacing: -.035em; }
@@ -371,7 +372,7 @@ async function copyToken() {
 .device-form-error { margin: 14px 0 0; color: #b73e55; font-size: 12px; }
 .device-token-mask { margin: 10px 0 0; color: #586781; font-size: 11px; }
 .device-token-warning { margin: 20px 0 8px; color: #53627e; font-size: 12px; line-height: 1.5; }
-.device-token-value { width: 100%; padding: 10px; border: 1px solid rgba(131,151,197,.35); border-radius: 10px; background: white; color: #263653; font-size: 12px; }
+.device-token-value { width: 100%; padding: 10px; border: 1px solid rgba(131,151,197,.35); border-radius: 10px; background: rgba(255,255,255,.68); color: #263653; font-size: 12px; }
 @media (max-width: 1180px) { .device-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .sync-note { display: none; } }
 @media (max-width: 850px) { .device-stats { grid-template-columns: repeat(2, minmax(0,1fr)); } .detail-panel { grid-template-columns: 1fr; } .detail-panel__resources { padding: 20px 0 0; border-left: 0; border-top: 1px solid rgba(130,150,190,.17); } }
 @media (max-width: 610px) { .devices-page { gap: 18px; } .device-grid { grid-template-columns: 1fr; } .detail-meta { grid-template-columns: repeat(2, minmax(0,1fr)); } .device-dialog__fields { grid-template-columns: 1fr; } }

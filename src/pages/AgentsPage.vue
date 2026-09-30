@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import {
@@ -36,6 +37,9 @@ const newAgentName = ref('')
 const newAgentRole = ref('')
 const newAgentDescription = ref('')
 const newAgentModel = ref('未配置')
+const newAgentScopes = ref<string[]>([])
+const scopeDomains = [{ id: 'ledger', label: 'Ledger' }, { id: 'websites', label: 'Websites' }, { id: 'data', label: 'Data' }]
+const scopeEffects = [{ id: 'read', label: '读取' }, { id: 'write', label: '新增/修改' }, { id: 'delete', label: '删除（破坏性）' }]
 const newTaskTitle = ref('')
 const newTaskDescription = ref('')
 const saving = ref(false)
@@ -51,6 +55,7 @@ function openCreate() {
   newAgentRole.value = ''
   newAgentDescription.value = ''
   newAgentModel.value = '未配置'
+  newAgentScopes.value = []
   formError.value = ''
   createAgentOpen.value = true
 }
@@ -62,6 +67,7 @@ function openEdit() {
   newAgentRole.value = item.role
   newAgentDescription.value = item.description
   newAgentModel.value = item.model
+  newAgentScopes.value = [...(item.dataScopes ?? [])]
   formError.value = ''
   createAgentOpen.value = true
 }
@@ -180,7 +186,7 @@ async function saveAgent() {
     const existing = agentDialogMode.value === 'edit' ? selectedAgent.value : undefined
     const data = { name, role: newAgentRole.value.trim() || '自定义助理', description: newAgentDescription.value.trim(),
       model: newAgentModel.value.trim() || '未配置', workspace: existing?.workspace ?? '个人工作区',
-      avatar: existing?.avatar ?? 'spark' as const }
+      avatar: existing?.avatar ?? 'spark' as const, dataScopes: [...newAgentScopes.value] }
     const item = agentDialogMode.value === 'edit' && selectedId.value
       ? await store.update(auth.token, selectedId.value, data)
       : await store.create(auth.token, data)
@@ -194,7 +200,7 @@ async function saveAgent() {
 
 async function removeAgent() {
   const item = selectedAgent.value
-  if (!auth.token || !item || !window.confirm(`删除「${item.name}」及其任务？`)) return
+  if (!auth.token || !item || !(await confirmAction(`删除「${item.name}」及其任务？`))) return
   try { await store.remove(auth.token, item.id); showToast('智能体已删除。') }
   catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
 }
@@ -218,7 +224,7 @@ async function createTask() {
 
 async function removeTask(task: AgentTask) {
   const item = selectedAgent.value
-  if (!auth.token || !item || !window.confirm(`删除任务「${task.title}」？`)) return
+  if (!auth.token || !item || !(await confirmAction(`删除任务「${task.title}」？`))) return
   try { await store.removeTask(auth.token, item.id, task.id); showToast('任务已删除。') }
   catch (error) { showToast(error instanceof Error ? error.message : '删除失败') }
 }
@@ -323,6 +329,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
           </div>
           <div class="runtime-token-panel">
             <strong>Agent Token</strong>
+            <small>Agent Token 的数据权限由设置中的 Scope 控制。{{ selectedAgent.dataScopes?.length ? `已授权 ${selectedAgent.dataScopes.length} 项` : '无数据权限' }}</small>
             <code>{{ revealedToken || (selectedAgent.tokenLast4 ? `na_live_••••${selectedAgent.tokenLast4}` : '尚未生成') }}</code>
             <button v-if="revealedToken" type="button" @click="copyAgentToken">复制</button>
             <button type="button" @click="generateAgentToken">{{ selectedAgent.tokenLast4 ? '重新生成' : '生成 Token' }}</button>
@@ -388,11 +395,21 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
     </div>
 
     <div v-if="createAgentOpen || createTaskOpen" class="agents-modal-backdrop" @click.self="createAgentOpen = false; createTaskOpen = false">
-      <form class="agents-modal" @submit.prevent="createAgentOpen ? saveAgent() : createTask()">
+      <form class="agents-modal" role="dialog" aria-modal="true" aria-label="智能体或任务" @keydown.esc="createAgentOpen = false; createTaskOpen = false" @submit.prevent="createAgentOpen ? saveAgent() : createTask()">
         <div class="agents-modal__head"><span class="agents-modal__icon"><Bot v-if="createAgentOpen" :size="21" /><Zap v-else :size="21" /></span><button type="button" aria-label="关闭" @click="createAgentOpen = false; createTaskOpen = false"><X :size="18" /></button></div>
         <h2>{{ createAgentOpen ? agentDialogMode === 'edit' ? '编辑智能体' : '添加智能体' : '创建新任务' }}</h2>
         <p>{{ createAgentOpen ? '保存智能体资料，运行连接可稍后接入。' : `将任务加入 ${selectedAgent?.name ?? '智能体'} 的队列。` }}</p>
-        <template v-if="createAgentOpen"><label>名称<input v-model="newAgentName" autofocus maxlength="32" placeholder="例如：Nova" required /></label><label>角色<input v-model="newAgentRole" maxlength="48" placeholder="例如：写作助理" /></label><label>模型标识<input v-model="newAgentModel" maxlength="120" placeholder="例如：本地模型" /></label><label>简介<input v-model="newAgentDescription" maxlength="500" placeholder="这个智能体负责什么" /></label></template>
+        <template v-if="createAgentOpen"><label>名称<input v-model="newAgentName" autofocus maxlength="32" placeholder="例如：Nova" required /></label><label>角色<input v-model="newAgentRole" maxlength="48" placeholder="例如：写作助理" /></label><label>模型标识<input v-model="newAgentModel" maxlength="120" placeholder="例如：本地模型" /></label><label>简介<input v-model="newAgentDescription" maxlength="500" placeholder="这个智能体负责什么" /></label>
+          <fieldset class="data-scopes"><legend>数据访问权限</legend>
+            <div v-for="domain in scopeDomains" :key="domain.id" class="data-scopes__row">
+              <strong>{{ domain.label }}</strong>
+              <label v-for="effect in scopeEffects" :key="effect.id" :class="{ 'data-scopes__delete': effect.id === 'delete' }">
+                <input v-model="newAgentScopes" type="checkbox" :value="`${domain.id}:${effect.id}`" />{{ effect.label }}
+              </label>
+            </div>
+            <small>{{ newAgentScopes.length ? '保存后立即生效，无需重新生成 Token。删除权限需单独开启。' : '无数据权限。默认全部关闭，请按需授权。' }}</small>
+          </fieldset>
+        </template>
         <template v-else><label>任务名称<input v-model="newTaskTitle" autofocus maxlength="80" placeholder="例如：整理本周市场动态" required /></label><label>任务说明<input v-model="newTaskDescription" maxlength="500" placeholder="补充任务内容" /></label></template>
         <p v-if="formError" class="agent-form-error" role="alert">{{ formError }}</p>
         <div class="agents-modal__actions"><ActionButton variant="secondary" type="button" :disabled="saving" @click="createAgentOpen = false; createTaskOpen = false">取消</ActionButton><ActionButton type="submit" :disabled="saving"><Plus :size="15" />{{ saving ? '保存中…' : createAgentOpen ? agentDialogMode === 'edit' ? '保存修改' : '添加智能体' : '创建任务' }}</ActionButton></div>
@@ -405,7 +422,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 <style scoped>
 .runtime-token-panel { display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin:15px 0; padding:12px; border:1px solid var(--agent-tile-border); border-radius:12px; background:var(--agent-tile-bg); color:#435570; font-size:11px; }
 .runtime-token-panel code { max-width:100%; overflow-wrap:anywhere; }
-.runtime-token-panel button { padding:5px 9px; border:1px solid #cbd8ef; border-radius:7px; background:#f3f6ff; color:#435570; cursor:pointer; }
+.runtime-token-panel button { padding:5px 9px; border:1px solid rgba(145,169,216,.4); border-radius:7px; background:rgba(243,246,255,.65); color:#435570; cursor:pointer; }
 .agents-page { width:100%; min-width:0; padding-bottom:28px; color:#263653; --agent-tile-bg:var(--glass-tile-background); --agent-tile-border:rgba(255,255,255,.68); --agent-tile-shadow:var(--glass-tile-shadow); }
 .agent-state { display:flex; align-items:center; justify-content:center; gap:10px; min-height:220px; padding:28px; border:1px solid rgba(255,255,255,.55); border-radius:18px; background:rgba(218,229,255,.3); color:white; font-size:13px; text-align:center; }
 .agent-state button { padding:6px 11px; border:1px solid rgba(255,255,255,.55); border-radius:8px; background:rgba(255,255,255,.25); color:white; }
@@ -581,7 +598,7 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 .usage-chart__bar:nth-child(2n) span { background:linear-gradient(180deg,#90aaf2,#81c6e8); }
 .usage-chart__bar small { flex:none; color:#596882; font-size:9px; }
 .agents-modal-backdrop { position:fixed; z-index:100; inset:0; display:grid; place-items:center; padding:16px; background:rgba(30,43,79,.36); backdrop-filter:blur(8px); }
-.agents-modal { width:min(100%,410px); padding:24px; border:1px solid rgba(255,255,255,.86); border-radius:23px; background:linear-gradient(145deg,#fbfcff,#eef3ff); box-shadow:0 25px 80px rgba(37,51,95,.28); }
+.agents-modal { width:min(100%,410px); padding:24px; border:1px solid rgba(255,255,255,.86); border-radius:23px; background:var(--glass-dialog-background); box-shadow:0 25px 80px rgba(37,51,95,.28);  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .agents-modal__head { display:flex; align-items:center; justify-content:space-between; }
 .agents-modal__icon { display:grid; width:42px; height:42px; place-items:center; border-radius:13px; color:#6c81da; background:#e7edff; }
 .agents-modal__head button { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:8px; color:#94a2b7; background:transparent; }
@@ -589,10 +606,19 @@ onUnmounted(() => { if (toastTimer) clearTimeout(toastTimer); if (pollTimer) cle
 .agents-modal h2 { margin:16px 0 5px; color:#2d3e5e; font-size:20px; }
 .agents-modal p { margin:0 0 23px; color:#8795aa; font-size:11px; }
 .agents-modal label { display:block; margin-bottom:14px; color:#647590; font-size:11px; font-weight:700; }
-.agents-modal input { display:block; width:100%; height:41px; margin-top:7px; padding:0 12px; border:1px solid #d9e2f2; border-radius:11px; outline:0; background:white; color:#344664; font-size:12px; }
+.agents-modal input { display:block; width:100%; height:41px; margin-top:7px; padding:0 12px; border:1px solid #d9e2f2; border-radius:11px; outline:0; background:rgba(255,255,255,.55); color:#344664; font-size:12px; }
 .agents-modal input:focus { border-color:#98aaeb; box-shadow:0 0 0 3px rgba(133,154,235,.13); }
 .agents-modal input::placeholder { color:#aeb9c8; }
 .agents-modal__actions { display:flex; justify-content:flex-end; gap:8px; margin-top:23px; }
+.agents-modal { max-height:90vh; overflow-y:auto; }
+.data-scopes { margin:14px 0; padding:12px; border:1px solid #d9e2f2; border-radius:11px; color:#344664; }
+.data-scopes legend { font-size:12px; font-weight:700; }
+.data-scopes__row { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.data-scopes__row strong { width:100%; font-size:11px; }
+.data-scopes__row label { display:flex; align-items:center; gap:4px; margin:0; font-weight:400; }
+.data-scopes__row input { width:14px; height:14px; margin:0; padding:0; }
+.data-scopes__delete { color:#b43f55 !important; }
+.data-scopes small { font-size:10px; line-height:1.5; }
 .agent-form-error { margin:0; color:#bd4560; font-size:11px; }
 .agents-toast { position:fixed; z-index:110; right:27px; bottom:25px; display:flex; align-items:center; gap:9px; padding:11px 15px; border:1px solid rgba(255,255,255,.5); border-radius:13px; background:rgba(49,69,112,.9); color:white; box-shadow:0 12px 35px rgba(32,44,81,.22); backdrop-filter:blur(18px); font-size:11px; font-weight:660; }
 .agents-toast svg { color:#8ee1be; }

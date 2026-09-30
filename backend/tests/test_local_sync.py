@@ -217,7 +217,8 @@ def test_queue_failure_rolls_back_business_and_status_isolated(client, users, mo
     def fail_queue(*_args):
         raise RuntimeError("simulated queue failure")
 
-    monkeypatch.setattr(ledger, "record_local_upsert", fail_queue)
+    from app.sync import publisher
+    monkeypatch.setattr(publisher, "record_local_upsert", fail_queue)
     with pytest.raises(RuntimeError, match="simulated queue failure"):
         client.post(f"{LEDGER}/transactions", headers=a, json=transaction_data())
     iterator, db = db_session()

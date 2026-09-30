@@ -1,0 +1,30 @@
+{
+  "name": "@nexa/openclaw-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed Nexa Local data tools for OpenClaw",
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "validate": "openclaw plugins validate --root . --entry dist/index.js --json",
+    "plugin:build": "openclaw plugins build --root . --entry dist/index.js --check",
+    "test": "node --test tests/*.test.mjs",
+    "schemas": "py ../../../../scripts/export-agent-tools.py"
+  },
+  "dependencies": {
+    "typebox": "^1.1.18"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.2",
+    "openclaw": "2026.9.6"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.9.6"
+  }
+}

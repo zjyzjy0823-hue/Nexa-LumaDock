@@ -185,7 +185,7 @@ const navItems = [
 .user__details .user__offline { background: #a9b4c9; box-shadow: none; }
 .user__chevron { margin-left: auto; color: rgba(255,255,255,.67); }
 .user__chevron--open { transform:rotate(-90deg); }
-.account-menu { position:fixed; z-index:200; width:220px; padding:8px; color:#354b71; border:1px solid rgba(255,255,255,.75); border-radius:14px; background:rgba(249,252,255,.96); box-shadow:0 15px 36px rgba(26,39,84,.24); backdrop-filter:blur(24px); }
+.account-menu { position:fixed; z-index:200; width:220px; padding:8px; color:#354b71; border:1px solid rgba(255,255,255,.75); border-radius:14px; background:var(--glass-popover-background); box-shadow:0 15px 36px rgba(26,39,84,.24); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .account-menu__identity { display:grid; gap:3px; padding:8px 10px 10px; border-bottom:1px solid rgba(130,151,195,.2); }.account-menu__identity strong { font-size:13px; }.account-menu__identity small { color:#8493ae; font-size:11px; }
 .account-menu button { display:flex; align-items:center; gap:9px; width:100%; margin-top:5px; padding:9px 10px; color:#ad5361; border:0; border-radius:8px; background:transparent; font-size:12px; text-align:left; cursor:pointer; }.account-menu button:hover { background:#f8edf0; }
 @media (max-width: 1279px) {

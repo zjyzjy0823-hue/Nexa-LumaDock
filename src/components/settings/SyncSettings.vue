@@ -26,7 +26,7 @@ function update<K extends keyof SyncConfig>(key: K, value: SyncConfig[K]) {
           <span class="sync-mode__check"><CheckCircle2 :size="15" /></span><strong>{{ mode.label }}</strong><small>{{ mode.detail }}</small>
         </button>
       </div>
-      <label class="settings-field sync-server"><span>服务器地址</span><Input :model-value="config.serverUrl" type="url" aria-label="服务器地址" placeholder="https://nexa.example.com" @update:model-value="update('serverUrl', $event)" /></label>
+      <label class="settings-field sync-server"><span>服务器地址</span><Input :model-value="config.serverUrl" type="url" aria-label="服务器地址" placeholder="https://nexa.example.com" @change="update('serverUrl', ($event.target as HTMLInputElement).value)" /></label>
     </div>
     <div class="settings-card">
       <SettingRow label="自动同步" description="有更新时自动保持数据一致"><Toggle :model-value="config.automatic" aria-label="自动同步" @update:model-value="update('automatic', $event)" /></SettingRow>

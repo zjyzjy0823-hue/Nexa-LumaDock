@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, AlertCircle, CheckCircle2, Plus, Sparkles, X, Zap } from 'lucide-vue-next'
 import ActionButton from '../components/ui/ActionButton.vue'
@@ -62,7 +63,7 @@ function closeCreate() { createOpen.value = false }
 
 async function toggleAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (item && auth.token) { try { await store.update(auth.token, id, { enabled: !item.enabled }) } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') } } }
 function editAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (!item) return; editingId.value = id; newName.value = item.name; newDescription.value = item.description; newTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item.triggerType)?.id ?? 'device'; createOpen.value = true }
-async function removeAutomation(id: string) { if (!auth.token || !confirm('删除此工作流及其执行历史？')) return; try { await store.remove(auth.token, id); emit('action', '工作流已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeAutomation(id: string) { if (!auth.token || !(await confirmAction('删除此工作流及其执行历史？'))) return; try { await store.remove(auth.token, id); emit('action', '工作流已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 async function runTest(id: string) { if (!auth.token) return; try { await store.testRun(auth.token, id); emit('action', '测试执行已记录，未运行任何动作。') } catch (error) { emit('action', error instanceof Error ? error.message : '试运行失败') } }
 
 function selectTrigger(id: string) {

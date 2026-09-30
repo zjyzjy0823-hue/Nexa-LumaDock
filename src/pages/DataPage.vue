@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Bell, Plus, Search, X } from 'lucide-vue-next'
 import CollectionCard from '../components/data/CollectionCard.vue'
@@ -87,8 +88,8 @@ async function createCollection() {
 }
 function openEditCollection(item: DataCollection) { dialogKind.value = 'collection'; editingCollection.value = item; draftName.value = item.name; draftDescription.value = item.description; createOpen.value = true }
 function openRecord(item?: CollectionRecord) { dialogKind.value = 'record'; editingRecord.value = item ?? null; draftName.value = item?.name ?? ''; draftStatus.value = item?.status ?? 'active'; draftCategory.value = item?.category ?? ''; createOpen.value = true }
-async function removeCollection(item: DataCollection) { if (!auth.token || !confirm(`删除集合「${item.name}」及其记录？`)) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
-async function removeRecord(item: CollectionRecord) { if (!auth.token || !confirm(`删除记录「${item.name}」？`)) return; try { await store.removeRecord(auth.token, item.id); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeCollection(item: DataCollection) { if (!auth.token || !(await confirmAction(`删除集合「${item.name}」及其记录？`))) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeRecord(item: CollectionRecord) { if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return; try { await store.removeRecord(auth.token, item.id); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 
 async function copyCollectionName(collection: DataCollection) {
   try {
@@ -180,7 +181,7 @@ onUnmounted(() => {
 .data-page__notification { position:relative; display:grid; width:39px; height:39px; place-items:center; border:1px solid rgba(255,255,255,.58); border-radius:11px; color:#fff; background:rgba(255,255,255,.22); box-shadow:inset 0 1px 0 rgba(255,255,255,.18); backdrop-filter:blur(12px); transition:background .2s,transform .2s; }
 .data-page__notification:hover { transform:translateY(-2px); background:rgba(255,255,255,.32); }
 .data-page__notification > span { position:absolute; top:8px; right:8px; width:6px; height:6px; border:1px solid #fff; border-radius:50%; background:#f2acac; }
-.data-page__notifications { position:absolute; top:47px; right:0; z-index:20; width:280px; padding:15px; border:1px solid rgba(255,255,255,.9); border-radius:14px; color:#41516c; background:rgba(249,251,255,.97); box-shadow:0 18px 40px rgba(29,44,91,.22); backdrop-filter:blur(20px); }
+.data-page__notifications { position:absolute; top:47px; right:0; z-index:20; width:280px; padding:15px; border:1px solid rgba(255,255,255,.9); border-radius:14px; color:#41516c; background:var(--glass-popover-background); box-shadow:0 18px 40px rgba(29,44,91,.22);   backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .data-page__notifications > strong { display:block; margin-bottom:7px; font-size:12px; }
 .data-page__notifications > div { display:grid; grid-template-columns:7px minmax(0,1fr) auto; align-items:center; gap:8px; min-height:37px; border-top:1px solid rgba(137,159,202,.13); font-size:10px; }
 .data-page__notification-dot { width:6px; height:6px; border-radius:50%; background:#8199ed; }

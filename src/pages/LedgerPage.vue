@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
+import Modal from '../components/ui/Modal.vue'
+import ActionButton from '../components/ui/ActionButton.vue'
+import SectionContainer from '../components/ui/SectionContainer.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useLedgerStore } from '../stores/ledger'
 import { useAuthStore } from '../stores/auth'
@@ -61,17 +65,17 @@ async function saveTransaction() {
     transactionOpen.value = false; emit('action', '交易已保存。')
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
-async function removeTransaction(id: string) { if (!auth.token || !confirm('删除这笔交易？')) return; try { await store.removeTransaction(auth.token, id) } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeTransaction(id: string) { if (!auth.token || !(await confirmAction('删除这笔交易？'))) return; try { await store.removeTransaction(auth.token, id) } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 function openCategory(item?: LedgerCategory) { editingCategory.value = item ?? null; categoryDraft.value = { name: item?.name ?? '', type: item?.type ?? 'expense', icon: item?.icon ?? 'shopping' }; formError.value = ''; categoryOpen.value = true }
 async function saveCategory() { if (!auth.token) return; try { if (editingCategory.value) await store.updateCategory(auth.token, editingCategory.value.id, categoryDraft.value); else await store.createCategory(auth.token, categoryDraft.value); categoryOpen.value = false } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' } }
-async function removeCategory(id: string) { if (!auth.token || !confirm('删除此分类？相关交易将保留为未分类。')) return; try { await store.removeCategory(auth.token, id) } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeCategory(id: string) { if (!auth.token || !(await confirmAction('删除此分类？相关交易将保留为未分类。'))) return; try { await store.removeCategory(auth.token, id) } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 function changeMonth() { if (auth.token) store.load(auth.token, true).catch(() => {}) }
 </script>
 
 <template>
   <div class="ledger-page">
     <h1 class="visually-hidden">账本</h1>
-    <div><label>月份 <input v-model="store.month" type="month" @change="changeMonth" /></label> <button type="button" @click="openTransaction()">新增交易</button> <button type="button" @click="openCategory()">新增分类</button></div>
+    <div class="ledger-toolbar"><label>月份 <input v-model="store.month" type="month" @change="changeMonth" /></label> <ActionButton @click="openTransaction()">新增交易</ActionButton> <ActionButton variant="secondary" @click="openCategory()">新增分类</ActionButton></div>
     <p v-if="store.loading" role="status">正在加载账本…</p>
     <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
 
@@ -89,9 +93,9 @@ function changeMonth() { if (auth.token) store.load(auth.token, true).catch(() =
       <InsightCard :insights="ledgerInsights" />
     </section>
     <div v-if="store.loaded && !currentTransactions.length">本月还没有交易，添加一笔开始记账。</div>
-    <section v-if="store.loaded"><h2>分类</h2><div v-for="item in store.categories" :key="item.id">{{ item.name }} · {{ item.type === 'income' ? '收入' : '支出' }} <button type="button" @click="openCategory(item)">编辑</button> <button type="button" @click="removeCategory(item.id)">删除</button></div></section>
-    <Teleport to="body"><div v-if="transactionOpen" class="ledger-modal-backdrop"><div class="ledger-modal" role="dialog" aria-modal="true"><h2>{{ editingTransaction ? '编辑' : '新增' }}交易</h2><form @submit.prevent="saveTransaction"><label>类型<select v-model="draft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><label>金额<input v-model="draft.amount" type="number" min="0.01" step="0.01" required /></label><label>分类<select v-model="draft.category_id"><option value="">未分类</option><option v-for="item in store.categories.filter(entry => entry.type === draft.type)" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label>描述<input v-model="draft.description" required /></label><label>日期<input v-model="draft.occurred_at" type="date" required /></label><label>商户<input v-model="draft.merchant" /></label><label>备注<input v-model="draft.note" /></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="transactionOpen = false">取消</button><button type="submit">保存</button></form></div></div></Teleport>
-    <Teleport to="body"><div v-if="categoryOpen" class="ledger-modal-backdrop"><div class="ledger-modal" role="dialog" aria-modal="true"><h2>{{ editingCategory ? '编辑' : '新增' }}分类</h2><form @submit.prevent="saveCategory"><label>名称<input v-model="categoryDraft.name" required /></label><label>类型<select v-model="categoryDraft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="categoryOpen = false">取消</button><button type="submit">保存</button></form></div></div></Teleport>
+    <SectionContainer v-if="store.loaded" class="ledger-categories" title="分类"><div v-for="item in store.categories" :key="item.id" class="ledger-category-row">{{ item.name }} · {{ item.type === 'income' ? '收入' : '支出' }} <button type="button" @click="openCategory(item)">编辑</button> <button type="button" @click="removeCategory(item.id)">删除</button></div></SectionContainer>
+    <Modal :open="transactionOpen" :title="`${editingTransaction ? '编辑' : '新增'}交易`" @close="transactionOpen = false"><div class="ledger-form"><form @submit.prevent="saveTransaction"><label>类型<select v-model="draft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><label>金额<input v-model="draft.amount" type="number" min="0.01" step="0.01" required /></label><label>分类<select v-model="draft.category_id"><option value="">未分类</option><option v-for="item in store.categories.filter(entry => entry.type === draft.type)" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label>描述<input v-model="draft.description" required /></label><label>日期<input v-model="draft.occurred_at" type="date" required /></label><label>商户<input v-model="draft.merchant" /></label><label>备注<input v-model="draft.note" /></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="transactionOpen = false">取消</button><button type="submit">保存</button></form></div></Modal>
+    <Modal :open="categoryOpen" :title="`${editingCategory ? '编辑' : '新增'}分类`" @close="categoryOpen = false"><div class="ledger-form"><form @submit.prevent="saveCategory"><label>名称<input v-model="categoryDraft.name" required /></label><label>类型<select v-model="categoryDraft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="categoryOpen = false">取消</button><button type="submit">保存</button></form></div></Modal>
   </div>
 </template>
 
@@ -99,9 +103,17 @@ function changeMonth() { if (auth.token) store.load(auth.token, true).catch(() =
 .ledger-page { --ledger-tile-background:linear-gradient(140deg,rgba(250,251,255,.56),rgba(235,239,255,.34)); --ledger-tile-hover-background:linear-gradient(140deg,rgba(250,251,255,.68),rgba(235,239,255,.47)); min-width:0; padding:0 2px 28px; }
 .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .ledger-page__stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin:4px 0 16px; }
-.ledger-modal-backdrop { position:fixed; inset:0; z-index:120; display:grid; place-items:center; background:rgba(24,39,83,.4); }
-.ledger-modal { width:min(420px,calc(100vw - 32px)); max-height:90vh; overflow:auto; padding:24px; border:1px solid rgba(255,255,255,.7); border-radius:16px; background:#f3f6ff; color:#263b5d; }
-.ledger-modal form { display:grid; gap:10px; }.ledger-modal label { display:grid; gap:4px; }.ledger-modal input,.ledger-modal select { min-height:36px; padding:6px; }
+.ledger-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px; padding:14px; border:var(--glass-card-border); border-radius:var(--radius-card); background:var(--glass-card-background); box-shadow:var(--shadow-card); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); color:white; }
+.ledger-toolbar label { display:flex; align-items:center; gap:8px; font-size:12px; }
+.ledger-toolbar input,.ledger-form input,.ledger-form select { min-width:0; width:100%; min-height:38px; padding:8px 11px; border:1px solid rgba(131,151,197,.3); border-radius:10px; background:rgba(255,255,255,.55); color:var(--text-primary); font:inherit; font-size:12px; }
+.ledger-toolbar input { width:155px; }
+.ledger-form form { display:grid; gap:12px; }
+.ledger-form label { display:grid; gap:6px; font-size:12px; }
+.ledger-form button,.ledger-category-row button { min-height:34px; padding:7px 12px; border:1px solid rgba(255,255,255,.6); border-radius:9px; color:var(--text-primary); background:rgba(255,255,255,.48); font:inherit; font-size:12px; }
+.ledger-form button[type="submit"] { color:white; background:var(--accent-deep); }
+.ledger-form p[role="alert"] { color:#b74460; }
+.ledger-category-row { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); font-size:12px; }
+.ledger-category-row:last-child { border-bottom:0; }
 .ledger-page__charts,.ledger-page__details { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(310px,1fr); gap:16px; margin-bottom:16px; }
 @media (max-width:1250px) { .ledger-page__stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .ledger-page__charts,.ledger-page__details { grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr); } }
 @media (max-width:1050px) { .ledger-page__charts,.ledger-page__details { grid-template-columns:1fr; } }

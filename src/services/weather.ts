@@ -50,10 +50,16 @@ export async function getLocationWeather(force = false): Promise<LocationWeather
       cityUrl.searchParams.set('longitude', String(coordinates.longitude))
     }
     cityUrl.searchParams.set('localityLanguage', 'zh')
-    const cityResponse = await fetch(cityUrl)
-    if (!cityResponse.ok) throw new Error('城市服务暂时不可用')
-    const place = await cityResponse.json() as { city?: string; locality?: string; principalSubdivision?: string; latitude?: number; longitude?: number }
-    const city = place.city || place.locality || place.principalSubdivision
+    let place: { city?: string; locality?: string; principalSubdivision?: string; latitude?: number; longitude?: number } = {}
+    try {
+      const cityResponse = await fetch(cityUrl)
+      if (!cityResponse.ok) throw new Error('城市服务暂时不可用')
+      place = await cityResponse.json()
+    } catch (error) {
+      // A failed city lookup must not discard coordinates already supplied by Windows.
+      if (!coordinates) throw error
+    }
+    const city = place.city || place.locality || place.principalSubdivision || (coordinates ? '当前位置' : '')
     if (!city) throw new Error('无法识别城市')
     const latitude = coordinates?.latitude ?? place.latitude
     const longitude = coordinates?.longitude ?? place.longitude

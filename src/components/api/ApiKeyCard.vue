@@ -59,7 +59,7 @@ onUnmounted(() => {
 .api-key-card__name :deep(.status-badge) { min-height:19px; padding:3px 7px; font-size:9px; }
 .api-key-card__menu-wrap { position:relative; flex:none; }
 .api-key-card__more { width:26px; height:26px; border-radius:8px; }
-.api-key-card__menu { position:absolute; z-index:10; top:31px; right:0; min-width:125px; padding:5px; border:var(--glass-tile-border); border-radius:10px; background:rgba(251,252,255,.97); box-shadow:0 10px 22px rgba(31,46,88,.2); }
+.api-key-card__menu { position:absolute; z-index:10; top:31px; right:0; min-width:125px; padding:5px; border:var(--glass-tile-border); border-radius:10px; background:var(--glass-popover-background); box-shadow:0 10px 22px rgba(31,46,88,.2); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .api-key-card__menu button { display:flex; align-items:center; gap:7px; width:100%; padding:8px; border:0; border-radius:7px; color:var(--text-primary); background:transparent; font-size:10px; white-space:nowrap; }
 .api-key-card__menu button:hover { background:rgba(109,140,224,.12); }
 .api-key-card__secret { display:flex; align-items:center; justify-content:space-between; gap:5px; margin-top:13px; padding:7px 8px 7px 10px; border:1px solid rgba(143,165,208,.2); border-radius:9px; background:rgba(255,255,255,.45); }

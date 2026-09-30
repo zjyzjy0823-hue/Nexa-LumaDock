@@ -1,177 +1,137 @@
-from typing import Any
-from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from ...utils.time import iso_utc
 from ...database import get_db
-from ...models import DataCollection, DataRecord, User
+from ...models import User
 from ...security import current_user, read_user_for
-from ...sync.publisher import prepare_write, publish, delete_entity
-from ...workspaces import get_personal_workspace
+from ...services.data import CollectionInput, CollectionPatch, RecordInput, RecordPatch
+from ...services import data as service
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 v1_router = APIRouter(prefix="/api/v1/data", tags=["data"])
 
 
-class CollectionInput(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=500)
-    icon: str = Field(default="custom", max_length=30)
-    tone: str = Field(default="blue", max_length=30)
-
-    @field_validator("name")
-    @classmethod
-    def strip_name(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Name is required")
-        return value
-
-
-class CollectionPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    description: str | None = Field(default=None, max_length=500)
-    icon: str | None = Field(default=None, max_length=30)
-    tone: str | None = Field(default=None, max_length=30)
-
-
-class RecordInput(BaseModel):
-    name: str = Field(min_length=1, max_length=160)
-    status: str = Field(default="active", max_length=40)
-    category: str = Field(default="", max_length=80)
-    data_json: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("name")
-    @classmethod
-    def strip_name(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Name is required")
-        return value
-
-
-class RecordPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=160)
-    status: str | None = Field(default=None, max_length=40)
-    category: str | None = Field(default=None, max_length=80)
-    data_json: dict[str, Any] | None = None
-
-
-def collection_or_404(db: Session, user: User, id: str) -> DataCollection:
-    item = db.scalar(select(DataCollection).where(DataCollection.id == id, DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)))
-    if item is None:
-        raise HTTPException(404, "Collection not found")
-    return item
-
-
-def record_or_404(db: Session, user: User, id: str) -> DataRecord:
-    item = db.scalar(select(DataRecord).join(DataCollection).where(DataRecord.id == id, DataRecord.deleted_at.is_(None), DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)))
-    if item is None:
-        raise HTTPException(404, "Record not found")
-    return item
-
-
-def record_out(item: DataRecord) -> dict:
-    return {"id": item.id, "collectionId": item.collection_id, "name": item.name, "status": item.status,
-            "category": item.category, "dataJson": item.data_json, "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
-
-
-def collection_out(item: DataCollection) -> dict:
-    return {"id": item.id, "name": item.name, "description": item.description, "icon": item.icon,
-            "tone": item.tone, "recordCount": sum(record.deleted_at is None for record in item.records), "records": [record_out(record) for record in item.records if record.deleted_at is None],
-            "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
-
-
 @router.get("")
-def legacy_data(user: User = Depends(read_user_for("Data")), db: Session = Depends(get_db)):
-    items = db.scalars(select(DataCollection).where(DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None))).all()
-    return {"collections": [collection_out(item) for item in items], "totalCollections": len(items),
-            "totalRecords": sum(sum(record.deleted_at is None for record in item.records) for item in items)}
+def legacy_data(
+    user: User = Depends(read_user_for("Data")), db: Session = Depends(get_db)
+):
+    result = service.legacy_data(user=user, db=db)
+    return result
 
 
 @v1_router.get("/collections")
 def list_collections(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [collection_out(item) for item in db.scalars(select(DataCollection).where(DataCollection.user_id == user.id, DataCollection.deleted_at.is_(None)).order_by(DataCollection.created_at.desc())).all()]
+    result = service.list_collections(user=user, db=db)
+    return result
 
 
 @v1_router.post("/collections", status_code=201)
-def create_collection(payload: CollectionInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    item = DataCollection(id=str(uuid4()), user_id=user.id,
-                          workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
-    db.add(item)
-    publish(db, item)
-    db.commit(); db.refresh(item)
-    return collection_out(item)
+def create_collection(
+    payload: CollectionInput,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = service.create_collection(payload=payload, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @v1_router.get("/collections/{id}")
-def get_collection(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return collection_out(collection_or_404(db, user, id))
+def get_collection(
+    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    result = service.get_collection(id=id, user=user, db=db)
+    return result
 
 
 @v1_router.patch("/collections/{id}")
-def patch_collection(id: str, payload: CollectionPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    item = collection_or_404(db, user, id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        if value is None:
-            raise HTTPException(422, f"{key} cannot be null")
-        setattr(item, key, value.strip() if key == "name" else value)
-    if not item.name:
-        raise HTTPException(422, "Name is required")
-    publish(db, item)
-    db.commit(); db.refresh(item)
-    return collection_out(item)
+def patch_collection(
+    id: str,
+    payload: CollectionPatch,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = service.patch_collection(id=id, payload=payload, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @v1_router.delete("/collections/{id}", status_code=204)
-def delete_collection(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    delete_entity(db, collection_or_404(db, user, id))
-    db.commit()
+def delete_collection(
+    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    try:
+        result = service.delete_collection(id=id, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @v1_router.get("/collections/{id}/records")
-def list_records(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [record_out(item) for item in collection_or_404(db, user, id).records if item.deleted_at is None]
+def list_records(
+    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    result = service.list_records(id=id, user=user, db=db)
+    return result
 
 
 @v1_router.post("/collections/{id}/records", status_code=201)
-def create_record(id: str, payload: RecordInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    collection_or_404(db, user, id)
-    item = DataRecord(id=str(uuid4()), collection_id=id, **payload.model_dump())
-    db.add(item)
-    publish(db, item)
-    db.commit(); db.refresh(item)
-    return record_out(item)
+def create_record(
+    id: str,
+    payload: RecordInput,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = service.create_record(id=id, payload=payload, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @v1_router.patch("/records/{id}")
-def patch_record(id: str, payload: RecordPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    item = record_or_404(db, user, id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        if value is None:
-            raise HTTPException(422, f"{key} cannot be null")
-        setattr(item, key, value.strip() if key == "name" else value)
-    if not item.name:
-        raise HTTPException(422, "Name is required")
-    publish(db, item)
-    db.commit(); db.refresh(item)
-    return record_out(item)
+def patch_record(
+    id: str,
+    payload: RecordPatch,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = service.patch_record(id=id, payload=payload, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @v1_router.get("/records/{id}")
-def get_record(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return record_out(record_or_404(db, user, id))
+def get_record(
+    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    result = service.get_record(id=id, user=user, db=db)
+    return result
 
 
 @v1_router.delete("/records/{id}", status_code=204)
-def delete_record(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepare_write(db, user)
-    delete_entity(db, record_or_404(db, user, id))
-    db.commit()
+def delete_record(
+    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    try:
+        result = service.delete_record(id=id, user=user, db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result

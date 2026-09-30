@@ -14,6 +14,7 @@ from ...database import get_db
 from ...models import Agent, AgentEvent, AgentTask, User
 from ...security import agent_from_token, current_user, read_user_for
 from ...workspaces import get_personal_workspace
+from ...actions.base import DataScope
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 legacy_router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -23,6 +24,7 @@ TaskStatus = Literal["queued", "running", "completed", "failed"]
 
 
 class AgentInput(BaseModel):
+    data_scopes: list[DataScope] = Field(default_factory=list, alias="dataScopes")
     name: str = Field(min_length=1, max_length=120)
     role: str = Field(default="自定义助理", max_length=120)
     description: str = Field(default="", max_length=500)
@@ -40,6 +42,7 @@ class AgentInput(BaseModel):
 
 
 class AgentPatch(BaseModel):
+    data_scopes: list[DataScope] | None = Field(default=None, alias="dataScopes")
     name: str | None = Field(default=None, min_length=1, max_length=120)
     role: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=500)
@@ -149,7 +152,7 @@ def agent_json(item: Agent, db: Session) -> dict:
                 callsToday=0, tasksToday=sum(aware_utc(task.created_at).date() == datetime.now(timezone.utc).date() for task in tasks),
                 uptime=elapsed(item.last_seen_at) if item.last_seen_at else "尚未连接",
                 lastActive=elapsed(item.last_seen_at), lastSeenAt=iso_utc(item.last_seen_at),
-                capabilities=[], tasks=[task_json(task) for task in tasks],
+                capabilities=[], dataScopes=item.data_scopes or [], tasks=[task_json(task) for task in tasks],
                 logs=[dict(time=iso_utc(event.created_at), createdAt=iso_utc(event.created_at),
                            level=event.level, eventType=event.event_type, taskId=event.task_id,
                            message=event.message) for event in events],

@@ -2,6 +2,7 @@ node_modules/
 dist/
 .playwright-cli/
 output/playwright/
+output/windows-qa*/
 output/nexa-*.png
 *.local
 backend/*.db
@@ -18,6 +19,10 @@ device-client/.pytest_cache/
 agent-adapters/openclaw/config.json
 agent-adapters/openclaw/**/__pycache__/
 agent-adapters/openclaw/.pytest_cache/
+agent-adapters/openclaw/plugin/dist/
+output/openclaw-sdk/
+output/openclaw-*.tgz
+output/node-runtime/
 backend/build/
 backend/dist/
 src-tauri/target/

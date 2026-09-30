@@ -18,6 +18,9 @@ import time
 from uuid import uuid4
 
 import httpx
+import json
+import threading
+import uvicorn
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
@@ -34,10 +37,13 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from app.api import ledger, sync, websites
 from app.api.data import routes as data_routes  # noqa: E402
+from app.api import agent_actions
+from app.api.agents import routes as agent_routes
 from app.core_connection import CoreConnectionMetadata, _persist_connection  # noqa: E402
 from app.database import get_db  # noqa: E402
 from app.models import LedgerCategory, LedgerTransaction, LocalMutation, User, Workspace, Website, WebsiteCategory, DataCollection, DataRecord  # noqa: E402
 from app.security import create_access_token  # noqa: E402
+from app.models import AgentActionLog
 
 
 def checked(client, method, path, *, expected=200, **kwargs):
@@ -70,7 +76,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.4"}
+                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.5"}
                             break
                     except httpx.RequestError:
                         pass
@@ -112,6 +118,9 @@ class Replica:
         app.include_router(websites.router)
         app.include_router(data_routes.v1_router)
         app.include_router(data_routes.router)
+        app.include_router(agent_actions.router)
+        app.include_router(agent_routes.router)
+        self.app = app
 
         def database():
             with self.factory() as db:
@@ -128,13 +137,13 @@ class Replica:
     def connect(self, core, origin, headers):
         enrolled = checked(core, "POST", "/api/v1/clients/enroll", expected=201, headers=headers, json={
             "installationId": self.installation_id, "name": self.directory.name,
-            "platform": "windows", "appVersion": "0.5.4"})
+            "platform": "windows", "appVersion": "0.5.5"})
         self.client_id = enrolled["client"]["id"]
         self.core_workspace_id = enrolled["client"]["workspaceId"]
         metadata = CoreConnectionMetadata.model_validate({
             "schemaVersion": 1, "coreUrl": origin, "clientId": self.client_id,
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
-            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.4",
+            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.5",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
         os.environ["NEXA_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])
@@ -161,11 +170,60 @@ class Replica:
         self.engine.dispose()
 
 
-def main():
+@contextmanager
+def tool_server(replica):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(replica.app, host="127.0.0.1", port=port,
+                                           log_level="critical", access_log=False))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 15
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert server.started, "Local tool server readiness failed"
+        yield origin
+    finally:
+        server.should_exit = True
+        thread.join(timeout=15)
+
+
+def agent_tool_offline_creates(replica):
+    agent = replica.request("POST", "/api/v1/agents", expected=201, json={"name": "OpenClaw E2E", "dataScopes": [
+        f"{domain}:{effect}" for domain in ("ledger", "websites", "data") for effect in ("read", "write", "delete")]})
+    token = replica.request("POST", f"/api/v1/agents/{agent['id']}/token", expected=201)["token"]
+    script = BACKEND.parent / "agent-adapters/openclaw/plugin/tests/integration-client.mjs"
+    assert script.exists() and (script.parents[1] / "dist/client.js").exists(), "Build the Nexa tool plugin before PostgreSQL integration"
+    with tool_server(replica) as origin:
+        def tool(action, arguments, call_id=None, drop_response=False):
+            result = subprocess.run(["node", str(script)], input=json.dumps({
+                "serverUrl": origin, "action": action, "effect": "write", "arguments": arguments,
+                "toolCallId": call_id or str(uuid4()), "dropResponseOnce": drop_response}), env={**os.environ, "NEXA_AGENT_TOKEN": token},
+                text=True, capture_output=True, timeout=45)
+            assert result.returncode == 0, f"Tool {action} failed safely: {result.stderr}"
+            return json.loads(result.stdout)
+        transaction = tool("ledger.transaction.create", {"type": "expense", "amount": "38.00", "description": "Agent coffee", "occurredAt": "2026-09-30T09:00:00Z"}, drop_response=True)
+        assert transaction["replayed"], "Real committed-response loss must replay without a duplicate transaction"
+        category = tool("website.category.create", {"name": "Agent Tools"})["data"]["entityId"]
+        website = tool("website.create", {"name": "Agent Website", "url": "https://example.com", "categoryId": category})
+        collection = tool("data.collection.create", {"name": "Agent Servers"})["data"]["entityId"]
+        record = tool("data.record.create", {"name": "Mac mini", "collectionId": collection, "dataJson": {"cpu": "M4"}})
+    ids = {LedgerTransaction: transaction["data"]["entityId"], Website: website["data"]["entityId"], DataRecord: record["data"]["entityId"]}
+    with replica.factory() as db:
+        assert len(db.scalars(select(AgentActionLog).where(AgentActionLog.agent_id == agent["id"], AgentActionLog.status == "ok")).all()) == 5
+        for entity_id in ids.values():
+            assert db.scalar(select(LocalMutation).where(LocalMutation.entity_id == entity_id, LocalMutation.status == "pending")) is not None
+    return ids, category, collection
+
+
+def main(skip_agent_tools=False):
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0014_multi_entity_sync"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0015_agent_data_actions"
     with TemporaryDirectory(prefix="nexa-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)
@@ -304,10 +362,26 @@ def main():
             a.request("DELETE", f"/api/v1/ledger/transactions/{transient}", expected=204)
             assert a.run("error")["lastError"] == "unreachable"
             assert a.request("GET", f"/api/v1/ledger/transactions/{offline}")["description"] == "Offline edit"
+            # Core remains stopped: actual Node Nexa tool client -> Local HTTP ->
+            # SQLite/outbox. Recovery uses the production manual sync transport.
+            agent_ids, agent_category, agent_collection = ({}, None, None) if skip_agent_tools else agent_tool_offline_creates(a)
             with core_server(directory, port) as (core, _, _):
                 assert a.run()["pending"] == 0
                 b.run()
                 assert b.request("GET", f"/api/v1/ledger/transactions/{offline}")["description"] == "Offline edit"
+                from app.sync.adapters import adapter_for
+                for factory, owner, workspace in [(a.factory, a.user_id, a.workspace_id),
+                                                   (core_factory, core_user_id, a.core_workspace_id),
+                                                   (b.factory, b.user_id, b.workspace_id)]:
+                    with factory() as db:
+                        for model, entity_id in agent_ids.items():
+                            item = db.get(model, entity_id)
+                            assert item is not None and adapter_for(item).workspace_id(db, item) == workspace
+                            if model is not DataRecord:
+                                assert item.user_id == owner
+                        if agent_ids:
+                            assert db.get(Website, agent_ids[Website]).category_id == agent_category
+                            assert db.get(DataRecord, agent_ids[DataRecord]).collection_id == agent_collection
                 a.edit(y, "Preserve after revoke")
                 before = a.request("GET", "/api/v1/sync/status")
                 checked(core, "POST", f"/api/v1/clients/{a.client_id}/revoke", headers=headers)
@@ -321,8 +395,12 @@ def main():
             a.close()
             b.close()
             core_engine.dispose()
-    print("Real HTTP/PostgreSQL/two-SQLite create, update, delete, merge, conflict refresh, offline recovery and revoke: PASS")
+    prefix = "Local HTTP/SQLite" if skip_agent_tools else "Real Node Agent Tool -> Local HTTP/SQLite"
+    print(prefix + " -> manual sync -> PostgreSQL -> Replica, plus CRUD/conflict/offline/revoke regression: PASS")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-agent-tools", action="store_true", help="Run the full CRUD/sync regression without the OpenClaw Node bridge")
+    main(skip_agent_tools=parser.parse_args().skip_agent_tools)

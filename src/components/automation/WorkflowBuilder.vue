@@ -59,7 +59,7 @@ function save() { emit('update:nodes', draft.value.map(node => ({ ...node }))); 
 .workflow-node__copy { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
 .workflow-node__copy small { color: #71809a; font-size: 9px; }
 .workflow-node__copy strong { overflow: hidden; color: #364967; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-node__copy select { width: 100%; height: 26px; border: 1px solid #cbd8f2; border-radius: 7px; outline: none; color: #364967; background: #fff; font-size: 11px; }
+.workflow-node__copy select { width: 100%; height: 26px; border: 1px solid rgba(145,169,216,.4); border-radius: 7px; outline: none; color: #364967; background: rgba(255,255,255,.65); font-size: 11px; }
 .workflow-node svg { color: #93a6c6; }
 .workflow-node__dot { width: 8px; height: 8px; flex: none; margin-right: 4px; border-radius: 50%; background: #9db9ed; }
 .workflow-node--do .workflow-node__dot { background: #7fd0b2; }

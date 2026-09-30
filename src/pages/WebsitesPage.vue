@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirmAction } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { Check, ChevronDown, Cloud, Copy, ExternalLink, Github, Grid2X2, HardDrive, House, List, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-vue-next'
 import ActionButton from '../components/ui/ActionButton.vue'
@@ -29,6 +30,7 @@ const formError = ref('')
 const saving = ref(false)
 const categoryDialog = ref(false)
 const categoryName = ref('')
+const editingCategoryId = ref<string | null>(null)
 const categoryError = ref('')
 const form = reactive({ name: '', url: '', icon: '', description: '', categoryId: '', favorite: false, order: 0 })
 const autoIconValue = ref('')
@@ -137,7 +139,7 @@ async function saveWebsite() {
 }
 async function removeWebsite(item: Website) {
   openMenuId.value = null
-  if (!auth.token || !window.confirm(`删除「${item.name}」？`)) return
+  if (!auth.token || !(await confirmAction(`删除「${item.name}」？`))) return
   try { await store.remove(auth.token, item.id); emit('action', `已删除「${item.name}」。`) }
   catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
 }
@@ -167,17 +169,18 @@ async function moveWebsite(item: Website, direction: -1 | 1) {
 }
 async function saveCategory() {
   if (!auth.token || !categoryName.value.trim()) { categoryError.value = '请输入分类名称。'; return }
-  try { await store.createCategory(auth.token, categoryName.value.trim()); categoryName.value = ''; categoryError.value = ''; emit('action', '分类已添加。') }
+  try {
+    if (editingCategoryId.value) await store.renameCategory(auth.token, editingCategoryId.value, categoryName.value.trim())
+    else await store.createCategory(auth.token, categoryName.value.trim())
+    editingCategoryId.value = null; categoryName.value = ''; categoryError.value = ''; emit('action', '分类已保存。')
+  }
   catch (error) { categoryError.value = error instanceof Error ? error.message : '保存失败' }
 }
-async function renameCategory(id: string, oldName: string) {
-  const name = window.prompt('分类名称', oldName)?.trim()
-  if (!auth.token || !name || name === oldName) return
-  try { await store.renameCategory(auth.token, id, name); emit('action', '分类已更新。') }
-  catch (error) { categoryError.value = error instanceof Error ? error.message : '更新失败' }
+function renameCategory(id: string, oldName: string) {
+  editingCategoryId.value = id; categoryName.value = oldName; categoryError.value = ''
 }
 async function removeCategory(id: string, name: string) {
-  if (!auth.token || !window.confirm(`删除分类「${name}」？其中的网站会保留。`)) return
+  if (!auth.token || !(await confirmAction(`删除分类「${name}」？其中的网站会保留。`))) return
   try { await store.removeCategory(auth.token, id); if (selectedCategory.value === id) selectedCategory.value = 'all'; emit('action', '分类已删除。') }
   catch (error) { categoryError.value = error instanceof Error ? error.message : '删除失败' }
 }
@@ -318,7 +321,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
     </div>
     <div v-if="categoryDialog" class="website-dialog-backdrop" @click.self="categoryDialog = false"><div class="website-dialog" role="dialog" aria-modal="true" aria-label="管理分类">
       <div class="website-dialog__header"><h2>管理分类</h2><button type="button" aria-label="关闭" @click="categoryDialog = false"><X :size="19" /></button></div>
-      <form class="website-category-form" @submit.prevent="saveCategory"><input v-model="categoryName" maxlength="80" placeholder="新分类名称" /><button type="submit">添加</button></form>
+      <form class="website-category-form" @submit.prevent="saveCategory"><input v-model="categoryName" maxlength="80" aria-label="分类名称" :placeholder="editingCategoryId ? '分类名称' : '新分类名称'" /><button type="submit">{{ editingCategoryId ? '保存分类' : '添加' }}</button><button v-if="editingCategoryId" type="button" @click="editingCategoryId = null; categoryName = ''">取消编辑</button></form>
       <p v-if="categoryError" class="website-dialog__error" role="alert">{{ categoryError }}</p>
       <div v-for="category in store.categories" :key="category.id" class="website-category-row"><span>{{ category.name }}</span><button type="button" @click="renameCategory(category.id, category.name)">重命名</button><button type="button" @click="removeCategory(category.id, category.name)">删除</button></div>
     </div></div>
@@ -392,7 +395,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
 .website-card__menu { position: relative; z-index: 3; align-self: flex-start; margin: 12px 9px 0 3px; }
 .website-card__more { display: grid; width: 27px; height: 27px; place-items: center; color: #8695ab; border: 0; border-radius: 8px; background: transparent; }
 .website-card__more:hover, .website-card__more[aria-expanded="true"] { color: #4867b7; background: rgba(111,141,213,.13); }
-.website-menu { position: absolute; z-index: 10; top: 32px; right: 0; width: 143px; padding: 5px; border: 1px solid rgba(177,191,221,.48); border-radius: 12px; background: rgba(251,252,255,.97); box-shadow: 0 13px 30px rgba(32,46,91,.21); backdrop-filter: blur(20px); }
+.website-menu { position: absolute; z-index: 10; top: 32px; right: 0; width: 143px; padding: 5px; border: 1px solid rgba(177,191,221,.48); border-radius: 12px; background:var(--glass-popover-background); box-shadow: 0 13px 30px rgba(32,46,91,.21);   backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .website-menu a, .website-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px; color: #435674; border: 0; border-radius: 8px; background: none; font-size: 11px; font-weight: 580; text-align: left; text-decoration: none; white-space: nowrap; }
 .website-menu a:hover, .website-menu button:hover { color: #3e61bd; background: #edf2fc; }
 .website-menu button:disabled { opacity: .4; cursor: not-allowed; }
@@ -402,13 +405,13 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
 .website-empty { display: flex; min-height: 290px; flex-direction: column; align-items: center; justify-content: center; padding: 28px; color: #fff; border: 1px solid rgba(255,255,255,.48); border-radius: 22px; background: linear-gradient(140deg,rgba(217,229,255,.27),rgba(202,216,246,.19) 55%,rgba(247,220,237,.24)); box-shadow: var(--shadow-card); backdrop-filter: blur(var(--glass-blur)) saturate(125%); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(125%); text-align: center; text-shadow:0 1px 8px rgba(25,38,76,.26); }
 .website-empty__icon { display: grid; width: 56px; height: 56px; place-items: center; color: #6682cb; border: 1px solid rgba(255,255,255,.76); border-radius: 17px; background: rgba(255,255,255,.54); }.website-empty h2 { margin: 17px 0 4px; font-size: 17px; }.website-empty p { margin: 0; color: rgba(255,255,255,.8); font-size: 12px; }.website-empty button { margin-top: 17px; padding: 8px 15px; color: #5070bf; border: 1px solid rgba(100,130,206,.24); border-radius: 9px; background: rgba(255,255,255,.7); font-size: 12px; font-weight: 650; }
 .website-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(22,34,71,.42); backdrop-filter: blur(10px); }
-.website-dialog { width: min(100%, 460px); padding: 23px; color: #263653; border: 1px solid rgba(255,255,255,.78); border-radius: 22px; background: linear-gradient(145deg,rgba(251,253,255,.98),rgba(232,240,255,.96)); box-shadow: 0 25px 75px rgba(14,27,72,.3), inset 0 1px 0 white; }
+.website-dialog { width: min(100%, 460px); padding: 23px; color: #263653; border: 1px solid rgba(255,255,255,.78); border-radius: 22px; background:var(--glass-dialog-background); box-shadow: 0 25px 75px rgba(14,27,72,.3), inset 0 1px 0 white;  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); max-height:calc(100dvh - 40px); overflow-y:auto; }
 .website-dialog__header { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 20px; }.website-dialog__header span { color: #7e91bc; font-size: 9px; font-weight: 800; letter-spacing: .15em; }.website-dialog__header h2 { margin: 5px 0 4px; font-size: 23px; font-weight: 720; letter-spacing: -.025em; }.website-dialog__header p { margin: 0; color: #8493aa; font-size: 12px; }.website-dialog__header button { display: grid; width: 30px; height: 30px; flex: none; place-items: center; color: #6b7b97; border: 0; border-radius: 9px; background: rgba(218,227,246,.65); }
 .website-dialog form { display: grid; gap: 13px; }.website-dialog label { display: grid; gap: 6px; min-width: 0; color: #4a5d7a; font-size: 11px; font-weight: 700; }.website-dialog input, .website-dialog select { width: 100%; min-width: 0; height: 40px; padding: 0 12px; color: #293b59; border: 1px solid rgba(151,171,212,.42); border-radius: 10px; outline: none; background: rgba(255,255,255,.78); font-size: 12px; }.website-dialog input:focus, .website-dialog select:focus { border-color: #849de4; box-shadow: 0 0 0 3px rgba(119,150,226,.13); }.website-dialog input::placeholder { color: #acb6c7; }.website-dialog__row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }.website-dialog__error { margin: 0; color: #c34655; font-size: 11px; }.website-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 9px; }.website-dialog__actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 37px; padding: 0 15px; border-radius: 10px; font-size: 12px; font-weight: 680; }.website-dialog__cancel { color: #6d7e99; border: 1px solid rgba(160,177,211,.4); background: rgba(255,255,255,.6); }.website-dialog__submit { color: #fff; border: 1px solid rgba(92,119,200,.58); background: linear-gradient(120deg,#6988d9,#6e78cb); box-shadow: 0 6px 15px rgba(72,98,183,.22); }
 .website-sort { position: relative; z-index: 30; flex: none; }
 .website-sort__trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 116px; height: 28px; padding: 0 9px; color: #4c67a5; border: 1px solid rgba(255,255,255,.62); border-radius: 9px; background: rgba(245,248,255,.84); box-shadow: inset 0 1px white, 0 3px 10px rgba(23,40,90,.12); font: inherit; font-size: 11px; cursor: pointer; }
 .website-sort__trigger:hover, .website-sort__trigger[aria-expanded="true"] { background: rgba(255,255,255,.96); }
-.website-sort__menu { position: absolute; top: calc(100% + 7px); right: 0; width: 148px; padding: 5px; border: 1px solid rgba(255,255,255,.72); border-radius: 12px; background: linear-gradient(145deg,rgba(249,251,255,.97),rgba(226,235,255,.96)); box-shadow: 0 15px 34px rgba(16,33,82,.28),inset 0 1px white; backdrop-filter: blur(18px); }
+.website-sort__menu { position: absolute; top: calc(100% + 7px); right: 0; width: 148px; padding: 5px; border: 1px solid rgba(255,255,255,.72); border-radius: 12px; background:var(--glass-popover-background); box-shadow: 0 15px 34px rgba(16,33,82,.28),inset 0 1px white;   backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .website-sort__menu button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 8px 9px; color: #3b4f75; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
 .website-sort__menu button:hover, .website-sort__menu .website-sort__option--selected { color: #3d5fb3; background: rgba(120,151,224,.18); }
 .website-sort__trigger:focus-visible, .website-sort__menu button:focus-visible { outline: 2px solid #7798ea; outline-offset: 2px; }

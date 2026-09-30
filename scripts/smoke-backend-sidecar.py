@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sqlite3
+import socket
 import subprocess
 import tempfile
 import time
@@ -16,7 +17,10 @@ from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
 SIDECAR = ROOT / "src-tauri" / "binaries" / "nexa-backend-x86_64-pc-windows-msvc.exe"
-BASE = "http://127.0.0.1:17800"
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    PORT = listener.getsockname()[1]
+BASE = f"http://127.0.0.1:{PORT}"
 
 
 def request(path: str, payload: dict | None = None, token: str | None = None,
@@ -36,7 +40,7 @@ def launch(data_dir: Path) -> subprocess.Popen:
     clean_env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
     clean_env.pop("PYTHONPATH", None)
     clean_env.pop("PYTHONHOME", None)
-    process = subprocess.Popen([str(SIDECAR), "--data-dir", str(data_dir)],
+    process = subprocess.Popen([str(SIDECAR), "--data-dir", str(data_dir), "--port", str(PORT)],
                                creationflags=subprocess.CREATE_NO_WINDOW, env=clean_env)
     for _ in range(120):
         if process.poll() is not None:
@@ -66,7 +70,7 @@ def main() -> None:
     try:
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.4"}
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.5"}
             with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                 "Origin": "http://tauri.localhost",
             }), timeout=2) as response:
@@ -82,12 +86,21 @@ def main() -> None:
                              {"name": "Smoke Record", "data_json": {"value": 42}}, token)
             device = request("/api/v1/devices", {"name": "Smoke Device", "kind": "desktop", "system": "Windows", "ip": "127.0.0.1"}, token)
             agent = request("/api/v1/agents", {"name": "Smoke Agent"}, token)
+            assert agent["dataScopes"] == []
+            request(f"/api/v1/agents/{agent['id']}", {"dataScopes": ["ledger:write", "ledger:read"]}, token, method="PATCH")
+            agent_token = request(f"/api/v1/agents/{agent['id']}/token", {}, token)["token"]
+            action = {"actionId": str(UUID("05505505-5055-4055-8055-055055055055")), "action": "ledger.transaction.create",
+                      "arguments": {"type": "expense", "amount": "38.00", "description": "Agent coffee", "occurredAt": "2026-09-30T09:00:00Z"}}
+            receipt = request("/api/agent/actions/execute", action, agent_token)
+            assert not receipt["replayed"]
+            assert request("/api/agent/actions/execute", action, agent_token)["replayed"]
+            assert request("/api/agent/actions/catalog", token=agent_token)["dataScopes"] == ["ledger:write", "ledger:read"]
             assert request("/api/dashboard", token=token)["id"]
             category = request("/api/v1/ledger/categories", {"name": "Food", "type": "expense"}, token)
             transaction = request("/api/v1/ledger/transactions", {
                 "category_id": category["id"], "type": "expense", "amount": "38.00",
                 "description": "Offline lunch", "occurred_at": "2026-09-28T12:00:00Z"}, token)
-            assert request("/api/v1/sync/status", token=token)["pending"] == 6
+            assert request("/api/v1/sync/status", token=token)["pending"] == 7
         finally:
             stop(first, data_dir)
         assert (data_dir / "nexa.db").is_file()
@@ -96,8 +109,9 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0014_multi_entity_sync"
-            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 6
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0015_agent_data_actions"
+            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 7
+            assert connection.execute("SELECT count(*) FROM agent_action_logs WHERE status='ok'").fetchone()[0] == 1
             assert connection.execute("SELECT queue_seed_version FROM local_sync_state").fetchone()[0] == 2
         second = launch(data_dir)
         try:
@@ -118,26 +132,27 @@ def main() -> None:
                 "type": "expense", "amount": "1.00", "description": "Transient",
                 "occurred_at": "2026-09-28T12:00:00Z"}, token)
             request(f"/api/v1/ledger/transactions/{transient['id']}", token=token, method="DELETE")
-            assert request("/api/v1/sync/status", token=token)["pending"] == 6
+            assert request("/api/v1/sync/status", token=token)["pending"] == 7
             request(f"/api/v1/website-categories/{website_category['id']}", token=token, method="DELETE")
             assert request(f"/api/v1/websites/{website['id']}", token=token)["categoryId"] is None
             request(f"/api/v1/data/collections/{collection['id']}", token=token, method="DELETE")
             assert request("/api/data", token=token)["totalRecords"] == 0
             request(f"/api/v1/websites/{website['id']}", token=token, method="DELETE")
             assert request("/api/v1/websites", token=token) == []
-            assert request("/api/v1/sync/status", token=token)["pending"] == 2
+            assert request("/api/v1/sync/status", token=token)["pending"] == 3
         finally:
             stop(second, data_dir)
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
             rows = connection.execute("SELECT entity_type, entity_id, base_revision, payload_json "
                                       "FROM local_mutation_queue ORDER BY entity_type").fetchall()
-            assert len(rows) == 2 and {row[1] for row in rows} == {category["id"], transaction["id"]}
+            assert len(rows) == 3 and {row[1] for row in rows} == {category["id"], transaction["id"], receipt["data"]["entityId"]}
             assert all(row[2] == 0 for row in rows)
             assert json.loads(next(row[3] for row in rows if row[1] == transaction["id"]))["description"] == "Offline edited lunch"
             assert connection.execute("SELECT sync_revision FROM ledger_transactions WHERE id=?",
                                       (transaction["id"],)).fetchone()[0] == 0
         assert token not in (data_dir / "logs" / "backend.log").read_text(encoding="utf-8")
-        print("Packaged sidecar: six-entity offline outbox, Website/Data tombstones, persistence, login PASS")
+        assert agent_token not in (data_dir / "logs" / "backend.log").read_text(encoding="utf-8")
+        print("Packaged sidecar: Agent scopes/create/replay/audit, six-entity offline outbox, tombstones, persistence, login PASS")
     finally:
         temp_root = Path(tempfile.gettempdir()).resolve()
         if data_dir.parent != temp_root or not data_dir.name.startswith("NexaDesktopSmoke-"):

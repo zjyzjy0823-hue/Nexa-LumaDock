@@ -69,7 +69,7 @@ function copyName() {
 .collection-card__menu-wrap { position:absolute; top:8px; right:8px; z-index:4; }
 .collection-card__more { display:grid; width:30px; height:30px; place-items:center; border:1px solid rgba(255,255,255,.6); border-radius:9px; color:#7d8ba6; background:rgba(255,255,255,.5); }
 .collection-card__more:hover,.collection-card__more[aria-expanded="true"] { color:#4d70d7; background:rgba(255,255,255,.84); }
-.collection-card__menu { position:absolute; top:36px; right:0; display:grid; gap:2px; width:127px; padding:5px; border:1px solid rgba(255,255,255,.9); border-radius:11px; background:rgba(248,251,255,.97); box-shadow:0 11px 27px rgba(37,53,97,.2); backdrop-filter:blur(16px); }
+.collection-card__menu { position:absolute; top:36px; right:0; display:grid; gap:2px; width:127px; padding:5px; border:1px solid rgba(255,255,255,.9); border-radius:11px; background:var(--glass-popover-background); box-shadow:0 11px 27px rgba(37,53,97,.2);   backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
 .collection-card__menu button { display:flex; align-items:center; gap:7px; width:100%; padding:7px; border:0; border-radius:7px; color:#536580; background:transparent; font-size:10px; text-align:left; }
 .collection-card__menu button:hover { color:#4d70d7; background:rgba(108,141,220,.11); }
 </style>
