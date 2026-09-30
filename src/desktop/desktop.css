@@ -1,0 +1,37 @@
+/* Runtime scoped: normal browser layout, selection and shortcuts stay unchanged. */
+/* The 1920x1080 wallpaper has an 8px bottom border. Cover using only its 1072px image area. */
+html.nexa-desktop { --desktop-wallpaper-size:max(100vw, calc(100dvh * 1920 / 1072)) auto; }
+.nexa-desktop body, .nexa-desktop :is(.auth-screen, .auth-loading) { background-size:var(--desktop-wallpaper-size); background-position:center top; }
+html.nexa-desktop, .nexa-desktop body, .nexa-desktop #app { height:100%; min-height:0; overflow:hidden; }
+.nexa-desktop .desktop-app { display:flex; flex-direction:column; height:100%; min-height:0; }
+.nexa-desktop .desktop-body { flex:1; min-height:0; min-width:0; }
+.nexa-desktop .nexa-shell { height:100%; min-height:0; }
+.nexa-desktop .sidebar { position:relative; top:0; height:100%; min-height:0; overflow:hidden; }
+.nexa-desktop .sidebar__nav { min-height:0; }
+.nexa-desktop .nav-item { min-height:clamp(36px, 6.5dvh, 51px); }
+.nexa-desktop :is(.workspace-main, .dashboard-main) { display:flex; flex-direction:column; min-width:0; min-height:0; }
+.nexa-desktop :is(.workspace-topbar, .topbar) { flex:none; }
+.nexa-desktop .workspace-content { flex:1; min-height:0; overflow:auto; }
+.nexa-desktop .board-wrap { flex:1; min-height:0; }
+/* Space for hover/shadows; fade using sibling overlays so card backdrop blur survives. */
+.nexa-desktop .dashboard-scroll { height:calc(100% + 16px); width:calc(100% + 32px); margin:-16px -16px 0; padding:16px 16px 32px; min-height:0; overflow-y:auto; overflow-x:hidden; }
+.nexa-desktop .board-wrap::before, .nexa-desktop .board-wrap::after { content:''; position:absolute; z-index:13; left:-16px; right:-16px; pointer-events:none; background:#10163d url('/nexa-wallpaper.png') center top / var(--desktop-wallpaper-size) fixed no-repeat; }
+.nexa-desktop .board-wrap::before { top:-16px; height:8px; mask-image:linear-gradient(to bottom, #000, transparent); }
+.nexa-desktop .board-wrap::after { bottom:0; height:24px; mask-image:linear-gradient(to bottom, transparent, #000); }
+.nexa-desktop .board-wrap:has(.dashboard-grid--editing)::before, .nexa-desktop .board-wrap:has(.dashboard-grid--editing)::after { display:none; }
+.nexa-desktop .dashboard-layout-toolbar { position:absolute; top:-37px; right:0; margin:0; }
+.nexa-desktop .ledger-card .glass-card__body { display:flex; flex-direction:column; }
+.nexa-desktop .ledger-card .balance-panel { flex:1; min-height:0; }
+.nexa-desktop .ledger-card .summary-row { flex:none; }
+.nexa-desktop :is(.auth-screen, .auth-loading) { height:100%; min-height:0; overflow:auto; }
+.nexa-desktop [data-desktop-scroll] { overscroll-behavior:contain; scrollbar-gutter:stable; }
+.nexa-desktop body:has([aria-modal="true"]) [data-desktop-scroll] { overflow:hidden; }
+.nexa-desktop [aria-modal="true"] { overscroll-behavior:contain; }
+.nexa-desktop :is(button, nav, .sidebar, .topbar, .workspace-topbar, .page-header, .glass-card__header, .dashboard-layout-toolbar) { user-select:none; }
+.nexa-desktop :is(input, textarea, [contenteditable]:not([contenteditable="false"]), [data-selectable]) { user-select:text; }
+.nexa-desktop * { scrollbar-width:thin; scrollbar-color:rgba(225,235,255,.55) transparent; }
+.nexa-desktop ::-webkit-scrollbar { width:5px; height:5px; }
+.nexa-desktop ::-webkit-scrollbar-track { background:transparent; }
+.nexa-desktop ::-webkit-scrollbar-thumb { border-radius:6px; background:rgba(225,235,255,.55); }
+.nexa-desktop ::-webkit-scrollbar-thumb:hover { background:rgba(243,248,255,.82); }
+.nexa-desktop ::-webkit-scrollbar-corner { background:transparent; }

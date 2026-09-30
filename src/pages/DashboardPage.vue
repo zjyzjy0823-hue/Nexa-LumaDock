@@ -9,6 +9,7 @@ import { useAuthStore } from '../stores/auth'
 import { useDashboardStore } from '../stores/dashboard'
 import { useDevicesStore } from '../stores/devices'
 import { useAgentsStore } from '../stores/agents'
+import { scrollPageToTop } from '../desktop/desktopInteractions'
 
 const emit = defineEmits<{ navigate: [page: string]; create: [kind: string] }>()
 const auth = useAuthStore()
@@ -41,7 +42,7 @@ function focusSection(id: string) {
 }
 function selectNav(item: string) {
   activeItem.value = item
-  if (item === 'Home') window.scrollTo({ top: 0, behavior: 'smooth' })
+  if (item === 'Home') scrollPageToTop('smooth')
   else if (destinationPages.includes(item)) emit('navigate', item)
 }
 onMounted(async () => {
@@ -77,6 +78,7 @@ onUnmounted(() => {
             <SlidersHorizontal :size="16" />{{ editing ? '完成调整' : '调整布局' }}
           </button>
         </div>
+        <div class="dashboard-scroll" data-desktop-scroll>
         <div ref="board" class="board-measure">
           <DashboardRenderer
             :widgets="dashboard.widgets"
@@ -91,6 +93,7 @@ onUnmounted(() => {
             @reset="resetWidget"
             @action="showToast"
           />
+        </div>
         </div>
       </div>
     </main>

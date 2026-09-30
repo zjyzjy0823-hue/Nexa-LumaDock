@@ -4,6 +4,7 @@
   "version": "0.5.5",
   "type": "module",
   "scripts": {
+    "test:desktop": "node --experimental-strip-types --test tests/desktop-shortcuts.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",

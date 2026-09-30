@@ -5,6 +5,8 @@ import AuthGate from './components/auth/AuthGate.vue'
 import ConfirmDialog from './components/ui/ConfirmDialog.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import TopSearchBar from './components/layout/TopSearchBar.vue'
+import DesktopTitleBar from './components/desktop/DesktopTitleBar.vue'
+import { scrollPageToTop } from './desktop/desktopInteractions'
 import DashboardPage from './pages/DashboardPage.vue'
 import WebsitesPage from './pages/WebsitesPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
@@ -38,6 +40,7 @@ function pageFromLocation(): Page {
 }
 
 const currentPage = ref<Page>(pageFromLocation())
+const desktop = isTauri()
 const auth = useAuthStore()
 const authReady = ref(false)
 const authStartupError = ref('')
@@ -77,11 +80,11 @@ function navigate(page: string) {
   if (window.location.pathname !== pagePaths[target] || window.location.hash) {
     window.history.pushState({ page: target }, '', pagePaths[target])
   }
-  window.scrollTo({ top: 0, behavior: 'instant' })
+  void nextTick(() => scrollPageToTop())
 }
 function onLocationChange() {
   currentPage.value = pageFromLocation()
-  window.scrollTo({ top: 0, behavior: 'instant' })
+  void nextTick(() => scrollPageToTop())
 }
 async function restoreSession() {
   if (restoringSession) return
@@ -136,6 +139,9 @@ onUnmounted(() => {
 
 <template>
   <ConfirmDialog />
+  <div :class="desktop ? 'desktop-app' : undefined">
+  <DesktopTitleBar v-if="desktop" />
+  <div :class="desktop ? 'desktop-body' : undefined">
   <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
   <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
   <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></section></div>
@@ -145,8 +151,10 @@ onUnmounted(() => {
     <Sidebar :active-item="currentPage" @select="navigate" />
     <main class="workspace-main">
       <TopSearchBar v-if="currentPage !== 'API' && currentPage !== 'Settings'" :current-page="currentPage" @navigate="navigate" @create="create" />
-      <div class="workspace-content"><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" @navigate="navigate" /></div>
+      <div class="workspace-content" data-desktop-scroll><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" @navigate="navigate" /></div>
     </main>
+  </div>
+  </div>
   </div>
   <Transition name="workspace-toast"><div v-if="toast" class="workspace-toast" role="status">✦ <span>{{ toast }}</span></div></Transition>
 </template>
