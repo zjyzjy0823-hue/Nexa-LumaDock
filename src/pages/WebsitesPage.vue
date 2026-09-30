@@ -3,6 +3,7 @@ import { confirmAction } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { Check, ChevronDown, Cloud, Copy, ExternalLink, Github, Grid2X2, HardDrive, House, List, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-vue-next'
 import ActionButton from '../components/ui/ActionButton.vue'
+import ExternalLinkButton from '../components/ui/ExternalLink.vue'
 import SectionContainer from '../components/ui/SectionContainer.vue'
 import { useAuthStore } from '../stores/auth'
 import { useWebsitesStore } from '../stores/websites'
@@ -251,7 +252,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
       <SectionContainer v-for="group in visibleGroups" :key="group.id" :title="group.title" :class="{ 'website-section--menu-open': group.items.some(item => item.id === openMenuId) }">
         <div class="website-grid" :class="{ 'website-grid--list': viewMode === 'list' }">
           <article v-for="item in group.items" :key="item.id" class="website-card" :class="{ 'website-card--menu-open': openMenuId === item.id }">
-            <a class="website-card__main" :href="item.href" target="_blank" rel="noopener noreferrer" :aria-label="`打开 ${item.name}`" @click="openWebsite(item)">
+            <ExternalLinkButton class="website-card__main" :href="item.href" :aria-label="`打开 ${item.name}`" @activate="openWebsite(item)" @action="emit('action', $event)">
               <span class="website-logo" :class="`website-logo--${item.logo}`" aria-hidden="true">
                 <svg v-if="item.logo === 'chatgpt'" viewBox="0 0 24 24"><path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.182a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .511 4.91 6.051 6.051 0 0 0 6.515 2.9A5.984 5.984 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.989 5.989 0 0 0 3.998-2.9 6.056 6.056 0 0 0-.748-7.073ZM13.26 22.43a4.476 4.476 0 0 1-2.877-1.041l.142-.08 4.778-2.758a.795.795 0 0 0 .393-.681v-6.737l2.02 1.169a.07.07 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.493Zm-9.66-4.125a4.471 4.471 0 0 1-.535-3.014l.142.085 4.783 2.758a.771.771 0 0 0 .78 0l5.843-3.368v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.499 4.499 0 0 1-6.14-1.646ZM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.677l5.814 3.354-2.02 1.169a.076.076 0 0 1-.071 0l-4.83-2.787A4.504 4.504 0 0 1 2.34 7.872Zm16.597 3.855-5.834-3.387L15.12 7.2a.076.076 0 0 1 .07 0l4.831 2.791a4.494 4.494 0 0 1-.676 8.104v-5.677a.79.79 0 0 0-.407-.667Zm2.01-3.023-.141-.085-4.774-2.782a.775.775 0 0 0-.786 0L9.41 9.229V6.897a.067.067 0 0 1 .028-.061l4.831-2.787a4.5 4.5 0 0 1 6.68 4.66Zm-12.64 4.135-2.02-1.164a.08.08 0 0 1-.038-.057V6.074a4.5 4.5 0 0 1 7.376-3.453l-.142.08-4.778 2.758a.794.794 0 0 0-.393.681Zm1.098-2.365 2.602-1.5 2.607 1.5v3l-2.598 1.499-2.607-1.5Z" fill="currentColor" /></svg>
                 <Github v-else-if="item.logo === 'github'" :size="27" :stroke-width="2.1" fill="currentColor" />
@@ -271,11 +272,11 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
                 <span v-else class="brand-generic">{{ item.name.slice(0, 1).toUpperCase() }}</span>
               </span>
               <span class="website-card__copy"><strong>{{ item.name }}</strong><small>{{ item.subtitle }}</small></span>
-            </a>
+            </ExternalLinkButton>
             <div class="website-card__menu" data-website-menu>
               <button class="website-card__more" type="button" :aria-label="`${item.name} 更多操作`" :aria-expanded="openMenuId === item.id" @click="openMenuId = openMenuId === item.id ? null : item.id"><MoreHorizontal :size="19" :stroke-width="2" /></button>
               <div v-if="openMenuId === item.id" class="website-menu">
-                <a :href="item.href" target="_blank" rel="noopener noreferrer" @click="openWebsite(item)"><ExternalLink :size="15" />打开网站</a>
+                <ExternalLinkButton :href="item.href" @activate="openWebsite(item)" @action="emit('action', $event)"><ExternalLink :size="15" />打开网站</ExternalLinkButton>
                 <button type="button" @click="copyLink(item)"><Copy :size="15" />复制链接</button>
                 <button type="button" @click="openDialog(item)"><Pencil :size="15" />编辑网站</button>
                 <button type="button" @click="toggleFavorite(item)">{{ item.favorite ? '☆ 取消收藏' : '★ 收藏网站' }}</button>

@@ -41,8 +41,30 @@ fn browser_url(value: &str) -> Result<tauri::Url, String> {
 
 #[tauri::command]
 fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    let url = browser_url(&url)?;
-    app.opener().open_url(url.as_str(), None::<&str>).map_err(|_| "Unable to open the default browser".into())
+    let data_dir = app.path().app_data_dir().ok();
+    let log = |message: &str| {
+        if let Some(path) = &data_dir { log_desktop(path, message); }
+    };
+    log("External link: command received");
+    let url = browser_url(&url).map_err(|error| {
+        log("External link: rejected invalid or unsupported URL");
+        error
+    })?;
+    app.opener().open_url(url.as_str(), None::<&str>).map_err(|error| {
+        // Error Display may contain the URL. Record only the category and OS code.
+        let detail = match &error {
+            tauri_plugin_opener::Error::Io(error) => format!("io {:?}, OS code {:?}", error.kind(), error.raw_os_error()),
+            #[cfg(windows)]
+            tauri_plugin_opener::Error::Win32Error(error) => format!("Win32 HRESULT {:?}", error.code()),
+            tauri_plugin_opener::Error::ForbiddenUrl { .. } => "URL scope denied".into(),
+            tauri_plugin_opener::Error::UnknownProgramName(_) => "unknown program".into(),
+            _ => "opener error".into(),
+        };
+        log(&format!("External link: system open failed ({detail})"));
+        "Unable to open the default browser".to_string()
+    })?;
+    log("External link: system open request accepted");
+    Ok(())
 }
 
 fn set_status(app: &tauri::AppHandle, value: &str) {

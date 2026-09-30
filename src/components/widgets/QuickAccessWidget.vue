@@ -2,11 +2,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { ChevronRight, Plus } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
+import ExternalLink from '../ui/ExternalLink.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useWebsitesStore } from '../../stores/websites'
 import type { Website } from '../../types/website'
 
 const auth = useAuthStore()
+const emit = defineEmits<{ action: [message: string] }>()
 const websites = useWebsitesStore()
 const recent = computed(() => websites.recent)
 const failedIcons = ref(new Set<string>())
@@ -25,13 +27,13 @@ function markIconFailed(id: string) { failedIcons.value.add(id) }
   <GlassCard title="快捷访问" class="quick-access-card">
     <template #action><span class="card-chevron" aria-hidden="true"><ChevronRight :size="18" /></span></template>
     <div class="access-grid">
-      <a v-for="item in recent" :key="item.id" class="access-item" :href="item.url" target="_blank" rel="noopener noreferrer" :aria-label="`打开 ${item.name}`" @click="openWebsite(item)">
+      <ExternalLink v-for="item in recent" :key="item.id" class="access-item" :href="item.url" :aria-label="`打开 ${item.name}`" @activate="openWebsite(item)" @action="emit('action', $event)">
         <span class="access-brand" aria-hidden="true">
           <img v-if="item.icon && /^https?:\/\//.test(item.icon) && !failedIcons.has(item.id)" :src="item.icon" alt="" @error="markIconFailed(item.id)" />
           <span v-else class="access-initial">{{ item.name.slice(0, 1).toUpperCase() }}</span>
         </span>
         <span class="access-label">{{ item.name }}</span>
-      </a>
+      </ExternalLink>
       <a class="access-item access-item--add" href="/websites" aria-label="添加网站">
         <span class="access-brand" aria-hidden="true"><Plus :size="32" :stroke-width="1.75" /></span>
         <span class="access-label">添加</span>

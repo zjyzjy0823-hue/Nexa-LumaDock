@@ -2,9 +2,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { MapPin, Sun } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
+import ExternalLink from '../ui/ExternalLink.vue'
 import { getLocationWeather } from '../../services/weather'
 
 const now = ref(new Date())
+const emit = defineEmits<{ action: [message: string] }>()
 const city = ref('定位中…')
 const temperature = ref<number | null>(null)
 const condition = ref('天气加载中')
@@ -85,7 +87,7 @@ const isNight = computed(() => now.value.getHours() < 6 || now.value.getHours() 
         <span><strong>{{ temperature === null ? '--' : `${temperature}°C` }}</strong><small>{{ condition }}</small></span>
       </div>
       <button class="weather-location" type="button" :title="city === '点击获取位置' ? '重试定位' : '更新位置和天气'" @click="locate(true)"><MapPin :size="17" :stroke-width="2.1" />{{ city }}</button>
-      <a v-if="temperature !== null" class="weather-credit" href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">天气数据 Open-Meteo</a>
+      <ExternalLink v-if="temperature !== null" class="weather-credit" href="https://open-meteo.com/" @action="emit('action', $event)">天气数据 Open-Meteo</ExternalLink>
     </div>
   </GlassCard>
 </template>
