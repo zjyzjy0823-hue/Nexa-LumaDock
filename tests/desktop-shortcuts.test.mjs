@@ -22,3 +22,20 @@ test('system/Alt shortcuts and IME composition are not intercepted', () => {
     assert.equal(shouldBlockBrowserShortcut(key('F5', modifiers)), false)
   }
 })
+test('macOS Command browser shortcuts are blocked, including Shift+R', () => {
+  for (const value of ['r', 'R', 'p', 's', 'l', 'u']) {
+    assert.equal(shouldBlockBrowserShortcut(key(value, { metaKey: true }), 'macos'), true, value)
+    assert.equal(shouldBlockBrowserShortcut(key(value, { metaKey: true, shiftKey: true }), 'macos'), true, value)
+    assert.equal(shouldBlockBrowserShortcut(key(value, { ctrlKey: true }), 'macos'), false, value)
+  }
+})
+test('macOS clipboard, undo, redo, search, Quit and IME remain native', () => {
+  for (const value of ['c', 'v', 'x', 'a', 'z', 'k', 'q']) {
+    for (const shiftKey of [false, true]) {
+      assert.equal(shouldBlockBrowserShortcut(key(value, { metaKey: true, shiftKey }), 'macos'), false, value)
+    }
+  }
+  for (const modifiers of [{ altKey: true }, { isComposing: true }, { ctrlKey: true }]) {
+    assert.equal(shouldBlockBrowserShortcut(key('r', { metaKey: true, ...modifiers }), 'macos'), false)
+  }
+})

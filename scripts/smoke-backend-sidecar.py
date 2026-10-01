@@ -1,11 +1,14 @@
-"""Exercise the packaged Windows backend without importing the source app."""
+"""Exercise the native packaged backend without importing the source app."""
 
+import argparse
 import json
 import os
+import platform
 import shutil
 import sqlite3
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -14,9 +17,11 @@ from contextlib import closing
 from pathlib import Path
 from uuid import UUID
 
+from desktop_target import require_native, resolve_target, sidecar_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SIDECAR = ROOT / "src-tauri" / "binaries" / "nexa-backend-x86_64-pc-windows-msvc.exe"
+SIDECAR: Path
 with socket.socket() as listener:
     listener.bind(("127.0.0.1", 0))
     PORT = listener.getsockname()[1]
@@ -35,13 +40,17 @@ def request(path: str, payload: dict | None = None, token: str | None = None,
         return json.load(response) if response.status != 204 else None
 
 
-def launch(data_dir: Path) -> subprocess.Popen:
+def launch(data_dir: Path, parent_pid: int | None = None) -> subprocess.Popen:
     clean_env = os.environ.copy()
-    clean_env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+    clean_env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32") if os.name == "nt" else "/usr/bin:/bin"
     clean_env.pop("PYTHONPATH", None)
     clean_env.pop("PYTHONHOME", None)
-    process = subprocess.Popen([str(SIDECAR), "--data-dir", str(data_dir), "--port", str(PORT)],
-                               creationflags=subprocess.CREATE_NO_WINDOW, env=clean_env)
+    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    arguments = [str(SIDECAR), "--data-dir", str(data_dir), "--port", str(PORT)]
+    if parent_pid is not None:
+        arguments.extend(["--parent-pid", str(parent_pid)])
+    process = subprocess.Popen(arguments,
+                               env=clean_env, **options)
     for _ in range(120):
         if process.poll() is not None:
             log_path = data_dir / "logs" / "backend.log"
@@ -66,15 +75,25 @@ def stop(process: subprocess.Popen, data_dir: Path) -> None:
 
 
 def main() -> None:
+    global SIDECAR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target")
+    args = parser.parse_args()
+    target = resolve_target(args.target)
+    require_native(target)
+    SIDECAR = sidecar_path(target)
+    if not SIDECAR.is_file() or not os.access(SIDECAR, os.X_OK):
+        parser.error(f"Build the executable sidecar first: {SIDECAR}")
     data_dir = Path(tempfile.mkdtemp(prefix="NexaDesktopSmoke-")).resolve()
     try:
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.5"}
-            with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
-                "Origin": "http://tauri.localhost",
-            }), timeout=2) as response:
-                assert response.headers["Access-Control-Allow-Origin"] == "http://tauri.localhost"
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.6"}
+            for origin in ("http://tauri.localhost", "tauri://localhost"):
+                with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
+                    "Origin": origin,
+                }), timeout=2) as response:
+                    assert response.headers["Access-Control-Allow-Origin"] == origin
             result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": "password123"})
             assert result["access_token"]
             token = result["access_token"]
@@ -84,7 +103,7 @@ def main() -> None:
             collection = request("/api/v1/data/collections", {"name": "Smoke Data"}, token)
             record = request(f"/api/v1/data/collections/{collection['id']}/records",
                              {"name": "Smoke Record", "data_json": {"value": 42}}, token)
-            device = request("/api/v1/devices", {"name": "Smoke Device", "kind": "desktop", "system": "Windows", "ip": "127.0.0.1"}, token)
+            device = request("/api/v1/devices", {"name": "Smoke Device", "kind": "desktop", "system": platform.system(), "ip": "127.0.0.1"}, token)
             agent = request("/api/v1/agents", {"name": "Smoke Agent"}, token)
             assert agent["dataScopes"] == []
             request(f"/api/v1/agents/{agent['id']}", {"dataScopes": ["ledger:write", "ledger:read"]}, token, method="PATCH")
@@ -105,6 +124,9 @@ def main() -> None:
             stop(first, data_dir)
         assert (data_dir / "nexa.db").is_file()
         assert (data_dir / "secret.key").is_file()
+        secret_bytes = (data_dir / "secret.key").read_bytes()
+        if os.name != "nt":
+            assert (data_dir / "secret.key").stat().st_mode & 0o777 == 0o600
         installation_id = (data_dir / "installation.id").read_text(encoding="ascii")
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
@@ -116,6 +138,7 @@ def main() -> None:
         second = launch(data_dir)
         try:
             assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id
+            assert (data_dir / "secret.key").read_bytes() == secret_bytes
             result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": "password123"})
             assert result["access_token"]
             assert any(item["id"] == website["id"] for item in request("/api/v1/websites", token=token))
@@ -152,6 +175,20 @@ def main() -> None:
                                       (transaction["id"],)).fetchone()[0] == 0
         assert token not in (data_dir / "logs" / "backend.log").read_text(encoding="utf-8")
         assert agent_token not in (data_dir / "logs" / "backend.log").read_text(encoding="utf-8")
+        if os.name != "nt":
+            # The owner exits naturally on EOF; the frozen backend must stop itself.
+            with subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE) as owner:
+                third = launch(data_dir, owner.pid)
+                try:
+                    owner.stdin.close()
+                    owner.wait(timeout=5)
+                    assert third.wait(timeout=15) == 0
+                    with socket.socket() as listener:
+                        assert listener.connect_ex(("127.0.0.1", PORT)) != 0
+                finally:
+                    if third.poll() is None:
+                        stop(third, data_dir)
+            print("Packaged sidecar: Unix desktop owner exit stops backend and releases port PASS")
         print("Packaged sidecar: Agent scopes/create/replay/audit, six-entity offline outbox, tombstones, persistence, login PASS")
     finally:
         temp_root = Path(tempfile.gettempdir()).resolve()

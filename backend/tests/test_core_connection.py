@@ -1,6 +1,7 @@
 """Local Core enrollment uses HTTP and never persists the user's login secrets."""
 
 import json
+import os
 from uuid import uuid4
 
 import httpx
@@ -71,6 +72,9 @@ def test_connect_status_disconnect_and_secret_storage(client, monkeypatch, tmp_p
     directory = tmp_path / "core-connections" / "1"
     metadata = (directory / "connection.json").read_text(encoding="utf-8")
     assert (directory / "credential").read_text(encoding="ascii") == credential
+    if os.name != "nt":
+        assert (directory / "credential").stat().st_mode & 0o777 == 0o600
+        assert directory.stat().st_mode & 0o777 == 0o700
     assert credential not in metadata
     for secret in ("remote-password", "temporary-core-jwt"):
         assert secret not in metadata

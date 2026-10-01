@@ -4,6 +4,7 @@ import { Search, ChevronRight, Globe2, Workflow, Database } from 'lucide-vue-nex
 import { useDashboardStore } from '../../stores/dashboard'
 import { useAuthStore } from '../../stores/auth'
 import TopActionControls from './TopActionControls.vue'
+import { desktopPlatform } from '../../desktop/platform'
 
 const props = defineProps<{ name?: string }>()
 const auth = useAuthStore()
@@ -91,7 +92,7 @@ onUnmounted(() => {
         <div class="search-box" :class="{ 'search-box--active': searchOpen }">
           <Search :size="22" :stroke-width="1.8" />
           <input ref="searchInput" v-model="query" type="search" placeholder="搜索任何内容..." aria-label="搜索仪表盘" @focus="openSearch" @keydown.enter="filteredSections[0] && navigate(filteredSections[0].id)" />
-          <kbd>Ctrl</kbd><kbd>K</kbd>
+          <kbd>{{ desktopPlatform() === 'macos' ? '⌘' : 'Ctrl' }}</kbd><kbd>K</kbd>
         </div>
         <div v-if="searchOpen" class="toolbar-popover search-results">
           <div class="popover-heading">{{ query ? '搜索结果' : '快速跳转' }}</div>

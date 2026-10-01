@@ -6,6 +6,7 @@ import ConfirmDialog from './components/ui/ConfirmDialog.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import TopSearchBar from './components/layout/TopSearchBar.vue'
 import DesktopTitleBar from './components/desktop/DesktopTitleBar.vue'
+import { desktopPlatform } from './desktop/platform'
 import { scrollPageToTop } from './desktop/desktopInteractions'
 import DashboardPage from './pages/DashboardPage.vue'
 import WebsitesPage from './pages/WebsitesPage.vue'
@@ -140,7 +141,8 @@ onUnmounted(() => {
 <template>
   <ConfirmDialog />
   <div :class="desktop ? 'desktop-app' : undefined">
-  <DesktopTitleBar v-if="desktop" />
+  <DesktopTitleBar v-if="desktopPlatform() === 'windows'" />
+  <div v-if="desktopPlatform() === 'macos'" class="macos-titlebar-inset" data-tauri-drag-region aria-hidden="true" />
   <div :class="desktop ? 'desktop-body' : undefined">
   <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
   <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>

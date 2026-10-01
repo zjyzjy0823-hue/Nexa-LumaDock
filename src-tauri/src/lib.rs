@@ -27,6 +27,11 @@ impl Default for DesktopState {
 }
 
 #[tauri::command]
+fn desktop_platform() -> &'static str {
+    std::env::consts::OS
+}
+
+#[tauri::command]
 fn backend_status(state: tauri::State<'_, DesktopState>) -> String {
     state.status.lock().unwrap().clone()
 }
@@ -156,6 +161,11 @@ fn start_backend(app: tauri::AppHandle) {
                 return;
             }
         };
+        #[cfg(target_os = "macos")]
+        let command = command.args(["--parent-pid", &std::process::id().to_string()]);
+        if app.state::<DesktopState>().quitting.load(Ordering::SeqCst) {
+            return;
+        }
         let data_dir_arg = data_dir.to_string_lossy().into_owned();
         let (mut receiver, child) = match command.args(["--data-dir", data_dir_arg.as_str()]).spawn() {
             Ok(result) => result,
@@ -166,7 +176,15 @@ fn start_backend(app: tauri::AppHandle) {
                 return;
             }
         };
-        app.state::<DesktopState>().child.lock().unwrap().replace(child);
+        {
+            let state = app.state::<DesktopState>();
+            let mut owned_child = state.child.lock().unwrap();
+            if state.quitting.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                return;
+            }
+            owned_child.replace(child);
+        }
         log_desktop(&data_dir, "Backend sidecar spawned");
 
         let monitor_app = app.clone();
@@ -214,7 +232,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("Nexa")
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
             "quit" => {
@@ -230,6 +248,31 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn setup_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+    let menu = Menu::default(app.handle())?;
+    // The default uses Cargo's package name; native menus should use the product name.
+    let app_menu = Submenu::with_items(app, "Nexa", true, &[
+        &PredefinedMenuItem::about(app, Some("About Nexa"), Some(AboutMetadata {
+            name: Some("Nexa".into()),
+            version: Some(app.package_info().version.to_string()),
+            ..Default::default()
+        }))?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::services(app, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::hide(app, Some("Hide Nexa"))?,
+        &PredefinedMenuItem::hide_others(app, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::quit(app, Some("Quit Nexa"))?,
+    ])?;
+    menu.remove_at(0)?;
+    menu.prepend(&app_menu)?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -240,8 +283,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(DesktopState::default())
-        .invoke_handler(tauri::generate_handler![backend_status, open_external_url])
+        .invoke_handler(tauri::generate_handler![desktop_platform, backend_status, open_external_url])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            setup_macos_menu(app)?;
             setup_tray(app)?;
             start_backend(app.handle().clone());
             Ok(())
@@ -258,6 +303,11 @@ pub fn run() {
         .expect("failed to build Nexa Desktop");
     app.run(|app, event| {
         match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_main(app),
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::ExitRequested { .. } => stop_backend(app),
+            #[cfg(not(target_os = "macos"))]
             tauri::RunEvent::ExitRequested { api, .. }
                 if !app.state::<DesktopState>().quitting.load(Ordering::SeqCst) => api.prevent_exit(),
             tauri::RunEvent::Exit => stop_backend(app),

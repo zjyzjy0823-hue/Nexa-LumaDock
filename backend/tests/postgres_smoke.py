@@ -63,7 +63,7 @@ username = f"core_smoke_{uuid4().hex[:12]}"
 with TestClient(app) as client:
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.5"}
+    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.6"}
     registered = client.post("/api/v1/auth/register", json={
         "username": username, "password": "smoke-test-password",
     })

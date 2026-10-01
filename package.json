@@ -1,7 +1,7 @@
 {
   "name": "nexa",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "scripts": {
     "test:desktop": "node --experimental-strip-types --test tests/desktop-shortcuts.test.mjs",
@@ -10,9 +10,13 @@
     "preview": "vite preview --host 0.0.0.0",
     "build:desktop": "vue-tsc --noEmit && vite build --mode desktop",
     "dev:desktop": "vite --mode desktop --host 127.0.0.1",
-    "desktop:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend-sidecar.ps1",
-    "desktop:dev": "npm run desktop:prepare && tauri dev --target x86_64-pc-windows-msvc",
-    "desktop:build": "npm run desktop:prepare && tauri build --target x86_64-pc-windows-msvc"
+    "desktop:prepare": "node scripts/desktop.mjs prepare",
+    "desktop:dev": "node scripts/desktop.mjs dev",
+    "desktop:build": "node scripts/desktop.mjs build",
+    "desktop:prepare:windows": "node scripts/desktop.mjs prepare --target x86_64-pc-windows-msvc",
+    "desktop:prepare:macos": "node scripts/desktop.mjs prepare --target x86_64-apple-darwin",
+    "desktop:build:windows": "node scripts/desktop.mjs build --target x86_64-pc-windows-msvc",
+    "desktop:build:macos": "node scripts/desktop.mjs build --target x86_64-apple-darwin"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",

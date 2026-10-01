@@ -5,6 +5,11 @@ html.nexa-desktop { --desktop-wallpaper-size:max(100vw, calc(100dvh * 1920 / 107
 html.nexa-desktop, .nexa-desktop body, .nexa-desktop #app { height:100%; min-height:0; overflow:hidden; }
 .nexa-desktop .desktop-app { display:flex; flex-direction:column; height:100%; min-height:0; }
 .nexa-desktop .desktop-body { flex:1; min-height:0; min-width:0; }
+/* Real AppKit controls occupy this region; every page shares the same inset. */
+.nexa-macos { --macos-top-inset:36px; }
+.nexa-macos .macos-titlebar-inset { height:var(--macos-top-inset); flex:none; }
+.nexa-macos [class]:has(> [aria-modal="true"]) { top:var(--macos-top-inset); }
+.nexa-macos [aria-modal="true"] { max-height:calc(100dvh - var(--macos-top-inset) - 40px); overflow-y:auto; }
 .nexa-desktop .nexa-shell { height:100%; min-height:0; }
 .nexa-desktop .sidebar { position:relative; top:0; height:100%; min-height:0; overflow:hidden; }
 .nexa-desktop .sidebar__nav { min-height:0; }
