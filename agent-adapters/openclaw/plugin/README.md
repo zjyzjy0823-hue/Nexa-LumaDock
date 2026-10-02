@@ -1,6 +1,6 @@
 # Nexa OpenClaw Tools 0.1.0
 
-用于 Nexa Local 0.5.5 的官方 OpenClaw Tool Plugin。包含 29 个静态业务工具和 `nexa_status`，共 30 个 tools。Runtime Adapter 保持独立版本 0.1.0。
+用于 Nexa Local 0.5.5 / 0.5.6 的官方 OpenClaw Tool Plugin。包含 29 个静态业务工具和 `nexa_status`，共 30 个 tools。Runtime Adapter 保持独立版本 0.1.0。
 
 要求 OpenClaw **2026.9.6** 与 Node **24.16.0+（<25）或 26.1.0+**。实际 SDK 使用 `openclaw/plugin-sdk/tool-plugin` 的 `defineToolPlugin`，不使用社区旧格式。
 

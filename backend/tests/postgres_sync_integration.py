@@ -44,6 +44,7 @@ from app.database import get_db  # noqa: E402
 from app.models import LedgerCategory, LedgerTransaction, LocalMutation, User, Workspace, Website, WebsiteCategory, DataCollection, DataRecord  # noqa: E402
 from app.security import create_access_token  # noqa: E402
 from app.models import AgentActionLog
+from app.utils.time import iso_utc
 
 
 def checked(client, method, path, *, expected=200, **kwargs):
@@ -76,7 +77,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.5"}
+                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.6"}
                             break
                     except httpx.RequestError:
                         pass
@@ -137,13 +138,13 @@ class Replica:
     def connect(self, core, origin, headers):
         enrolled = checked(core, "POST", "/api/v1/clients/enroll", expected=201, headers=headers, json={
             "installationId": self.installation_id, "name": self.directory.name,
-            "platform": "windows", "appVersion": "0.5.5"})
+            "platform": "windows", "appVersion": "0.5.6"})
         self.client_id = enrolled["client"]["id"]
         self.core_workspace_id = enrolled["client"]["workspaceId"]
         metadata = CoreConnectionMetadata.model_validate({
             "schemaVersion": 1, "coreUrl": origin, "clientId": self.client_id,
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
-            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.5",
+            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.6",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
         os.environ["NEXA_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])
@@ -154,10 +155,10 @@ class Replica:
         assert result["status"] == status, f"Sync failed: {result.get('lastError')}"
         return result
 
-    def transaction(self, description, category_id=None):
+    def transaction(self, description, category_id=None, occurred_at="2026-09-28T12:00:00Z"):
         return self.request("POST", "/api/v1/ledger/transactions", expected=201, json={
             "category_id": category_id, "type": "expense", "amount": "38.00",
-            "description": description, "occurred_at": "2026-09-28T12:00:00Z"})["id"]
+            "description": description, "occurred_at": occurred_at})["id"]
 
     def edit(self, entity_id, description, amount=None):
         data = {"description": description}
@@ -205,7 +206,7 @@ def agent_tool_offline_creates(replica):
                 text=True, capture_output=True, timeout=45)
             assert result.returncode == 0, f"Tool {action} failed safely: {result.stderr}"
             return json.loads(result.stdout)
-        transaction = tool("ledger.transaction.create", {"type": "expense", "amount": "38.00", "description": "Agent coffee", "occurredAt": "2026-09-30T09:00:00Z"}, drop_response=True)
+        transaction = tool("ledger.transaction.create", {"type": "expense", "amount": "38.00", "description": "Agent coffee", "occurredAt": "2026-10-02T17:48:00+08:00"}, drop_response=True)
         assert transaction["replayed"], "Real committed-response loss must replay without a duplicate transaction"
         category = tool("website.category.create", {"name": "Agent Tools"})["data"]["entityId"]
         website = tool("website.create", {"name": "Agent Website", "url": "https://example.com", "categoryId": category})
@@ -216,6 +217,10 @@ def agent_tool_offline_creates(replica):
         assert len(db.scalars(select(AgentActionLog).where(AgentActionLog.agent_id == agent["id"], AgentActionLog.status == "ok")).all()) == 5
         for entity_id in ids.values():
             assert db.scalar(select(LocalMutation).where(LocalMutation.entity_id == entity_id, LocalMutation.status == "pending")) is not None
+        tx = db.get(LedgerTransaction, ids[LedgerTransaction])
+        assert iso_utc(tx.occurred_at) == "2026-10-02T09:48:00+00:00"
+        entry = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == tx.id))
+        assert entry.payload_json["occurredAt"] == "2026-10-02T09:48:00+00:00"
     return ids, category, collection
 
 
@@ -243,25 +248,37 @@ def main(skip_agent_tools=False):
 
                 category_id = a.request("POST", "/api/v1/ledger/categories", expected=201,
                                         json={"name": "Food", "type": "expense"})["id"]
-                coffee_id = a.transaction("Coffee38", category_id)
+                coffee_id = a.transaction("Coffee38", category_id, "2026-10-02T17:48:00+08:00")
+                expected_time = "2026-10-02T09:48:00+00:00"
+                assert a.request("GET", f"/api/v1/ledger/transactions/{coffee_id}")["occurredAt"] == expected_time
                 assert a.run()["pushed"] == 2
                 b.run()
                 with core_factory() as db:
                     assert db.get(LedgerCategory, category_id).workspace_id == a.core_workspace_id
                     item = db.get(LedgerTransaction, coffee_id)
                     assert item.workspace_id == a.core_workspace_id and item.user_id == core_user_id
+                    assert iso_utc(item.occurred_at) == expected_time
                 with b.factory() as db:
                     item = db.get(LedgerTransaction, coffee_id)
                     assert item.workspace_id == b.workspace_id and item.user_id == b.user_id
                     assert item.description == "Coffee38" and item.category_id == category_id
+                    assert item.occurred_at.replace(tzinfo=None) == datetime(2026, 10, 2, 9, 48)
                     assert db.get(LedgerCategory, category_id).workspace_id == b.workspace_id
+                for replica in (a, b):
+                    assert replica.request("GET", f"/api/v1/ledger/transactions/{coffee_id}")["occurredAt"] == expected_time
+                assert checked(core, "GET", f"/api/v1/ledger/transactions/{coffee_id}", headers=headers)["occurredAt"] == expected_time
+                b.request("PATCH", f"/api/v1/ledger/transactions/{coffee_id}", json={"occurred_at": "2026-10-02T05:48:00-04:00"})
                 b.edit(coffee_id, "Coffee42", "42.00")
                 b.run()
                 a.run()
                 for replica in (a, b):
                     assert replica.request("GET", f"/api/v1/ledger/transactions/{coffee_id}")["amount"] == "42.00"
+                    assert replica.request("GET", f"/api/v1/ledger/transactions/{coffee_id}")["occurredAt"] == expected_time
+                    with replica.factory() as db:
+                        assert db.get(LedgerTransaction, coffee_id).occurred_at.replace(tzinfo=None) == datetime(2026, 10, 2, 9, 48)
                 with core_factory() as db:
                     assert db.get(LedgerTransaction, coffee_id).amount == Decimal("42.00")
+                    assert iso_utc(db.get(LedgerTransaction, coffee_id).occurred_at) == expected_time
                 a.request("DELETE", f"/api/v1/ledger/transactions/{coffee_id}", expected=204)
                 a.run()
                 b.run()
@@ -377,6 +394,8 @@ def main(skip_agent_tools=False):
                         for model, entity_id in agent_ids.items():
                             item = db.get(model, entity_id)
                             assert item is not None and adapter_for(item).workspace_id(db, item) == workspace
+                            if model is LedgerTransaction:
+                                assert iso_utc(item.occurred_at) == "2026-10-02T09:48:00+00:00"
                             if model is not DataRecord:
                                 assert item.user_id == owner
                         if agent_ids:

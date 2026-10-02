@@ -46,6 +46,13 @@ async page => {
       fixture.dispatchEvent(drop)
       check('drop remains available', drop.defaultPrevented, false)
       dispose()
+      dispose = installDesktopInteractions(document, 'macos')
+      for (const [key, shiftKey, blocked] of [['r', false, true], ['R', true, true], ['p', false, true], ['s', false, true], ['l', false, true], ['u', false, true], ['c', false, false], ['v', false, false], ['x', false, false], ['a', false, false], ['z', false, false], ['z', true, false], ['k', false, false], ['q', false, false]]) {
+        const event = new KeyboardEvent('keydown', { key, metaKey: true, shiftKey, bubbles: true, cancelable: true })
+        fixture.querySelector('textarea').dispatchEvent(event)
+        check(`shortcut Cmd+${shiftKey ? 'Shift+' : ''}${key}`, event.defaultPrevented, blocked)
+      }
+      dispose()
       const after = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
       fixture.dispatchEvent(after)
       check('listener cleanup restores default behavior', after.defaultPrevented, false)

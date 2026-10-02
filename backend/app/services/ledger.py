@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from ..utils.time import iso_utc
+from ..utils.time import aware_utc, iso_utc
 from ..database import runtime_config
 from ..models import LedgerCategory, LedgerTransaction, User, utcnow
 from .ownership import owner_workspace
@@ -45,6 +45,11 @@ class TransactionInput(BaseModel):
     merchant: str = Field(default="", max_length=120)
     note: str = Field(default="", max_length=500)
 
+    @field_validator("occurred_at")
+    @classmethod
+    def normalize_occurred_at(cls, value: datetime) -> datetime:
+        return aware_utc(value)
+
     @field_validator("description")
     @classmethod
     def nonempty_description(cls, value):
@@ -61,6 +66,11 @@ class TransactionPatch(BaseModel):
     occurred_at: datetime | None = None
     merchant: str | None = Field(default=None, max_length=120)
     note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def normalize_occurred_at(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
     @field_validator("description")
     @classmethod

@@ -1,10 +1,13 @@
+import type { DesktopPlatform } from './platform'
+
 type Shortcut = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'metaKey' | 'isComposing'>
 
 /** Keep application/editing shortcuts while suppressing WebView browser commands. */
-export function shouldBlockBrowserShortcut(event: Shortcut): boolean {
-  if (event.isComposing || event.altKey || event.metaKey) return false
+export function shouldBlockBrowserShortcut(event: Shortcut, platform: DesktopPlatform = 'windows'): boolean {
+  if (event.isComposing || event.altKey) return false
+  const primary = platform === 'macos' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
   const key = event.key.toLowerCase()
-  return key === 'f5' || (event.ctrlKey && ['r', 'p', 's', 'l', 'u'].includes(key))
+  return (key === 'f5' && !event.metaKey) || (primary && ['r', 'p', 's', 'l', 'u'].includes(key))
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {
@@ -19,11 +22,11 @@ export function shouldSuppressDrag(target: EventTarget | null): boolean {
   return target.closest('img, a, svg') !== null
 }
 
-/** Desktop only. Disable all native menus; keyboard clipboard/editing remains native. */
-export function installDesktopInteractions(doc: Document = document): () => void {
+/** Desktop only. Suppress WebView context menus; native editing shortcuts remain available. */
+export function installDesktopInteractions(doc: Document = document, platform: DesktopPlatform = 'windows'): () => void {
   const contextmenu = (event: MouseEvent) => event.preventDefault()
   const keydown = (event: KeyboardEvent) => {
-    if (shouldBlockBrowserShortcut(event)) event.preventDefault()
+    if (shouldBlockBrowserShortcut(event, platform)) event.preventDefault()
   }
   const dragstart = (event: DragEvent) => {
     if (shouldSuppressDrag(event.target)) event.preventDefault()

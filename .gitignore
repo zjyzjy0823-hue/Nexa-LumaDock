@@ -1,4 +1,6 @@
 node_modules/
+.venv/
+scripts/__pycache__/
 dist/
 .playwright-cli/
 output/playwright/
@@ -27,9 +29,10 @@ backend/build/
 backend/dist/
 src-tauri/target/
 src-tauri/gen/
-src-tauri/binaries/*.exe
+src-tauri/binaries/nexa-backend-*
 src-tauri/icons/*
 !src-tauri/icons/32x32.png
 !src-tauri/icons/128x128.png
 !src-tauri/icons/128x128@2x.png
 !src-tauri/icons/icon.ico
+!src-tauri/icons/icon.icns

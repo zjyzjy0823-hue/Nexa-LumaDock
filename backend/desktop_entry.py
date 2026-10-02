@@ -14,21 +14,26 @@ from uuid import UUID, uuid4
 from sqlalchemy.engine import URL
 
 
-DESKTOP_ORIGINS = "http://tauri.localhost,http://localhost:5173,http://127.0.0.1:5173"
+DESKTOP_ORIGINS = "tauri://localhost,http://tauri.localhost,http://localhost:5173,http://127.0.0.1:5173"
 
 
 def prepare_desktop(data_dir: Path) -> dict[str, str]:
     """Prepare persistent desktop settings before importing app.main/security."""
     data_dir = data_dir.expanduser().resolve()
-    data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / "logs").mkdir(exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (data_dir / "logs").mkdir(exist_ok=True, mode=0o700)
+    (data_dir / "core-connections").mkdir(exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        data_dir.chmod(0o700)
     secret_path = data_dir / "secret.key"
     if not secret_path.exists():
         try:
-            with secret_path.open("x", encoding="ascii") as output:
+            with os.fdopen(os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="ascii") as output:
                 output.write(secrets.token_hex(32))
         except FileExistsError:
             pass
+    if os.name != "nt":
+        secret_path.chmod(0o600)
     secret = secret_path.read_text(encoding="ascii").strip()
     if len(secret) < 64:
         raise RuntimeError("Desktop secret.key is invalid")
@@ -69,13 +74,28 @@ def configure_logging(data_dir: Path) -> None:
         logger.propagate = False
 
 
+def desktop_parent_alive(parent_pid: int | None) -> bool:
+    if parent_pid is None or os.name == "nt":
+        return True
+    try:
+        os.kill(parent_pid, 0)  # Unix existence probe; no signal is delivered.
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--port", type=int, default=17800, help="Loopback port (default 17800; use an isolated port for smoke tests)")
+    parser.add_argument("--parent-pid", type=int, help="Desktop process owner on Unix")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
+    if args.parent_pid is not None and args.parent_pid <= 0:
+        parser.error("parent-pid must be positive")
     data_dir = args.data_dir.expanduser().resolve()
     try:
         prepare_desktop(data_dir)
@@ -89,7 +109,7 @@ def main() -> None:
 
         def watch_shutdown() -> None:
             while not server.should_exit:
-                if shutdown_file.exists():
+                if shutdown_file.exists() or not desktop_parent_alive(args.parent_pid):
                     logging.info("Desktop shutdown requested")
                     server.should_exit = True
                     return

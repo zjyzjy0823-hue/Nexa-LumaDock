@@ -32,13 +32,11 @@ const auth = useAuthStore()
 const store = useSettingsStore()
 const profile = computed<UserProfile>(() => ({ username: auth.user?.username ?? '', email: '', timezone: store.settings.timezone, language: store.settings.language }))
 const appearance = computed<AppearanceConfig>(() => ({ ...defaultSettings.appearance, ...store.settings.appearance } as AppearanceConfig))
-const syncConfig = computed<SyncConfig>(() => ({ ...defaultSettings.sync, ...store.settings.sync } as SyncConfig))
 const security = computed<SecurityConfig>(() => ({ ...defaultSettings.security, ...store.settings.security } as SecurityConfig))
 const notifications = computed<NotificationConfig>(() => store.settings.notifications)
 const storage = ref<StorageInfo>({ usedGb: 0, totalGb: 0, segments: [] })
 const avatarUrl = computed(() => auth.user?.avatar ?? '')
 const passwordOpen = ref(false)
-const syncing = ref(false)
 const passwordDraft = ref({ current: '', next: '', confirm: '' })
 const saving = ref(false)
 onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
@@ -84,12 +82,11 @@ async function updatePassword() {
     emit('action', '密码已修改。')
   } catch (error) { emit('action', error instanceof Error ? error.message : '密码修改失败') }
 }
-async function syncNow() { if (auth.token) { syncing.value = true; try { await store.load(auth.token, true); emit('action', '设置已刷新。') } catch {} finally { syncing.value = false } } }
 function clearCache() { emit('action', '没有可清理的缓存。') }
 function snapshot() {
   return {
     product: 'Nexa', version: aboutInfo.version, exportedAt: new Date().toISOString(),
-    profile: profile.value, appearance: appearance.value, sync: syncConfig.value,
+    profile: profile.value, appearance: appearance.value, sync: store.settings.sync,
     security: security.value, notifications: notifications.value,
   }
 }
@@ -140,7 +137,7 @@ async function importData(file: File) {
       <div class="settings-content" :key="activeSection" :inert="saving">
         <AccountSettings v-if="activeSection === 'account'" :profile="profile" :avatar-url="avatarUrl" @update:profile="updateProfile" @avatar="updateAvatar" @password="passwordOpen = true" />
         <AppearanceSettings v-else-if="activeSection === 'appearance'" :config="appearance" @update:config="saveSettings({ theme: $event.theme === 'auto' ? 'system' : $event.theme, appearance: $event })" />
-        <SyncSettings v-else-if="activeSection === 'sync'" :config="syncConfig" :syncing="syncing" @update:config="saveSettings({ sync: $event })" @sync="syncNow" />
+        <SyncSettings v-else-if="activeSection === 'sync'" @action="emit('action', $event)" />
         <StorageSettings v-else-if="activeSection === 'storage'" :info="storage" @clear="clearCache" @export="exportData" @import="importData" @backup="backupData" />
         <SecuritySettings v-else-if="activeSection === 'security'" :config="security" @update:config="saveSettings({ security: $event })" @password="passwordOpen = true" @action="emit('action', $event)" @navigate="emit('navigate', $event)" />
         <NotificationSettings v-else-if="activeSection === 'notifications'" :config="notifications" @update:config="saveSettings({ notifications: $event })" />
