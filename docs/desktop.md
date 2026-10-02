@@ -82,7 +82,22 @@ macOS shell 使用 36px 顶部空间与原生 AppKit 控件；Windows 使用现�
 
 同步实体为 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`。首次启动升级至 `0015_agent_data_actions`（包含原有 0014 多实体迁移），保留原数据、Ledger revision、outbox、cursor 与安装身份。Local `queue_seed_version` 会继续为已完成 Ledger seeding 的旧库补入 Website/Data，父实体先于子实体推送。普通页面隐藏 tombstone；删除网站分类会清空网站分类引用，删除 Collection 会逻辑删除 Records。
 
-Client 和 Core 必须同时使用 Sync Protocol v2；混合旧版同步会明确报错，queue/cursor 留存。手动 sync API 保持不变，连接元数据仍为 schemaVersion 1。Settings、Device、Agent、Automation 与 Dashboard 尚未同步；后台同步、Sync UI 和冲突解决 UI 尚未实现。Settings 中可能跨设备共享的偏好与必须 Local-only 的连接/安全配置分类见 [Sync 说明](sync.md)。本版本可本地构建安装包，正式下载以随后单独发布的 Release 为准。
+Client 和 Core 必须同时使用 Sync Protocol v2；混合旧版同步会明确报错，queue/cursor 留存。手动 sync API 保持不变，连接元数据仍为 schemaVersion 1。Settings、Device、Agent、Automation 与 Dashboard 尚未同步；后台同步与冲突解决 UI 尚未实现。v0.5.6 已提供 Core Connection 和 Manual Sync UI，使用说明见下节。Settings 中可能跨设备共享的偏好与必须 Local-only 的连接/安全配置分类见 [Sync 说明](sync.md)。本版本可本地构建安装包，正式下载以随后单独发布的 Release 为准。
+
+## v0.5.6 Core 连接与手动同步
+
+Windows 与 macOS Local Client 可直接在 **设置 → 同步（Settings → Sync）** 中连接 Core、测试连接、断开连接、查看 Sync Status 和执行 Manual Sync，无需手工调用 Core API。
+
+1. 准备 Core 账户，在未连接表单输入 Core 地址、Core 用户名、密码和设备名称。地址示例为 `https://core.example.com`；可信局域网开发环境也可用 `http://192.168.1.50:8000`。点击「连接 Core」。
+2. 已连接卡片显示 Backend 保存的 Core 地址、设备名称、平台、客户端版本及连接时间。Client、Installation 和 Workspace ID 折叠在「技术信息」中。点击「测试连接」验证是否连接正常；无法访问或凭证失效会明确提示，不会自动重新注册设备。
+3. 数据同步卡片显示真实 pending、conflicts、inFlight、rejected、cursor、上次成功时间和安全错误提示。点击「立即同步」运行一次同步，查看上传/接收数量及更新后的状态。存在冲突时会提示当前版本暂不支持在界面解决。
+4. 「断开连接」需要确认：只移除这台设备保存的 Core 连接信息，不会删除本地数据，也不会自动撤销 Core 上的 Client。使用同一 Core 账户重连时，沿用 Backend 的安装身份恢复和凭证轮换逻辑；连接 UI 不重置 outbox 或 cursor，也不支持直接切换已绑定的 Core 身份。
+
+Core 不可用时，Ledger、Website、Data 仍先写入本机 SQLite。未连接时也能查看 Local outbox，「立即同步」禁用；已连接但 Core 离线时，手动同步安全失败，数据和队列留存。恢复 Core 后测试连接并再次点击「立即同步」即可。本版本没有自动同步、定时同步、启动同步或网络恢复同步；旧 Settings 同步配置字段继续保留兼容，但不再作为真实 Core 连接配置展示。
+
+连接密码只在表单/连接请求中短暂使用，提交时清空，离开页面也清空；不会保存至 Settings 或浏览器存储。Core 用户登录 Token 和 Client credential 由 Backend 管理，前端只接收公开连接元数据。Desktop 前端只调用 `127.0.0.1:17800` 的 Local API，由 Local Backend 访问 Core；无需改变 Tauri CSP 或允许 WebView 直连 Core。Docker 测试 Core 的 `127.0.0.1:8000` 与 Local 端口不同。
+
+2026-10-02 的 Windows 实机结果见 [Core Sync UI 验收](core-sync-ui-2026-10-02.md)。macOS UI 沿用跨平台内容布局和现有平台检测，本次没有 macOS 实机 UI 验收。**Mac Local ↔ Real Core ↔ Windows Local 的真实两台设备双向同步仍是最终 Release Gate。**
 
 ## Agent Data Actions
 
