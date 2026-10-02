@@ -241,6 +241,12 @@ def test_response_lost_canonical_replay_audit_task(client, users):
     with session(client) as db:
         assert db.scalar(select(func.count()).select_from(LedgerTransaction)) == 1
         assert db.scalar(select(func.count()).select_from(LocalMutation)) == 1
+        entity_id = first.json()["data"]["entityId"]
+        item = db.get(LedgerTransaction, entity_id)
+        assert (item.occurred_at.hour, item.occurred_at.minute) == (1, 0)
+        assert ledger.transaction_out(item)["occurredAt"] == "2026-09-30T01:00:00+00:00"
+        entry = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == entity_id))
+        assert entry.payload_json["occurredAt"] == "2026-09-30T01:00:00+00:00"
         logs = db.scalars(select(AgentActionLog)).all()
         success = [entry for entry in logs if entry.status == "ok"]
         assert len(success) == 1 and success[0].task_id == task["id"]
@@ -558,6 +564,8 @@ def test_agent_offline_outbox_manual_sync_all_domains(network):
                         item is not None
                         and adapter.workspace_id(db, item) == local.workspace_id
                     )
+                    if entity_type == "ledger.transaction":
+                        assert ledger.transaction_out(item)["occurredAt"] == "2026-09-30T01:00:00+00:00"
         for parent_action, parent_id in [
             ("website.category.delete", category),
             ("data.collection.delete", collection),

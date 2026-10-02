@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..utils.time import aware_utc
+
 
 class CategoryData(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -31,6 +33,11 @@ class TransactionData(BaseModel):
     merchant: str = Field(default="", max_length=120)
     note: str = Field(default="", max_length=500)
     occurredAt: datetime
+
+    @field_validator("occurredAt")
+    @classmethod
+    def normalize_occurred_at(cls, value: datetime) -> datetime:
+        return aware_utc(value)
 
     @field_validator("amount", mode="before")
     @classmethod
