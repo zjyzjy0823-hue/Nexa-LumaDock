@@ -88,7 +88,7 @@ def main() -> None:
     try:
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.6"}
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.7"}
             for origin in ("http://tauri.localhost", "tauri://localhost"):
                 with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                     "Origin": origin,

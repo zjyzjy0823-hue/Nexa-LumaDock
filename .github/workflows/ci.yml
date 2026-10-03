@@ -11,6 +11,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run test:core-sync
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -75,6 +76,8 @@ jobs:
       - run: python tests/postgres_upgrade_smoke.py
         working-directory: backend
       - run: python tests/postgres_sync_integration.py
+        working-directory: backend
+      - run: python tests/postgres_background_sync_integration.py
         working-directory: backend
   device-client:
     runs-on: windows-latest

@@ -7,7 +7,7 @@ import Input from '../ui/Input.vue'
 import SettingsSection from './SettingsSection.vue'
 import { desktopPlatform } from '../../desktop/platform'
 import { useCoreSync } from '../../composables/useCoreSync'
-import { syncErrorMessage } from '../../services/coreSyncErrors'
+import { syncErrorMessage, syncStatusDisplay } from '../../services/coreSyncErrors'
 import type { CorePlatform } from '../../api/core'
 
 const emit = defineEmits<{ action: [message: string] }>()
@@ -22,6 +22,7 @@ const clientName = ref(`Nexa ${platformLabels[platform]}`)
 const validationError = ref('')
 const testStatus = computed(() => connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
 const statusLabels = { connected: '已连接', disconnected: '未连接', unauthorized: '凭证失效', unreachable: '无法访问 Core' }
+const syncDisplay = computed(() => syncStatus.value ? syncStatusDisplay(syncStatus.value) : null)
 
 function formatTime(value: string | null) {
   if (!value) return '尚无成功同步'
@@ -54,7 +55,7 @@ onUnmounted(() => { password.value = '' })
 </script>
 
 <template>
-  <SettingsSection title="同步" description="本地修改先保存在这台设备，连接 Nexa Core 后可手动同步。">
+  <SettingsSection title="同步" description="本地修改立即保存在这台设备，连接 Nexa Core 后会在后台自动同步。">
     <div class="settings-card" :aria-busy="connectionLoading || (!!action && action !== 'sync')">
       <div class="settings-card__heading">
         <span>Core 连接</span>
@@ -98,11 +99,16 @@ onUnmounted(() => { password.value = '' })
       <div class="settings-button-row"><ActionButton variant="ghost" :disabled="busy" @click="refresh()"><RefreshCw :size="14" />刷新状态</ActionButton></div>
     </div>
 
-    <div class="settings-card" :aria-busy="syncLoading || action === 'sync'">
-      <div class="settings-card__heading"><span>数据同步</span><small>手动同步</small></div>
+    <div class="settings-card" :aria-busy="syncLoading || action === 'sync' || syncStatus?.running">
+      <div class="settings-card__heading"><span>数据同步</span><small>后台自动同步</small></div>
       <p v-if="syncLoading" class="sync-note" role="status">正在加载同步状态…</p>
       <p v-if="syncError" class="sync-error" role="alert">{{ syncError }}</p>
       <template v-if="syncStatus">
+        <div v-if="syncDisplay" class="auto-sync-status" :class="`auto-sync-status--${syncDisplay.tone}`" role="status">
+          <RefreshCw v-if="syncStatus.running" :size="15" class="sync-spin" aria-hidden="true" />
+          <i v-else aria-hidden="true" />
+          <div><strong>{{ syncDisplay.label }}</strong><p>{{ syncDisplay.detail }}</p></div>
+        </div>
         <dl class="sync-counts">
           <div><dt>待同步</dt><dd class="count-pending">{{ syncStatus.pending }}</dd></div>
           <div><dt>冲突</dt><dd :class="{ 'count-warning': syncStatus.conflicts > 0 }">{{ syncStatus.conflicts }}</dd></div>
@@ -112,6 +118,7 @@ onUnmounted(() => { password.value = '' })
         <dl class="connection-details sync-details">
           <dt>Cursor</dt><dd>{{ syncStatus.cursor }}</dd>
           <dt>上次成功同步</dt><dd>{{ formatTime(syncStatus.lastSuccessAt) }}</dd>
+          <template v-if="syncStatus.nextRetryAt && !syncStatus.blocked"><dt>下次自动重试</dt><dd>{{ formatTime(syncStatus.nextRetryAt) }}</dd></template>
           <dt>最后错误</dt><dd :class="{ 'sync-error': syncStatus.lastError }">{{ syncStatus.lastError ? syncErrorMessage(syncStatus.lastError) : '无' }}</dd>
         </dl>
         <p v-if="syncStatus.conflicts > 0" class="sync-note count-warning">存在 {{ syncStatus.conflicts }} 个同步冲突，当前版本暂不支持在界面解决。</p>
@@ -121,7 +128,7 @@ onUnmounted(() => { password.value = '' })
         {{ syncResult.status === 'ok' ? '同步完成' : '同步未完成' }}：上传 {{ syncResult.pushed }} 项，接收 {{ syncResult.pulled }} 项。
         <span v-if="syncResult.status === 'error'">{{ syncErrorMessage(syncResult.lastError) }}</span>
       </p>
-      <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
+      <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
     </div>
   </SettingsSection>
 </template>
@@ -139,6 +146,14 @@ onUnmounted(() => { password.value = '' })
 .technical-details .connection-details { margin-top: 12px; font-size: 11px; }
 .sync-note, .sync-error, .sync-result { margin: 12px 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .sync-note { color: var(--text-secondary); }
+.auto-sync-status { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; color: var(--text-secondary); }
+.auto-sync-status > i { width: 7px; height: 7px; flex: 0 0 7px; margin-top: 5px; border-radius: 50%; background: currentColor; }
+.auto-sync-status > svg { flex-shrink: 0; margin-top: 2px; }
+.auto-sync-status strong { font-size: 13px; }
+.auto-sync-status p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.auto-sync-status--success { color: #29846f; }
+.auto-sync-status--active { color: var(--accent-deep); }
+.auto-sync-status--warning { color: #b14e65; }
 .sync-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
 .sync-counts div { padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--glass-tile-background); }
 .sync-counts dt { color: var(--text-secondary); font-size: 11px; }

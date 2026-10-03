@@ -1,4 +1,4 @@
-"""One manual Local sync cycle; every network call is outside a SQLite transaction."""
+"""One shared Local sync cycle; every network call is outside a SQLite transaction."""
 
 from contextlib import nullcontext
 from threading import Lock
@@ -18,6 +18,15 @@ from .remote import SyncRemoteClient, SyncRemoteError
 
 _locks_guard = Lock()
 _workspace_locks: dict[tuple[str, str], Lock] = {}
+
+
+class SyncCycleCancelled(Exception):
+    """Cooperative lifecycle stop, never a persisted synchronization error."""
+
+
+def _check_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise SyncCycleCancelled()
 
 
 def _lock_for(database: str, workspace_id: str) -> Lock:
@@ -123,15 +132,18 @@ def _validate_snapshot(adapter, payload, deleted):
         raise SyncRemoteError("invalid_response") from None
 
 
-def _send(factory, workspace_id: str, remote, mutation_id: str) -> str:
+def _send(factory, workspace_id: str, remote, mutation_id: str, cancel_event=None) -> str:
+    _check_cancelled(cancel_event)
     request = _freeze(factory, workspace_id, mutation_id)
     # A transport failure leaves the exact frozen request in SQLite for replay.
     try:
+        _check_cancelled(cancel_event)
         result = remote.push_mutation(request)
         if not isinstance(result, dict) or result.get("mutationId") != mutation_id:
             raise SyncRemoteError("invalid_response")
         return _acknowledge(factory, workspace_id, mutation_id, result)
     except SyncRemoteError as error:
+        _check_cancelled(cancel_event)
         with factory() as db:
             entry = db.scalar(select(LocalMutation).where(
                 LocalMutation.workspace_id == workspace_id,
@@ -216,18 +228,22 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
         db.commit()  # Entity, conflict state and cursor have one crash boundary.
 
 
-def _pull(factory, remote, user_id: int, workspace_id: str) -> tuple[int, int]:
+def _pull(factory, remote, user_id: int, workspace_id: str, cancel_event=None) -> tuple[int, int]:
     pulled = 0
     while True:
+        _check_cancelled(cancel_event)
         with factory() as db:
             cursor = get_local_sync_state(db, workspace_id).cursor
+        _check_cancelled(cancel_event)
         page = remote.get_changes(cursor, 100)
+        _check_cancelled(cancel_event)
         if page.get("protocolVersion") != SYNC_PROTOCOL_VERSION:
             raise SyncRemoteError("protocol_mismatch")
         changes = page.get("changes")
         if not isinstance(changes, list) or len(changes) > 100:
             raise SyncRemoteError("invalid_response")
         for change in changes:
+            _check_cancelled(cancel_event)
             _apply_change(factory, user_id, workspace_id, change)
             pulled += 1
         next_cursor = changes[-1]["revision"] if changes else cursor
@@ -281,7 +297,7 @@ def _counts(factory, workspace_id: str) -> dict:
 
 
 def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credential: str,
-                   remote=None) -> dict:
+                   remote=None, *, cancel_event=None) -> dict:
     """Synchronize one Local Personal Workspace. A caller may inject a test transport."""
     with factory() as db:
         database_key = str(db.get_bind().url)
@@ -291,6 +307,7 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
     pushed = pulled = 0
     workspace_revision = None
     try:
+        _check_cancelled(cancel_event)
         with factory() as db:
             bind_local_sync_state(db, workspace_id, metadata)
             seed_local_queue(db, workspace_id)
@@ -299,8 +316,10 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
         with context as transport:
             with factory() as db:
                 cursor = get_local_sync_state(db, workspace_id).cursor
+            _check_cancelled(cancel_event)
             if transport.get_changes(cursor, 1).get("protocolVersion") != SYNC_PROTOCOL_VERSION:
                 raise SyncRemoteError("protocol_mismatch")
+            _check_cancelled(cancel_event)
             with factory() as db:
                 inflight = db.scalars(select(LocalMutation).where(
                     LocalMutation.workspace_id == workspace_id,
@@ -308,23 +327,25 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
                 inflight_ids = [entry.mutation_id for entry in sorted(inflight, key=lambda entry: (
                     get_adapter(entry.entity_type).push_priority(entry.operation), entry.created_at, entry.id))]
             for mutation_id in inflight_ids:
-                outcome = _send(factory, workspace_id, transport, mutation_id)
+                outcome = _send(factory, workspace_id, transport, mutation_id, cancel_event)
                 pushed += outcome == "applied"
-            count, workspace_revision = _pull(factory, transport, user_id, workspace_id)
+            count, workspace_revision = _pull(factory, transport, user_id, workspace_id, cancel_event)
             pulled += count
             # Re-evaluate after each acknowledgement so category dependencies and
             # pending tails can become eligible within this same cycle.
             while True:
+                _check_cancelled(cancel_event)
                 _repair_acknowledged_tails(factory, workspace_id)
                 with factory() as db:
                     ready = _ready_pending(db, workspace_id)
                     mutation_id = ready[0].mutation_id if ready else None
                 if mutation_id is None:
                     break
-                outcome = _send(factory, workspace_id, transport, mutation_id)
+                outcome = _send(factory, workspace_id, transport, mutation_id, cancel_event)
                 pushed += outcome == "applied"
-            count, workspace_revision = _pull(factory, transport, user_id, workspace_id)
+            count, workspace_revision = _pull(factory, transport, user_id, workspace_id, cancel_event)
             pulled += count
+        _check_cancelled(cancel_event)
         with factory() as db:
             state = get_local_sync_state(db, workspace_id)
             state.last_success_at = utcnow()
@@ -333,6 +354,7 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
         return {"status": "ok", "pushed": pushed, "pulled": pulled,
                 **_counts(factory, workspace_id), "workspaceRevision": workspace_revision}
     except SyncRemoteError as error:
+        _check_cancelled(cancel_event)
         with factory() as db:
             state = get_local_sync_state(db, workspace_id)
             state.last_error = error.code

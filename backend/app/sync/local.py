@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..models import LocalMutation, LocalSyncState, utcnow
 from .adapters import REGISTRY, adapter_for, get_adapter, seed_version
+from .notifications import request_after_commit
 
 
 def get_local_sync_state(db: Session, workspace_id: str) -> LocalSyncState:
@@ -107,10 +108,12 @@ def record_local_upsert(db: Session, item) -> LocalMutation:
         entry.operation = "upsert"
         entry.payload_json = payload
         entry.updated_at = utcnow()
+    request_after_commit(db, entry.workspace_id)
     return entry
 
 
 def record_local_delete(db: Session, item) -> None:
+    request_after_commit(db, adapter_for(item).workspace_id(db, item))
     def publish(db, child, operation):
         db.flush()
         (

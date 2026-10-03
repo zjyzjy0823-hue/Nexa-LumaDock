@@ -21,10 +21,13 @@ from .api.agent_actions import router as agent_actions_router
 from .realtime.events import Event
 from .resources import resource_path
 from .config import load_runtime_config
+from .database import SessionLocal, engine
+from .sync.background import BackgroundSyncCoordinator, BackgroundSyncConfig
+from .sync.notifications import register_coordinator, unregister_coordinator
 
 logger = logging.getLogger(__name__)
 runtime_config = load_runtime_config()
-APP_VERSION = "0.5.6"
+APP_VERSION = "0.5.7"
 
 
 @asynccontextmanager
@@ -34,7 +37,21 @@ async def lifespan(_app: FastAPI):
     logger.info("Running database migrations")
     command.upgrade(config, "head")
     logger.info("Database migrations completed")
-    yield
+    coordinator = None
+    if runtime_config.mode == "local":
+        # The Desktop sidecar runs a single Uvicorn worker. Scheduling belongs
+        # to this lifespan, never to imports or a separate daemon process.
+        coordinator = BackgroundSyncCoordinator(SessionLocal, config=BackgroundSyncConfig.from_env())
+        register_coordinator(engine, coordinator)
+        _app.state.background_sync = coordinator
+        coordinator.start()
+    try:
+        yield
+    finally:
+        if coordinator is not None:
+            unregister_coordinator(engine, coordinator)
+            await coordinator.stop()
+            _app.state.background_sync = None
 
 
 app = FastAPI(title="Nexa API", version=APP_VERSION, lifespan=lifespan)

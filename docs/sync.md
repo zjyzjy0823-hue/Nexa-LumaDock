@@ -1,6 +1,6 @@
 # Nexa Sync Protocol v2
 
-v0.5.3 introduced manual Ledger synchronization. v0.5.4 extends manual bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. Local writes remain available while Core is offline. Synchronization is started manually with `POST /api/v1/sync/run`; this release has no background worker or sync UI. Settings, Device, Agent, Automation and Dashboard are not synchronized.
+v0.5.3 introduced manual Ledger synchronization. v0.5.4 extended bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. v0.5.6 added Core Connection and manual sync UI. v0.5.7 adds Backend-owned background scheduling around the same Protocol v2 engine. Local writes remain available while Core is offline, and `POST /api/v1/sync/run` remains available. Settings, Device, Agent, Automation and Dashboard are not synchronized.
 
 ## Authority and identity
 
@@ -50,7 +50,7 @@ An existing conflict follows later authoritative changes: `conflict_json.current
 
 ## Integration verification
 
-`backend/tests/postgres_sync_integration.py` starts a temporary localhost Core HTTP server using the PostgreSQL test database at Alembic head `0014_multi_entity_sync`. It migrates two separate Local SQLite databases, enrolls distinct Clients, saves their credentials separately, and drives their ordinary Ledger/Website/Data APIs and manual sync APIs. Sync requests use the production HTTP client and Core authentication endpoints. Coverage includes ownership mapping, create/update/delete propagation, independent-record merge, same-record conflict and snapshot refresh, ordinary Core API writes, actual Core shutdown/recovery, and credential revocation. Existing deterministic state-machine tests cover commit followed by response loss and immutable replay with later local edits.
+`backend/tests/postgres_sync_integration.py` starts a temporary localhost Core HTTP server using the PostgreSQL test database at Alembic head `0015_agent_data_actions`. It migrates two separate Local SQLite databases, enrolls distinct Clients, saves their credentials separately, and drives their ordinary Ledger/Website/Data APIs and manual sync APIs. Sync requests use the production HTTP client and Core authentication endpoints. Coverage includes ownership mapping, create/update/delete propagation, independent-record merge, same-record conflict and snapshot refresh, ordinary Core API writes, actual Core shutdown/recovery, and credential revocation. Existing deterministic state-machine tests cover commit followed by response loss and immutable replay with later local edits.
 
 After installing `requirements-postgres.txt`, set `DATABASE_URL` to an isolated test PostgreSQL database and `JWT_SECRET` to a temporary secret, run `python -m alembic upgrade head`, then `python tests/postgres_sync_integration.py` from `backend`. The script never contacts public services or prints credentials. CI runs it in the PostgreSQL 16 job alongside migration preservation and concurrency smoke tests.
 
@@ -96,3 +96,15 @@ PostgreSQL upgrade smoke also tests initialized 0013 → 0014 adoption on real P
 ## v0.5.5 Agent Data Actions
 
 Agent writes enter the same transactional Local outbox through shared business services. They never directly call Core or force connectivity/synchronization. Protocol v2 and bootstrap/queue generations remain unchanged. New migration `0015_agent_data_actions` follows 0014, defaults Agent data scopes to none, and stores local-only safe Action receipts. Agent settings/audit are not new sync entity types. See [Agent Data Actions](agent-data-actions.md).
+
+## v0.5.7 Background Auto Sync
+
+FastAPI Local lifespan owns `sync/background.py`. Startup returns without waiting for Core; saved connections are discovered in the background. Startup/connect schedules an initial cycle after 1 second, committed outbox changes debounce for 0.5 seconds (maximum 2 seconds), and periodic pulls run every 30 seconds. `sync/notifications.py` routes committed workspace intent to its own database's coordinator; rolled-back transactions never publish wake-ups. Business requests perform no Core HTTP calls.
+
+The coordinator calls the existing `run_sync_cycle`, retaining its workspace lock and all freeze/replay, revision, cursor, conflict and tombstone rules. Manual requests join the active cycle or explicitly start one; mutations arriving during a cycle retain a follow-up request. Network failure (`unreachable`/`timeout`, including HTTP 502/503/504) retries after 5, 10, 20, 30 and at most 60 seconds. Success resets backoff. New writes wake scheduling without bypassing the retry deadline. Other failures block automatic attempts until reconnect or explicit manual handling. Safe errors persist in the existing LocalSyncState; retry times and running flags are process-local. No migration is needed.
+
+Disconnect disables scheduling and cooperatively stops the active cycle without removing business rows, outbox, cursor or conflicts. Restart discovers the saved connection and durable pending/frozen mutations. Shutdown stops scheduling, signals cooperative cancellation between engine operations, and awaits the worker's bounded network request. Windows tray close and macOS window close leave the existing backend running. Explicit exit waits for actual sidecar termination, with a bounded fallback.
+
+`GET /api/v1/sync/status` adds `enabled`, `running`, `connected`, `blocked`, `lastAttemptAt` and `nextRetryAt` to its existing counts, cursor, success time and allowlisted error. Settings reads this status every 5 seconds while mounted; it never runs an automatic sync from Vue. Background failures do not repeatedly notify the user. Connection secrets remain outside public status.
+
+Local deployments must use one Backend worker per SQLite database, as the Desktop entry point does. The coordinator and the shared engine lock are process-scoped. For integration tests, `NEXA_SYNC_INITIAL_DELAY_SECONDS`, `NEXA_SYNC_DEBOUNCE_SECONDS`, `NEXA_SYNC_PERIOD_SECONDS` and comma-separated `NEXA_SYNC_RETRY_SECONDS` override centrally validated timings; normal installations use the defaults above. See [background verification and physical release gate](background-auto-sync-2026-10-02.md). The separate PostgreSQL background integration runs production Local sidecars and Core without manual `/sync/run` calls.

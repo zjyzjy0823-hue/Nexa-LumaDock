@@ -12,6 +12,8 @@ from ..sync.protocol import SYNC_PROTOCOL_VERSION
 from ..sync.adapters import seed_version
 from ..sync.local import seed_local_queue
 from ..sync.engine import run_sync_cycle
+from ..sync.notifications import get_coordinator
+from ..sync.background import SAFE_SYNC_ERRORS
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
 from ..utils.time import iso_utc
 from ..workspaces import get_personal_workspace
@@ -64,14 +66,30 @@ def local_status(_local: None = Depends(require_local_mode), user: User = Depend
         raise
     counts = dict(db.execute(select(LocalMutation.status, func.count()).where(
         LocalMutation.workspace_id == workspace_id).group_by(LocalMutation.status)).all())
+    try:
+        connected = core_connection.load_connection(user.id) is not None
+        connection_error = None
+    except HTTPException as error:
+        connected = False
+        connection_error = None if error.status_code == 409 else "invalid_connection"
+    coordinator = get_coordinator(db.get_bind())
+    scheduling = coordinator.snapshot(workspace_id) if coordinator is not None else {
+        "enabled": False, "running": False, "connected": connected,
+        "blocked": bool(connection_error), "lastAttemptAt": None, "nextRetryAt": None}
+    if connection_error:
+        scheduling.update(enabled=False, blocked=True, nextRetryAt=None)
+    last_error = connection_error or state.last_error
+    if last_error is not None and last_error not in SAFE_SYNC_ERRORS:
+        last_error = "internal_error"
     return {"pending": counts.get("pending", 0), "conflicts": counts.get("conflict", 0),
             "inFlight": counts.get("in_flight", 0), "rejected": counts.get("rejected", 0),
             "cursor": state.cursor, "queueSeeded": state.queue_seeded_at is not None,
-            "lastSuccessAt": iso_utc(state.last_success_at), "lastError": state.last_error}
+            "lastSuccessAt": iso_utc(state.last_success_at), "lastError": last_error,
+            **scheduling, "connected": connected}
 
 
 @router.post("/run")
-def local_run(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
+async def local_run(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
               db: Session = Depends(get_db)):
     user_id = user.id
     workspace_id = get_personal_workspace(db, user).id
@@ -87,5 +105,10 @@ def local_run(_local: None = Depends(require_local_mode), user: User = Depends(c
         credential = None
     if not credential or not credential.startswith("nc_live_"):
         raise HTTPException(401, "Client credential is unavailable")
+    coordinator = get_coordinator(db.get_bind())
+    if coordinator is not None:
+        return await coordinator.manual(user_id, workspace_id)
     factory = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False)
-    return run_sync_cycle(factory, user_id, workspace_id, metadata, credential)
+    # Standalone router embeddings keep the existing manual API and engine.
+    from asyncio import to_thread
+    return await to_thread(run_sync_cycle, factory, user_id, workspace_id, metadata, credential)

@@ -118,10 +118,16 @@ fn healthy() -> bool {
 fn stop_backend(app: &tauri::AppHandle) {
     let state = app.state::<DesktopState>();
     state.quitting.store(true, Ordering::SeqCst);
+    if state.child.lock().unwrap().is_none() {
+        return;
+    }
     if let Ok(data_dir) = app.path().app_data_dir() {
         let _ = std::fs::write(data_dir.join("backend.shutdown"), b"quit");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && healthy() {
+        // Uvicorn closes its listener before completing lifespan shutdown. Wait
+        // for the owned process to exit, including its bounded HTTP sync work,
+        // rather than treating an unavailable health endpoint as completion.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && state.child.lock().unwrap().is_some() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }

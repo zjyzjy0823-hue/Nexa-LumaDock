@@ -1,7 +1,7 @@
 {
   "name": "nexa",
   "private": true,
-  "version": "0.5.6",
+  "version": "0.5.7",
   "type": "module",
   "scripts": {
     "test:core-sync": "node --test tests/core-sync.test.mjs",
