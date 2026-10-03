@@ -7,25 +7,29 @@ import { build } from 'esbuild'
 const bundle = await build({
   stdin: { contents: `
     export { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS } from './src/composables/useCoreSync.ts'
+    export { useSyncConflicts } from './src/composables/useSyncConflicts.ts'
+    export { getSyncStatus } from './src/api/sync.ts'
+    export { conflictFields, conflictTitle, conflictEntityLabel, conflictConfirmation, conflictRequestError, detectedTime } from './src/services/conflictPresentation.ts'
     export { useAuthStore } from './src/stores/auth.ts'
     export { resolveConfirmation, confirmation } from './src/composables/useConfirm.ts'
     export { coreSyncRequestError, syncErrorMessage, syncStatusDisplay } from './src/services/coreSyncErrors.ts'
     export { ApiError } from './src/api/client.ts'
-    export { createRenderer } from 'vue'
+    export { createRenderer, ref } from 'vue'
     export { createPinia } from 'pinia'
   `, resolveDir: process.cwd() },
   bundle: true, write: false, platform: 'node', format: 'esm',
   define: { 'import.meta.env.VITE_API_BASE_URL': '""', 'process.env.NODE_ENV': '"production"' },
 })
 const { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS, useAuthStore, resolveConfirmation, confirmation, coreSyncRequestError,
-  syncErrorMessage, syncStatusDisplay, ApiError, createRenderer, createPinia } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+  syncErrorMessage, syncStatusDisplay, ApiError, createRenderer, createPinia, ref, useSyncConflicts, getSyncStatus,
+  conflictFields, conflictTitle, conflictEntityLabel, conflictConfirmation, conflictRequestError, detectedTime } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 const metadata = { connected: true, coreUrl: 'http://127.0.0.1:8000', clientId: 'client', workspaceId: 'workspace', installationId: 'installation', clientName: 'Nexa Windows', platform: 'windows', appVersion: '0.5.6', connectedAt: '2026-10-02T01:00:00Z' }
 const status = { enabled: true, running: false, connected: true, blocked: false, pending: 3, conflicts: 0, inFlight: 0, rejected: 0, cursor: 0, queueSeeded: true, lastAttemptAt: null, lastSuccessAt: null, nextRetryAt: null, lastError: null }
 const reply = (value, code = 200) => new Response(JSON.stringify(value), { status: code, headers: { 'Content-Type': 'application/json' } })
 async function settle() { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)) }
 
-async function mount(handler) {
+async function mount(handler, conflictsMode = false) {
   const previous = { fetch: globalThis.fetch, localStorage: globalThis.localStorage, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout }
   let time = 0
   let timerId = 0
@@ -61,14 +65,19 @@ async function mount(handler) {
   const auth = useAuthStore(pinia)
   auth.token = 'local-test-token'
   const messages = []
+  const statusRefreshes = []
+  const open = ref(conflictsMode)
   let state
-  const app = renderer.createApp({ setup() { state = useCoreSync(message => messages.push(message)); return () => null } })
+  const app = renderer.createApp({ setup() {
+    state = conflictsMode ? useSyncConflicts(open, message => messages.push(message), async () => { statusRefreshes.push(await getSyncStatus(auth.token)) }) : useCoreSync(message => messages.push(message))
+    return () => null
+  } })
   app.use(pinia)
   app.mount({})
   await settle()
   let unmounted = false
   const unmount = () => { if (!unmounted) { unmounted = true; app.unmount() } }
-  return { state, auth, calls, messages, saved, timers, advance, unmount, close() { unmount(); Object.assign(globalThis, previous) } }
+  return { state, auth, calls, messages, saved, timers, advance, unmount, open, statusRefreshes, close() { unmount(); resolveConfirmation(false); Object.assign(globalThis, previous) } }
 }
 
 test('disconnected entry loads Local outbox and cannot run sync', async () => {
@@ -383,4 +392,295 @@ test('automatic status labels preserve Local safety and show only safe errors', 
   assert.match(display({ blocked: true, lastError: 'workspace_binding_conflict' }).detail, /Core 身份/)
   assert.equal(display({ blocked: true, lastError: 'private response body nc_live_secret' }).detail, '同步失败（未知错误）')
   assert.ok(!display({ lastError: 'private response body nc_live_secret' }).detail.includes('nc_live'))
+})
+
+const conflict = {
+  id: 'conflict-1', entityType: 'ledger.transaction', entityId: 'coffee-1',
+  local: { type: 'expense', amount: '38.00', categoryId: 'category-1', description: 'Coffee', merchant: 'Starbucks', note: 'Local note', occurredAt: '2026-10-03T08:30:00+08:00' },
+  localDeleted: false,
+  remote: { type: 'expense', amount: '42.00', categoryId: 'category-1', description: 'Coffee', merchant: 'Starbucks', note: 'Core note', occurredAt: '2026-10-03T08:35:00+08:00' },
+  remoteRevision: 6, remoteDeleted: false, createdAt: '2026-10-03T00:30:00Z', detectedAt: '2026-10-03T00:36:00Z', updatedAt: '2026-10-03T00:36:00Z', hasPendingTail: true,
+}
+function conflictHandler(overrides = {}) {
+  return (path, options) => {
+    if (overrides[path]) return overrides[path](options)
+    if (path === '/api/v1/sync/conflicts') return reply({ conflicts: [conflict] })
+    if (path === `/api/v1/sync/conflicts/${conflict.id}`) return reply(conflict)
+    if (path === '/api/v1/ledger/categories') return reply([{ id: 'category-1', name: '餐饮' }])
+    if (path === '/api/v1/sync/status') return reply({ ...status, conflicts: 0 })
+    throw new Error(`Unexpected request: ${path}`)
+  }
+}
+
+test('Conflict Center loads persistent conflicts/detail and readable parent names without triggering sync', async () => {
+  const ctx = await mount(conflictHandler(), true)
+  try {
+    assert.equal(ctx.state.conflicts.value.length, 1)
+    assert.equal(ctx.state.selected.value.local.amount, '38.00')
+    assert.equal(ctx.state.selected.value.remoteRevision, 6)
+    assert.equal(ctx.state.references.value['category-1'], '餐饮')
+    assert.equal(ctx.calls.filter(call => call.path.endsWith('/run')).length, 0)
+    assert.equal(ctx.timers.size, 0)
+    ctx.open.value = false
+    assert.equal(ctx.state.selected.value, null)
+    ctx.open.value = true
+    await settle()
+    assert.equal(ctx.state.conflicts.value.length, 1)
+    assert.equal(ctx.state.selected.value.id, conflict.id)
+  } finally { ctx.close() }
+})
+
+for (const strategy of ['local', 'remote']) {
+  test(`Conflict Center ${strategy} requires confirmation, prevents duplicate submits and immediately refreshes status`, async () => {
+    let resolved = false
+    let finishResolve
+    const path = `/api/v1/sync/conflicts/${conflict.id}/resolve`
+    const ctx = await mount(conflictHandler({
+      '/api/v1/sync/conflicts': () => reply({ conflicts: resolved ? [] : [conflict] }),
+      [path]: options => new Promise(resolve => { finishResolve = () => { resolved = true; resolve(reply({ id: conflict.id, strategy, status: 'resolved', remoteRevision: 6, mutationId: strategy === 'local' ? 'new-mutation' : null, resolvedAt: '2026-10-03T00:40:00Z' })) } }),
+    }), true)
+    try {
+      const choosing = ctx.state.resolve(strategy)
+      assert.equal(ctx.state.resolving.value, true)
+      assert.match(confirmation.value.message, strategy === 'remote' ? /后续编辑.*将被放弃/ : /当前最新本机数据/)
+      assert.equal(ctx.calls.filter(call => call.path === path).length, 0)
+      const selectedBefore = ctx.state.selected.value
+      await ctx.state.select('another-conflict')
+      await ctx.state.refresh()
+      assert.equal(ctx.state.selected.value, selectedBefore)
+      await ctx.state.resolve(strategy)
+      resolveConfirmation(true)
+      await settle()
+      assert.equal(ctx.calls.filter(call => call.path === path).length, 1)
+      const request = ctx.calls.find(call => call.path === path)
+      assert.equal(request.options.method, 'POST')
+      assert.deepEqual(JSON.parse(request.options.body), { strategy, expectedRemoteRevision: 6 })
+      finishResolve()
+      await choosing
+      assert.equal(ctx.state.conflicts.value.length, 0)
+      assert.equal(ctx.state.selected.value, null)
+      assert.equal(ctx.state.resolving.value, false)
+      assert.equal(ctx.statusRefreshes.length, 1)
+      assert.equal(ctx.statusRefreshes[0].conflicts, 0)
+      assert.equal(ctx.messages.length, 1)
+      assert.equal(ctx.calls.filter(call => call.path.endsWith('/run')).length, 0)
+    } finally { ctx.close() }
+  })
+  test(`cancel ${strategy} resolution preserves conflict and sends no mutation`, async () => {
+    const ctx = await mount(conflictHandler(), true)
+    try {
+      const choosing = ctx.state.resolve(strategy)
+      resolveConfirmation(false)
+      await choosing
+      assert.equal(ctx.state.selected.value.id, conflict.id)
+      assert.equal(ctx.state.resolving.value, false)
+      assert.equal(ctx.calls.filter(call => call.path.endsWith('/resolve')).length, 0)
+      assert.deepEqual(ctx.statusRefreshes, [])
+      assert.deepEqual(ctx.messages, [])
+    } finally { ctx.close() }
+  })
+}
+
+test('stale resolution refetches revision 7 and requires a new explicit confirmation', async () => {
+  let revision = 6
+  const ctx = await mount(conflictHandler({
+    '/api/v1/sync/conflicts': () => reply({ conflicts: [{ ...conflict, remoteRevision: revision }] }),
+    [`/api/v1/sync/conflicts/${conflict.id}`]: () => reply({ ...conflict, remoteRevision: revision, remote: { ...conflict.remote, amount: '44.00' } }),
+    [`/api/v1/sync/conflicts/${conflict.id}/resolve`]: () => { revision = 7; return reply({ detail: 'conflict_snapshot_changed' }, 409) },
+  }), true)
+  try {
+    const choosing = ctx.state.resolve('local')
+    resolveConfirmation(true)
+    await choosing
+    assert.equal(ctx.state.selected.value.remoteRevision, 7)
+    assert.match(ctx.state.error.value, /Core 版本已更新/)
+    assert.equal(ctx.calls.filter(call => call.path.endsWith('/resolve')).length, 1)
+    assert.equal(confirmation.value, null)
+    assert.deepEqual(ctx.messages, [])
+    const chooseAgain = ctx.state.resolve('local')
+    assert.ok(confirmation.value)
+    assert.equal(ctx.calls.filter(call => call.path.endsWith('/resolve')).length, 1)
+    resolveConfirmation(false)
+    await chooseAgain
+  } finally { ctx.close() }
+})
+
+test('token change during conflict confirmation cannot resolve the previous session', async () => {
+  const ctx = await mount(conflictHandler(), true)
+  try {
+    const choosing = ctx.state.resolve('remote')
+    ctx.auth.token = 'local-test-token-next'
+    resolveConfirmation(true)
+    await choosing
+    await settle()
+    assert.equal(ctx.calls.filter(call => call.path.endsWith('/resolve')).length, 0)
+    assert.deepEqual(ctx.messages, [])
+    assert.deepEqual(ctx.statusRefreshes, [])
+  } finally { ctx.close() }
+})
+
+test('closing Conflict Center aborts and ignores late detail from the previous view', async () => {
+  let finishDetail
+  let detailSignal
+  const ctx = await mount(conflictHandler({
+    [`/api/v1/sync/conflicts/${conflict.id}`]: options => { detailSignal = options.signal; return new Promise(resolve => { finishDetail = resolve }) },
+  }), true)
+  try {
+    assert.equal(ctx.state.detailLoading.value, true)
+    ctx.open.value = false
+    assert.equal(detailSignal.aborted, true)
+    finishDetail(reply(conflict))
+    await settle()
+    assert.equal(ctx.state.selected.value, null)
+    assert.deepEqual(ctx.state.conflicts.value, [])
+    assert.deepEqual(ctx.state.references.value, {})
+    assert.equal(ctx.state.busy.value, false)
+  } finally { ctx.close() }
+})
+
+test('late successful resolution cannot notify or overwrite a replacement auth session', async () => {
+  let finishResolve
+  const ctx = await mount(conflictHandler({
+    [`/api/v1/sync/conflicts/${conflict.id}/resolve`]: () => new Promise(resolve => { finishResolve = resolve }),
+  }), true)
+  try {
+    const choosing = ctx.state.resolve('local')
+    resolveConfirmation(true)
+    await settle()
+    ctx.auth.token = 'local-test-token-next'
+    await settle()
+    finishResolve(reply({ id: conflict.id, strategy: 'local', status: 'resolved', remoteRevision: 6, mutationId: 'new-mutation', resolvedAt: '2026-10-03T00:40:00Z' }))
+    await choosing
+    assert.equal(ctx.state.selected.value.remoteRevision, 6)
+    assert.equal(ctx.state.conflicts.value.length, 1)
+    assert.deepEqual(ctx.messages, [])
+    assert.deepEqual(ctx.statusRefreshes, [])
+  } finally { ctx.close() }
+})
+
+test('parent lookup failure keeps conflicts actionable and never renders its arbitrary error body', async () => {
+  const ctx = await mount(conflictHandler({ '/api/v1/ledger/categories': () => reply({ detail: 'private token nc_live_secret' }, 500) }), true)
+  try {
+    assert.equal(ctx.state.selected.value.id, conflict.id)
+    assert.equal(ctx.state.busy.value, false)
+    assert.deepEqual(ctx.state.references.value, {})
+    assert.equal(ctx.state.error.value, '')
+  } finally { ctx.close() }
+})
+
+test('Conflict Center loads website and collection parent names for the current session only', async () => {
+  let finishParents
+  let firstSession = true
+  const websiteConflict = { ...conflict, id: 'website-conflict', entityType: 'website', local: { name: 'GitHub', categoryId: 'web-category' }, remote: { name: 'GitHub Core', categoryId: 'web-category' } }
+  const recordConflict = { ...conflict, id: 'record-conflict', entityType: 'data.record', local: { name: 'Task', collectionId: 'collection-1' }, remote: { name: 'Core Task', collectionId: 'collection-1' } }
+  const ctx = await mount((path, options) => {
+    if (path === '/api/v1/sync/conflicts') return reply({ conflicts: [websiteConflict, recordConflict] })
+    if (path === '/api/v1/website-categories') return reply([{ id: 'web-category', name: firstSession ? '旧用户开发分类' : '开发' }])
+    if (path === '/api/v1/data/collections') {
+      if (firstSession) return new Promise(resolve => { finishParents = resolve })
+      return reply([{ id: 'collection-1', name: 'Tasks', records: [] }])
+    }
+    if (path === '/api/v1/sync/conflicts/website-conflict') return reply(websiteConflict)
+    if (path === '/api/v1/sync/conflicts/record-conflict') return reply(recordConflict)
+    throw new Error(`Unexpected request: ${path}`)
+  }, true)
+  try {
+    firstSession = false
+    ctx.auth.token = 'local-test-token-next'
+    await settle()
+    assert.deepEqual(ctx.state.references.value, { 'web-category': '开发', 'collection-1': 'Tasks' })
+    finishParents(reply([{ id: 'collection-1', name: '旧用户集合', records: [] }]))
+    await settle()
+    assert.deepEqual(ctx.state.references.value, { 'web-category': '开发', 'collection-1': 'Tasks' })
+    await ctx.state.select('record-conflict')
+    assert.equal(conflictFields(ctx.state.selected.value, ctx.state.references.value).find(field => field.key === 'collectionId').local, 'Tasks')
+  } finally { ctx.close() }
+})
+
+test('choosing another conflict ignores an older detail response even when the request finishes later', async () => {
+  let finishOldDetail
+  let oldSignal
+  let deferOld = false
+  const other = { ...conflict, id: 'conflict-2', local: { ...conflict.local, description: 'Tea' } }
+  const ctx = await mount(conflictHandler({
+    '/api/v1/sync/conflicts': () => reply({ conflicts: [conflict, other] }),
+    [`/api/v1/sync/conflicts/${conflict.id}`]: options => {
+      if (!deferOld) return reply(conflict)
+      oldSignal = options.signal
+      return new Promise(resolve => { finishOldDetail = resolve })
+    },
+    '/api/v1/sync/conflicts/conflict-2': () => reply(other),
+  }), true)
+  try {
+    deferOld = true
+    const old = ctx.state.select(conflict.id)
+    await ctx.state.select(other.id)
+    assert.equal(oldSignal.aborted, true)
+    assert.equal(ctx.state.selected.value.id, other.id)
+    finishOldDetail(reply(conflict))
+    await old
+    assert.equal(ctx.state.selected.value.id, other.id)
+    assert.equal(ctx.state.busy.value, false)
+  } finally { ctx.close() }
+})
+
+test('conflict resolution controlled errors are readable and arbitrary server bodies stay private', async () => {
+  assert.match(conflictRequestError(new ApiError(409, 'collection_not_found')), /关联集合/)
+  assert.match(conflictRequestError(new ApiError(409, 'invalid_conflict_snapshot')), /快照无效/)
+  for (const code of [0, 401, 404, 409, 422, 500]) {
+    const text = conflictRequestError(new ApiError(code, 'traceback bearer nc_live_secret password'))
+    assert.doesNotMatch(text, /nc_live|traceback|bearer|password/)
+  }
+  const ctx = await mount(conflictHandler({ [`/api/v1/sync/conflicts/${conflict.id}/resolve`]: () => reply({ detail: 'bearer nc_live_secret traceback password' }, 500) }), true)
+  try {
+    const choosing = ctx.state.resolve('remote')
+    resolveConfirmation(true)
+    await choosing
+    assert.match(ctx.state.error.value, /本机数据已保留/)
+    assert.doesNotMatch(ctx.state.error.value, /nc_live|traceback|bearer|password/)
+    assert.equal(ctx.state.selected.value.id, conflict.id)
+  } finally { ctx.close() }
+})
+
+test('six entity presentations use readable field labels, names, diff highlights and collapsed JSON metadata', () => {
+  const transaction = conflictFields(conflict, { 'category-1': '餐饮' })
+  assert.equal(conflictTitle(conflict), 'Coffee')
+  assert.equal(transaction.find(field => field.key === 'amount').local, '¥38.00')
+  assert.equal(transaction.find(field => field.key === 'amount').remote, '¥42.00')
+  assert.equal(transaction.find(field => field.key === 'amount').different, true)
+  assert.equal(transaction.find(field => field.key === 'merchant').different, false)
+  assert.equal(transaction.find(field => field.key === 'categoryId').local, '餐饮')
+  const samples = [
+    ['ledger.category', { name: '餐饮', type: 'expense', icon: 'coffee' }, ['名称', '类型', '图标']],
+    ['website.category', { name: '开发', order: 1 }, ['名称', '排序']],
+    ['website', { name: 'GitHub', url: 'https://github.com', favorite: true, categoryId: 'category-1' }, ['名称', 'URL', '收藏', '分类']],
+    ['data.collection', { name: 'Tasks', description: 'Work', icon: 'custom', tone: 'blue' }, ['名称', '描述', '图标', '颜色']],
+    ['data.record', { name: 'Plan', status: 'active', category: 'Work', collectionId: 'collection-1', dataJson: { b: 2, a: 1 } }, ['名称', '状态', '分类', '所属集合', '记录内容']],
+  ]
+  for (const [entityType, payload, labels] of samples) {
+    const value = { ...conflict, entityType, local: payload, remote: { ...payload } }
+    const fields = conflictFields(value, { 'category-1': '开发', 'collection-1': 'Tasks' })
+    assert.ok(labels.every(label => fields.some(field => field.label === label)))
+    assert.ok(fields.every(field => !field.different))
+    assert.notEqual(conflictEntityLabel(entityType), '同步数据')
+  }
+  const record = { ...conflict, entityType: 'data.record', local: samples.at(-1)[1], remote: { ...samples.at(-1)[1], dataJson: { a: 1, b: 2 } } }
+  const jsonField = conflictFields(record).find(field => field.key === 'dataJson')
+  assert.equal(jsonField.json, true)
+  assert.match(jsonField.local, /\n/)
+  assert.equal(jsonField.different, false)
+  assert.equal(detectedTime('2026-10-03T00:36:00Z', Date.parse('2026-10-03T00:36:10Z')), '刚刚检测到')
+})
+
+test('delete and absent Core presentations/confirmations describe tombstones, restore and dependent-tail loss', () => {
+  const remoteDeleted = { ...conflict, remote: null, remoteDeleted: true }
+  assert.ok(conflictFields(remoteDeleted).every(field => field.remote === '已删除'))
+  assert.match(conflictConfirmation(remoteDeleted, 'local'), /恢复 Core 中已删除的数据/)
+  assert.match(conflictConfirmation(remoteDeleted, 'remote'), /后续编辑.*将被放弃.*本机也将删除/)
+  const localDeleted = { ...conflict, localDeleted: true }
+  assert.ok(conflictFields(localDeleted).every(field => field.local === '已删除'))
+  assert.match(conflictConfirmation(localDeleted, 'local'), /本机删除操作/)
+  const absent = { ...conflict, remote: null, remoteDeleted: false, remoteRevision: 0 }
+  assert.ok(conflictFields(absent).every(field => field.remote === 'Core 中不存在'))
+  assert.match(conflictConfirmation(absent, 'remote'), /Core 中不存在此数据，本机也将删除/)
 })

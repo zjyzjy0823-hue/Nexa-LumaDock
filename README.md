@@ -1,4 +1,6 @@
-# Nexa Desktop — Nexa-LumaDock v0.5.5
+# Nexa Desktop — Nexa-LumaDock
+
+当前开发实现版本：**v0.5.8 Conflict Center**。Settings → Sync 可查看同步冲突并显式选择保留本机或使用 Core，详见 [Conflict Center 实现与验证记录](docs/conflict-center-2026-10-03.md)。共享同步继续使用 Protocol v2；本机选择会产生新的 optimistic mutation，Core 再次变化时仍会重新进入冲突。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
@@ -6,7 +8,7 @@ v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Wo
 
 ## Nexa Desktop
 
-推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 手动同步 Ledger。
+推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步 Ledger、Websites 和 Data；Settings → Sync 保留立即同步与显式冲突处理入口。
 
 开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
 

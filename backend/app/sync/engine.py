@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from ..models import (LocalMutation,
                       LocalSyncState, utcnow)
+from ..utils.time import iso_utc
 from .adapters import get_adapter
 from .local import (bind_local_sync_state, get_local_sync_state,
                     ordered_pending_mutations, seed_local_queue)
@@ -39,7 +40,8 @@ def _entries(db, workspace_id: str, entity_type: str, entity_id: str) -> list[Lo
     return db.scalars(select(LocalMutation).where(
         LocalMutation.workspace_id == workspace_id,
         LocalMutation.entity_type == entity_type,
-        LocalMutation.entity_id == entity_id)).all()
+        LocalMutation.entity_id == entity_id,
+        LocalMutation.status != "resolved")).all()
 
 
 def _outbound(entry: LocalMutation) -> dict:
@@ -101,7 +103,7 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
             _validate_snapshot(get_adapter(entry.entity_type), result.get("current"), result["deleted"])
             entry.status = "conflict"
             entry.conflict_json = {"currentRevision": revision, "current": result.get("current"),
-                                   "deleted": result["deleted"]}
+                                   "deleted": result["deleted"], "detectedAt": iso_utc(utcnow())}
             entry.result_revision = revision
             entry.last_error = None
         else:
@@ -200,8 +202,10 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
                         entry.status in ("pending", "in_flight") and entry.base_revision < revision):
                     # Keep the conflict owner's remote snapshot current without
                     # changing the local edit, its base, or its blocked tail.
+                    detected_at = (entry.conflict_json or {}).get("detectedAt") or (
+                        iso_utc(entry.updated_at) if entry.status == "conflict" else iso_utc(utcnow()))
                     entry.status = "conflict"
-                    entry.conflict_json = conflict
+                    entry.conflict_json = {**conflict, "detectedAt": detected_at}
                     entry.result_revision = revision
             state.cursor = revision
             db.commit()
@@ -273,7 +277,8 @@ def _repair_acknowledged_tails(factory, workspace_id: str) -> None:
             LocalMutation.depends_on_mutation_id.is_not(None))).all()
         for tail in tails:
             predecessor = db.scalar(select(LocalMutation.id).where(
-                LocalMutation.mutation_id == tail.depends_on_mutation_id))
+                LocalMutation.mutation_id == tail.depends_on_mutation_id,
+                LocalMutation.status != "resolved"))
             if predecessor is not None:
                 continue
             adapter = get_adapter(tail.entity_type)

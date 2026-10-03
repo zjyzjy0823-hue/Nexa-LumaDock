@@ -77,7 +77,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.7"}
+                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.8"}
                             break
                     except httpx.RequestError:
                         pass
@@ -138,13 +138,13 @@ class Replica:
     def connect(self, core, origin, headers):
         enrolled = checked(core, "POST", "/api/v1/clients/enroll", expected=201, headers=headers, json={
             "installationId": self.installation_id, "name": self.directory.name,
-            "platform": "windows", "appVersion": "0.5.7"})
+            "platform": "windows", "appVersion": "0.5.8"})
         self.client_id = enrolled["client"]["id"]
         self.core_workspace_id = enrolled["client"]["workspaceId"]
         metadata = CoreConnectionMetadata.model_validate({
             "schemaVersion": 1, "coreUrl": origin, "clientId": self.client_id,
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
-            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.7",
+            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.8",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
         os.environ["NEXA_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])

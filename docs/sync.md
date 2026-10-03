@@ -1,6 +1,6 @@
 # Nexa Sync Protocol v2
 
-v0.5.3 introduced manual Ledger synchronization. v0.5.4 extended bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. v0.5.6 added Core Connection and manual sync UI. v0.5.7 adds Backend-owned background scheduling around the same Protocol v2 engine. Local writes remain available while Core is offline, and `POST /api/v1/sync/run` remains available. Settings, Device, Agent, Automation and Dashboard are not synchronized.
+v0.5.3 introduced manual Ledger synchronization. v0.5.4 extended bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. v0.5.6 added Core Connection and manual sync UI. v0.5.7 added Backend-owned background scheduling around the same Protocol v2 engine. v0.5.8 adds explicit Conflict Center listing, detail and resolution in Settings → Sync; see [Conflict Center](conflict-center-2026-10-03.md). Local writes remain available while Core is offline, and `POST /api/v1/sync/run` remains available. Settings, Device, Agent, Automation and Dashboard are not synchronized.
 
 ## Authority and identity
 

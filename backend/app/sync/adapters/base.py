@@ -75,7 +75,8 @@ class SyncAdapter:
             not self.push_requires_active_parent or parent.deleted_at is None) and db.scalar(
             select(LocalMutation.id).where(LocalMutation.workspace_id == workspace_id,
                 LocalMutation.entity_type == self.parent_type,
-                LocalMutation.entity_id == parent_id).limit(1)) is None
+                LocalMutation.entity_id == parent_id,
+                LocalMutation.status != "resolved").limit(1)) is None
 
     def prepare_local_seed(self, db, item):
         pass

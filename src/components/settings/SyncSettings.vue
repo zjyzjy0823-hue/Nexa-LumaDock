@@ -5,6 +5,7 @@ import { version } from '../../../package.json'
 import ActionButton from '../ui/ActionButton.vue'
 import Input from '../ui/Input.vue'
 import SettingsSection from './SettingsSection.vue'
+import ConflictCenter from './ConflictCenter.vue'
 import { desktopPlatform } from '../../desktop/platform'
 import { useCoreSync } from '../../composables/useCoreSync'
 import { syncErrorMessage, syncStatusDisplay } from '../../services/coreSyncErrors'
@@ -20,6 +21,7 @@ const username = ref('')
 const password = ref('')
 const clientName = ref(`Nexa ${platformLabels[platform]}`)
 const validationError = ref('')
+const conflictsOpen = ref(false)
 const testStatus = computed(() => connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
 const statusLabels = { connected: '已连接', disconnected: '未连接', unauthorized: '凭证失效', unreachable: '无法访问 Core' }
 const syncDisplay = computed(() => syncStatus.value ? syncStatusDisplay(syncStatus.value) : null)
@@ -107,11 +109,12 @@ onUnmounted(() => { password.value = '' })
         <div v-if="syncDisplay" class="auto-sync-status" :class="`auto-sync-status--${syncDisplay.tone}`" role="status">
           <RefreshCw v-if="syncStatus.running" :size="15" class="sync-spin" aria-hidden="true" />
           <i v-else aria-hidden="true" />
-          <div><strong>{{ syncDisplay.label }}</strong><p>{{ syncDisplay.detail }}</p></div>
+          <button v-if="syncStatus.conflicts > 0" type="button" class="sync-conflict-status" @click="conflictsOpen = true"><strong>{{ syncDisplay.label }}</strong><span>{{ syncDisplay.detail }} · 查看冲突</span></button>
+          <div v-else><strong>{{ syncDisplay.label }}</strong><p>{{ syncDisplay.detail }}</p></div>
         </div>
         <dl class="sync-counts">
           <div><dt>待同步</dt><dd class="count-pending">{{ syncStatus.pending }}</dd></div>
-          <div><dt>冲突</dt><dd :class="{ 'count-warning': syncStatus.conflicts > 0 }">{{ syncStatus.conflicts }}</dd></div>
+          <div><dt>冲突</dt><dd :class="{ 'count-warning': syncStatus.conflicts > 0 }"><button v-if="syncStatus.conflicts > 0" class="sync-conflict-count" type="button" :aria-label="`查看 ${syncStatus.conflicts} 个同步冲突`" @click="conflictsOpen = true">{{ syncStatus.conflicts }}</button><template v-else>{{ syncStatus.conflicts }}</template></dd></div>
           <div><dt>处理中</dt><dd>{{ syncStatus.inFlight }}</dd></div>
           <div><dt>已拒绝</dt><dd :class="{ 'count-warning': syncStatus.rejected > 0 }">{{ syncStatus.rejected }}</dd></div>
         </dl>
@@ -121,7 +124,7 @@ onUnmounted(() => { password.value = '' })
           <template v-if="syncStatus.nextRetryAt && !syncStatus.blocked"><dt>下次自动重试</dt><dd>{{ formatTime(syncStatus.nextRetryAt) }}</dd></template>
           <dt>最后错误</dt><dd :class="{ 'sync-error': syncStatus.lastError }">{{ syncStatus.lastError ? syncErrorMessage(syncStatus.lastError) : '无' }}</dd>
         </dl>
-        <p v-if="syncStatus.conflicts > 0" class="sync-note count-warning">存在 {{ syncStatus.conflicts }} 个同步冲突，当前版本暂不支持在界面解决。</p>
+        <div v-if="syncStatus.conflicts > 0" class="settings-button-row"><ActionButton variant="secondary" @click="conflictsOpen = true">同步冲突 {{ syncStatus.conflicts }} · 查看并处理</ActionButton></div>
       </template>
       <p v-if="connection && !connection.connected" class="sync-note">未连接 Core。本地修改已安全保存。连接 Core 后可以同步到其他设备。</p>
       <p v-if="syncResult" class="sync-result" :class="{ 'sync-error': syncResult.status === 'error' }" role="status">
@@ -131,6 +134,7 @@ onUnmounted(() => { password.value = '' })
       <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
     </div>
   </SettingsSection>
+  <ConflictCenter :open="conflictsOpen" :refresh-status="() => refresh(false)" @close="conflictsOpen = false" @action="message => emit('action', message)" />
 </template>
 
 <style scoped>
@@ -154,6 +158,11 @@ onUnmounted(() => { password.value = '' })
 .auto-sync-status--success { color: #29846f; }
 .auto-sync-status--active { color: var(--accent-deep); }
 .auto-sync-status--warning { color: #b14e65; }
+.sync-conflict-status { display:block; padding:0; border:0; background:transparent; color:inherit; text-align:left; }
+.sync-conflict-status span { display:block; margin-top:4px; font-size:12px; line-height:1.6; }
+.sync-conflict-status:hover span { text-decoration:underline; }
+.sync-conflict-count { padding:0; border:0; color:inherit; background:transparent; font:inherit; }
+.sync-conflict-count:hover { text-decoration:underline; }
 .sync-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
 .sync-counts div { padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--glass-tile-background); }
 .sync-counts dt { color: var(--text-secondary); font-size: 11px; }

@@ -30,5 +30,6 @@ export const useLedgerStore = defineStore('ledger', () => {
   async function updateCategory(token: string, id: string, data: Partial<LedgerCategoryInput>) { return mutate(async () => { const current = sequence; await ledgerService.updateCategory(token, id, data); if (current === sequence) await load(token, true) }) }
   async function removeCategory(token: string, id: string) { return mutate(async () => { const current = sequence; await ledgerService.removeCategory(token, id); if (current === sequence) await load(token, true) }) }
   function reset() { ++sequence; items.value = []; categories.value = []; summary.value = null; month.value = new Date().toISOString().slice(0, 7); loading.value = false; loaded.value = false; loadedAt.value = 0; error.value = '' }
-  return { items, categories, summary, month, loading, loaded, error, load, createTransaction, updateTransaction, removeTransaction, createCategory, updateCategory, removeCategory, reset }
+  function invalidate() { loaded.value = false; loadedAt.value = 0 }
+  return { items, categories, summary, month, loading, loaded, error, load, createTransaction, updateTransaction, removeTransaction, createCategory, updateCategory, removeCategory, reset, invalidate }
 })

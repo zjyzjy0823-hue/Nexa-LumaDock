@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -12,6 +16,7 @@ from ..sync.protocol import SYNC_PROTOCOL_VERSION
 from ..sync.adapters import seed_version
 from ..sync.local import seed_local_queue
 from ..sync.engine import run_sync_cycle
+from ..sync.conflicts import get_conflict, list_conflicts, resolve_conflict
 from ..sync.notifications import get_coordinator
 from ..sync.background import SAFE_SYNC_ERRORS
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
@@ -19,13 +24,54 @@ from ..utils.time import iso_utc
 from ..workspaces import get_personal_workspace
 
 
-router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
+class SafeSyncRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def safe_handler(request):
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                if request.url.path.startswith("/api/v1/sync/conflicts/") and request.url.path.endswith("/resolve"):
+                    return JSONResponse(status_code=422, content={"detail": "invalid_conflict_resolution"})
+                raise
+
+        return safe_handler
+
+
+router = APIRouter(prefix="/api/v1/sync", tags=["sync"], route_class=SafeSyncRoute)
 
 
 class MutationBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     protocolVersion: int = 1
     mutations: list[dict] = Field(min_length=1, max_length=100)
+
+
+class ConflictResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    strategy: Literal["local", "remote"]
+    expectedRemoteRevision: int | None = Field(default=None, ge=0, le=2**63 - 1, strict=True)
+
+
+@router.get("/conflicts")
+def conflicts(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    return list_conflicts(db, get_personal_workspace(db, user).id)
+
+
+@router.get("/conflicts/{conflict_id}")
+def conflict_detail(conflict_id: str, _local: None = Depends(require_local_mode),
+                    user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return get_conflict(db, get_personal_workspace(db, user).id, conflict_id)
+
+
+@router.post("/conflicts/{conflict_id}/resolve")
+def conflict_resolution(conflict_id: str, payload: ConflictResolution,
+                        _local: None = Depends(require_local_mode), user: User = Depends(current_user),
+                        db: Session = Depends(get_db)):
+    return resolve_conflict(db, user.id, get_personal_workspace(db, user).id,
+                            conflict_id, payload.strategy, payload.expectedRemoteRevision)
 
 
 @router.post("/mutations")

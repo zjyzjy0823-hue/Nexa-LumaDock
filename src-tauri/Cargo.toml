@@ -1,6 +1,6 @@
 [package]
 name = "nexa-desktop"
-version = "0.5.7"
+version = "0.5.8"
 description = "Nexa Desktop"
 authors = ["Nexa contributors"]
 edition = "2021"

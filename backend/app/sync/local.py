@@ -56,6 +56,7 @@ def queued_entries(db: Session, item) -> list[LocalMutation]:
             LocalMutation.workspace_id == adapter_for(item).workspace_id(db, item),
             LocalMutation.entity_type == entity_type(item),
             LocalMutation.entity_id == item.id,
+            LocalMutation.status != "resolved",
         )
     ).all()
 

@@ -12,6 +12,7 @@ const props = defineProps<{
   title: string
   description?: string
   layer?: number
+  wide?: boolean
 }>()
 const emit = defineEmits<{ close: [] }>()
 const titleId = useId()
@@ -56,7 +57,7 @@ onUnmounted(() => { document.removeEventListener('keydown', onKeydown, true); re
   <Teleport to="body">
     <Transition name="glass-modal">
       <div v-if="open" class="glass-modal-backdrop" :style="{ zIndex: layer ?? 100 }" @pointerdown.self="emit('close')">
-        <section ref="dialog" class="glass-modal" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1">
+        <section ref="dialog" class="glass-modal" :class="{ 'glass-modal--wide': wide }" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1">
           <header class="glass-modal__header">
             <div><h2 :id="titleId">{{ title }}</h2><p v-if="description">{{ description }}</p></div>
             <button class="glass-modal__close" type="button" aria-label="关闭" @click="emit('close')"><X :size="18" /></button>
@@ -72,6 +73,7 @@ onUnmounted(() => { document.removeEventListener('keydown', onKeydown, true); re
 <style scoped>
 .glass-modal-backdrop { position:fixed; z-index:100; inset:0; display:grid; place-items:center; padding:20px; background:rgba(30,43,86,.35); backdrop-filter:blur(9px); -webkit-backdrop-filter:blur(9px); }
 .glass-modal { width:min(100%,480px); max-height:min(90dvh,760px); overflow:auto; padding:24px; border:1px solid rgba(255,255,255,.86); border-radius:var(--radius-xl); color:var(--text-primary); background:var(--glass-dialog-background); box-shadow:0 25px 75px rgba(26,44,97,.25),inset 0 1px 0 #fff; outline:none;  backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
+.glass-modal--wide { width:min(100%,960px); }
 .glass-modal__header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .glass-modal__header h2 { margin:0; font-size:23px; font-weight:710; letter-spacing:-.035em; }
 .glass-modal__header p { margin:6px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.5; }
