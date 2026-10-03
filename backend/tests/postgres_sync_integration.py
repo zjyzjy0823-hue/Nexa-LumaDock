@@ -77,7 +77,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.9"}
+                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.6.0"}
                             break
                     except httpx.RequestError:
                         pass
@@ -138,13 +138,13 @@ class Replica:
     def connect(self, core, origin, headers):
         enrolled = checked(core, "POST", "/api/v1/clients/enroll", expected=201, headers=headers, json={
             "installationId": self.installation_id, "name": self.directory.name,
-            "platform": "windows", "appVersion": "0.5.9"})
+            "platform": "windows", "appVersion": "0.6.0"})
         self.client_id = enrolled["client"]["id"]
         self.core_workspace_id = enrolled["client"]["workspaceId"]
         metadata = CoreConnectionMetadata.model_validate({
             "schemaVersion": 1, "coreUrl": origin, "clientId": self.client_id,
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
-            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.5.9",
+            "clientName": self.directory.name, "platform": "windows", "appVersion": "0.6.0",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
         os.environ["NEXA_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])
@@ -228,7 +228,7 @@ def main(skip_agent_tools=False):
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017_automation_engine"
     with TemporaryDirectory(prefix="nexa-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)

@@ -11,6 +11,7 @@ from ...schemas import Layout
 from ...resources import resource_path
 from pathlib import Path
 from .base import SyncAdapter
+from ...automation.schemas import Schedule, Action
 
 
 class StrictData(BaseModel):
@@ -22,7 +23,7 @@ def safe_text(value: str) -> str:
     # paths are never user-facing cross-device configuration.
     if re.search(r"(?i)(nc_live_|na_live_|nd_live_|bearer\s|authorization|"
                  r"(?:password|credential|token|jwt|secret|api[_ -]?key)\s*[:=]|"
-                 r"\beyJ[A-Za-z0-9_-]+\.|[a-z]:[\\/]|\\\\|file://|"
+                 r"\beyJ[A-Za-z0-9_-]+\.|(?<![a-z])[a-z]:[\\/]|\\\\|file://|"
                  r"(?:^|\s)/(?:home|users|tmp|var|etc|mnt|volumes)/)", value):
         raise ValueError("Unsupported personal state text")
     return value
@@ -144,6 +145,10 @@ class DashboardData(StrictData):
 class TriggerConfig(StrictData):
     label: str = Field(default="", max_length=500)
     cron: str = Field(default="", max_length=120)
+    schedule: "Schedule | None" = None
+    entity_type: Literal["ledger.transaction", "data.record", "website"] | None = None
+    operation: Literal["upsert", "delete"] | None = None
+    agent_id: str | None = Field(default=None, max_length=36)
 
     @field_validator("label", "cron")
     @classmethod
@@ -156,6 +161,7 @@ class WorkflowNode(StrictData):
     label: str = Field(default="", max_length=120)
     text: str = Field(default="", max_length=500)
     detail: str = Field(default="", max_length=500)
+    action: "Action | None" = None
 
     @field_validator("label", "text", "detail")
     @classmethod
@@ -168,9 +174,23 @@ class AutomationData(StrictData):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=500)
     enabled: bool = True
-    triggerType: Literal["manual", "schedule", "device_status", "agent_event", "webhook"] = "manual"
+    triggerType: Literal["manual", "schedule", "data_changed", "agent_completed", "device_status", "agent_event", "webhook"] = "manual"
     triggerConfigJson: TriggerConfig = Field(default_factory=TriggerConfig)
     workflowJson: list[WorkflowNode] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def executable_definition(self):
+        actions = [node for node in self.workflowJson if node.action is not None]
+        if actions:
+            if len(actions) != 1 or len(self.workflowJson) != 1 or actions[0].kind != "DO":
+                raise ValueError("One action per automation")
+            if self.triggerType not in ("manual", "schedule", "data_changed", "agent_completed"):
+                raise ValueError("Unsupported runtime trigger")
+            if self.triggerType == "schedule" and self.triggerConfigJson.schedule is None:
+                raise ValueError("Schedule required")
+            if self.triggerType == "data_changed" and self.triggerConfigJson.entity_type is None:
+                raise ValueError("Entity type required")
+        return self
 
     @field_validator("name", "description")
     @classmethod

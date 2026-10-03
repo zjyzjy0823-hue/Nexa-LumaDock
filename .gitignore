@@ -1,4 +1,5 @@
 node_modules/
+output/v060*
 .venv/
 scripts/__pycache__/
 dist/

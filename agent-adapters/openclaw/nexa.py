@@ -14,7 +14,7 @@ class NexaClient:
     def __init__(self, config: dict, transport=None):
         self.client = httpx.Client(base_url=config["serverUrl"],
                                    headers={"Authorization": f"Bearer {config['agentToken']}"},
-                                   timeout=10, transport=transport)
+                                   timeout=10, transport=transport, trust_env=False)
 
     def close(self):
         self.client.close()

@@ -260,11 +260,8 @@ def heartbeat(id: str, payload: AgentHeartbeat, user: User = Depends(current_use
 
 @router.post("/{id}/tasks", status_code=201)
 def create_task(id: str, payload: TaskInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    agent = owned_agent(db, user, id)
-    item = AgentTask(id=str(uuid4()), agent_id=agent.id, title=payload.title.strip(),
-                     description=payload.description.strip())
-    db.add(item)
-    add_event(db, agent.id, f"任务已创建：{item.title}")
+    from ...services.agent_tasks import create_task as create_business_task
+    item = create_business_task(db, user, id, payload.title, payload.description)
     db.commit()
     db.refresh(item)
     return task_json(item)
@@ -388,6 +385,8 @@ def complete_task(task_id: str, payload: RuntimeComplete, agent: Agent = Depends
     agent.last_seen_at = now
     task = runtime_task(db, agent, task_id)
     runtime_event(db, agent, task, "task.completed", payload.summary or "任务已完成", "success")
+    from ...automation.events import task_completed
+    task_completed(db, agent, task)
     db.commit()
     return task_json(task)
 

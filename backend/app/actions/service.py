@@ -113,9 +113,20 @@ def execute(db, agent, raw):
             log.action_id = str(envelope.actionId)
         db.add(log)
         db.flush()
-        data = action.handler(
-            db, BusinessOwner(agent.user_id, agent.workspace_id), arguments
-        )
+        db.info["business_origin"] = "agent"
+        try:
+            # Preserve automation ancestry across Agent business writes too.
+            if agent.current_task_id:
+                from ..models import AutomationActionReceipt, AutomationExecution
+                receipt = db.scalar(select(AutomationActionReceipt).where(
+                    AutomationActionReceipt.result_summary["taskId"].as_string() == agent.current_task_id))
+                source = db.get(AutomationExecution, receipt.execution_id) if receipt else None
+                if source:
+                    db.info["automation_context"] = {"execution_id": source.id, "ancestry": source.ancestry}
+            data = action.handler(db, BusinessOwner(agent.user_id, agent.workspace_id), arguments)
+        finally:
+            db.info.pop("business_origin", None)
+            db.info.pop("automation_context", None)
         entity_id = data.get("id") if isinstance(data, dict) else None
         if action.effect != "read":
             entity_id = entity_id or str(getattr(arguments, "id", "")) or None

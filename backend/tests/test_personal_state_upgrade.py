@@ -53,7 +53,7 @@ def verify_personal_upgrade(database_url, backend, mode):
                 created_at=now, updated_at=now)
         add("sync_changes", id=str(uuid4()), workspace_id=workspace_id, revision=9, entity_type="data.collection", entity_id=collection_id, operation="upsert", payload_json={"name": "Old data"}, created_at=now)
         before = {name: [dict(row) for row in db.execute(text(f'SELECT * FROM "{name}"')).mappings()] for name in immutable}
-    migrate("upgrade", "head")
+    migrate("upgrade", "0016_personal_state_sync")
     with engine.connect() as db:
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
         for name in immutable:

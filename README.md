@@ -1,6 +1,6 @@
 # Nexa Desktop — Nexa-LumaDock
 
-当前开发实现版本：**v0.5.9 Personal State Sync**。个人偏好、仪表盘布局与自动化定义通过 generation 3 同步，并接入 Settings → Sync 冲突中心。同步采用 **Protocol v3**，旧 v2 客户端会安全拒绝连接并保留队列与游标；请同时升级 Core 和所有 replica。详见 [数据归属与同步边界](docs/sync-scopes.md) 及 [实现与验证报告](docs/personal-state-sync-2026-10-03.md)。设备状态、执行历史和秘密不参与同步；自动化启用仅保存定义配置。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
+当前开发实现版本：**v0.6.0 Real Automation Engine**。自动化定义继续通过 generation 3、Protocol v3 同步；Core 统一调度和执行，Local 代理立即运行与执行历史。支持 Manual、Schedule、Data Changed、Agent Task Completed 触发器，以及 Ledger、Data、Agent、HTTPS Webhook 动作。详见 [数据归属与同步边界](docs/sync-scopes.md) 及 [实现与验证报告](docs/automation-engine-2026-10-03.md)。设备状态、执行历史和秘密不参与同步；请同时升级 Core 和所有 replica。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 
@@ -88,12 +88,12 @@ Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/nexa
 | Devices | Persistent |
 | Agents | Persistent |
 | Data | Persistent |
-| Automation | Persistent workflows / test execution only |
+| Automation | Synced definitions, Core scheduler / durable execution / authoritative history |
 | Ledger | Persistent local ledger |
 | API Keys | Persistent |
 | Settings | Persistent |
 
-Automation 目前仅保存工作流与触发器配置、执行历史，并提供模拟 `test-run`。Real scheduler / action execution engine is not implemented yet. 启用状态不会自动执行动作。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
+Automation 的真实运行需要连接 Core，并配置一个支持的触发器和类型化动作。旧工作流保留，模拟 `test-run` 不产生业务副作用。Webhook 仅允许公开 HTTPS 目标，不支持凭据或秘密；远端应识别 `Idempotency-Key`。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
 
 Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。通知尚无统一事件来源，保持空状态。
 
@@ -107,7 +107,7 @@ OpenClaw is the first adapter. Nexa Agent Runtime protocol is adapter-independen
 
 Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 SHA-256 hash 和末四位。重新生成或撤销后旧 Token 立即失效，删除 Agent 时凭证随之失效。请安全保存 Token，远程部署使用 HTTPS，不要提交 `config.json`。Agent Token 仅能控制其对应 Agent 的 Runtime 资源，不能作为用户 JWT 使用。
 
-本版未实现 WebSocket realtime streaming、Automation Engine、远程 shell、multi-agent orchestration、distributed/priority queue、Agent memory synchronization、file upload protocol、tool/live token streaming、Agent marketplace 或 Codex Adapter。Automation 不消费 Agent Event。
+本版未实现 WebSocket realtime streaming、远程 shell、multi-agent orchestration、distributed/priority queue、Agent memory synchronization、file upload protocol、tool/live token streaming、Agent marketplace 或 Codex Adapter。Automation 只消费 Core 确认的 Agent Task Completed 事件，不消费任意 Agent 日志。
 
 ## API
 

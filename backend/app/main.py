@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import api_keys, auth, client_runtime, clients, core, dashboard, ledger, settings, sync, workspace
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router, runtime_router as agent_runtime_router
-from .api.automation.routes import router as automation_router, v1_router as v1_automation_router
+from .api.automation.routes import router as automation_router, v1_router as v1_automation_router, client_router as automation_client_router
 from .api.data.routes import router as data_router, v1_router as v1_data_router
 from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router, runtime_router as device_runtime_router
 from .api.websites import router as websites_router
@@ -27,7 +27,7 @@ from .sync.notifications import register_coordinator, unregister_coordinator
 
 logger = logging.getLogger(__name__)
 runtime_config = load_runtime_config()
-APP_VERSION = "0.5.9"
+APP_VERSION = "0.6.0"
 
 
 @asynccontextmanager
@@ -38,6 +38,12 @@ async def lifespan(_app: FastAPI):
     command.upgrade(config, "head")
     logger.info("Database migrations completed")
     coordinator = None
+    automation = None
+    if runtime_config.mode == "core":
+        from .automation.engine import AutomationEngine
+        automation = AutomationEngine(SessionLocal)
+        _app.state.automation_engine = automation
+        automation.start()
     if runtime_config.mode == "local":
         # The Desktop sidecar runs a single Uvicorn worker. Scheduling belongs
         # to this lifespan, never to imports or a separate daemon process.
@@ -48,6 +54,9 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        if automation is not None:
+            await automation.stop()
+            _app.state.automation_engine = None
         if coordinator is not None:
             unregister_coordinator(engine, coordinator)
             await coordinator.stop()
@@ -65,7 +74,7 @@ app.add_middleware(
 for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
-    v1_data_router, v1_automation_router, settings.router, ledger.router,
+    v1_data_router, v1_automation_router, automation_client_router, settings.router, ledger.router,
     workspace.router, clients.router, client_runtime.router, core.router, sync.router, agent_actions_router,
 ):
     app.include_router(router)

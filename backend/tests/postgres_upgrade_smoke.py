@@ -136,7 +136,7 @@ try:
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017_automation_engine"
             assert connection.execute(text("SELECT mutation_id, base_revision, status, depends_on_mutation_id "
                                            "FROM local_mutation_queue")).one() == ("old-mutation", 0, "pending", None)
             assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue")) == outbox_payload

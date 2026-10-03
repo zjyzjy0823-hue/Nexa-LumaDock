@@ -88,7 +88,7 @@ def main() -> None:
     try:
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.9"}
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.6.0"}
             for origin in ("http://tauri.localhost", "tauri://localhost"):
                 with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                     "Origin": origin,
@@ -138,7 +138,7 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0016_personal_state_sync"
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0017_automation_engine"
             assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 10
             assert {row[0] for row in connection.execute("SELECT entity_type FROM local_mutation_queue WHERE status='pending'")} >= {
                 "user.preferences", "dashboard.layout", "automation.definition"}

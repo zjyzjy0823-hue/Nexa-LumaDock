@@ -322,6 +322,8 @@ class AutomationWorkflow(Base):
 
 class AutomationExecution(Base):
     __tablename__ = "automation_executions"
+    __table_args__ = (UniqueConstraint("workspace_id", "workflow_id", "trigger_instance_id", name="uq_automation_trigger"),
+                      Index("ix_automation_due", "status", "next_attempt_at", "lease_expires_at"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     workflow_id: Mapped[str] = mapped_column(ForeignKey("automation_workflows.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(20))
@@ -329,7 +331,53 @@ class AutomationExecution(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     message: Mapped[str] = mapped_column(String(500), default="")
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True)
+    trigger_type: Mapped[str] = mapped_column(String(30), default="simulation")
+    trigger_instance_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    automation_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    trigger_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    action_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    ancestry: Mapped[list] = mapped_column(JSON, default=list)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    worker_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     workflow: Mapped[AutomationWorkflow] = relationship(back_populates="executions")
+
+
+class AutomationScheduleState(Base):
+    __tablename__ = "automation_schedule_state"
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("automation_workflows.id", ondelete="CASCADE"), primary_key=True)
+    definition_hash: Mapped[str] = mapped_column(String(64))
+    next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AutomationActionReceipt(Base):
+    __tablename__ = "automation_action_receipts"
+    execution_id: Mapped[str] = mapped_column(ForeignKey("automation_executions.id", ondelete="CASCADE"), primary_key=True)
+    action_key: Mapped[str] = mapped_column(String(30), default="0")
+    status: Mapped[str] = mapped_column(String(20), default="succeeded")
+    result_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AutomationEvent(Base):
+    __tablename__ = "automation_events"
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(40))
+    entity_type: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    operation: Mapped[str] = mapped_column(String(20))
+    origin: Mapped[str] = mapped_column(String(20))
+    origin_execution_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    ancestry: Mapped[list] = mapped_column(JSON, default=list)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class LedgerCategory(Base):

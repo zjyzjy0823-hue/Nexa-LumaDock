@@ -207,7 +207,7 @@ def main():
     assert core_url.startswith("postgresql+psycopg://"), "Conflict integration requires isolated PostgreSQL"
     engine = create_engine(core_url)
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0017_automation_engine"
     core_secret, password = secrets.token_hex(32), secrets.token_urlsafe(24)
     with TemporaryDirectory(prefix="nexa-conflict-sync-") as temporary:
         directory = Path(temporary)

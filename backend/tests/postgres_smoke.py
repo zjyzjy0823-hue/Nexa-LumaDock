@@ -20,7 +20,7 @@ from app.sync.service import apply_mutation
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017_automation_engine"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))
@@ -63,7 +63,7 @@ username = f"core_smoke_{uuid4().hex[:12]}"
 with TestClient(app) as client:
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.5.9"}
+    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.6.0"}
     registered = client.post("/api/v1/auth/register", json={
         "username": username, "password": "smoke-test-password",
     })

@@ -1,4 +1,4 @@
-# Sync scopes — v0.5.9
+# Sync scopes — v0.6.0
 
 Not every persistent row is syncable. Sync uses an allowlist, never a denylist.
 
@@ -39,10 +39,16 @@ list order; placement and size retain the existing reference-canvas semantics.
 
 Automation keeps its UUID through creation, edits, deletion and restoration.
 Only name, description, enabled, trigger type, supported trigger configuration,
-and builder nodes are synchronized. Arbitrary runtime/action blobs, credentials,
+and builder nodes with validated typed action configuration are synchronized. Arbitrary runtime/action blobs, credentials,
 paths and device bindings are excluded. enabled=true is definition configuration,
-not an assertion that any device schedules execution. Execution ownership and a
-real scheduler belong to v0.6.0. This release retains simulated test-run only.
+not an assertion that a Local device schedules execution. Only Core schedules,
+claims and executes actions. Local proxies authoritative history and manual runs
+through its enrolled Core Client credential. `test-run` remains simulation only.
+Runtime rows in automation_executions, automation_schedule_state,
+automation_action_receipts and automation_events never enter an outbox, bootstrap,
+change payload, conflict snapshot or settings export. Legacy definitions remain
+readable; real execution requires a supported trigger and one typed action.
+Core and every Local should be upgraded together for the new definition fields.
 
 JSON payloads use schemaVersion=1, with strict nested schemas and conservative
 text validation. Unknown versions/fields are rejected without echoing input.

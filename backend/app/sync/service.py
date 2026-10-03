@@ -26,7 +26,7 @@ def lock_workspace_state(db: Session, workspace_id: str) -> SyncWorkspaceState:
 
 def append_change(db: Session, state: SyncWorkspaceState,
                   item, operation: str,
-                  client_id: str | None = None) -> int:
+                  client_id: str | None = None, *, emit_event=True) -> int:
     db.flush()
     state.current_revision += 1
     state.updated_at = utcnow()
@@ -38,6 +38,10 @@ def append_change(db: Session, state: SyncWorkspaceState,
                       payload_json=adapter_for(item).serialize(item) if operation == "upsert" else None,
                       origin_client_id=client_id))
     db.flush()
+    if emit_event:
+        from ..automation.events import business_change
+        business_change(db, state.workspace_id, state.current_revision, entity_type,
+                        adapter_for(item).entity_id(item), operation, sync=client_id is not None)
     return state.current_revision
 
 
@@ -56,7 +60,7 @@ def ensure_core_sync_initialized(db: Session, workspace_id: str) -> SyncWorkspac
         if adapter.generation <= state.bootstrap_version:
             continue
         for item in adapter.legacy_rows(db, workspace_id):
-            append_change(db, state, item, "upsert")
+            append_change(db, state, item, "upsert", emit_event=False)
     state.bootstrap_version = seed_version()
     state.initialized_at = utcnow()
     db.flush()
