@@ -39,7 +39,7 @@ const avatarUrl = computed(() => auth.user?.avatar ?? '')
 const passwordOpen = ref(false)
 const passwordDraft = ref({ current: '', next: '', confirm: '' })
 const saving = ref(false)
-onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
+onMounted(() => { if (auth.token) store.load(auth.token, true).catch(() => {}) })
 async function saveSettings(payload: Parameters<typeof store.update>[1]) {
   if (!auth.token) return
   saving.value = true

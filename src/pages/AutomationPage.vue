@@ -32,7 +32,7 @@ const executions = computed<ExecutionItem[]>(() => store.executions.map(item => 
   title: store.items.find(workflow => workflow.id === item.workflowId)?.name ?? '已删除工作流', description: item.message,
   time: item.startedAt.slice(0, 16), status: item.status === 'failed' ? 'failed' : 'success' })))
 function triggerType(id: string): Workflow['triggerType'] { return ({ device: 'device_status', schedule: 'schedule', webhook: 'webhook', agent: 'agent_event' } as Record<string, Workflow['triggerType']>)[id] ?? 'manual' }
-onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
+onMounted(() => { if (auth.token) store.load(auth.token, true).catch(() => {}) })
 const selectedTriggerId = ref('device')
 watch(selectedWorkflow, item => { selectedTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item?.triggerType)?.id ?? 'device' })
 const expanded = ref(false)
@@ -109,6 +109,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 <template>
   <div class="automation-page">
     <h1 class="automation-visually-hidden">自动化</h1>
+    <p class="automation-definition-note">启用状态保存自动化配置；实际定时执行尚未开放，测试运行仅模拟执行。</p>
     <div class="automation-page-actions" aria-label="自动化操作"><ActionButton size="sm" @click="openCreate"><Plus :size="16" />新建自动化</ActionButton></div>
     <p v-if="store.loading" role="status">正在加载工作流…</p>
     <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>

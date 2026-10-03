@@ -89,6 +89,8 @@ class Dashboard(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120), default="我的控制中心")
     layout_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    sync_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     user: Mapped[User] = relationship(back_populates="dashboard")
@@ -138,10 +140,15 @@ class UserPreference(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     theme: Mapped[str] = mapped_column(String(30), default="system")
     language: Mapped[str] = mapped_column(String(20), default="zh-CN")
     timezone: Mapped[str] = mapped_column(String(80), default="Asia/Shanghai")
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    sync_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class Device(Base):
@@ -306,6 +313,8 @@ class AutomationWorkflow(Base):
     trigger_type: Mapped[str] = mapped_column(String(30), default="manual")
     trigger_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     workflow_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    sync_revision: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     executions: Mapped[list["AutomationExecution"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")

@@ -1,6 +1,6 @@
 # Nexa Desktop — Nexa-LumaDock
 
-当前开发实现版本：**v0.5.8 Conflict Center**。Settings → Sync 可查看同步冲突并显式选择保留本机或使用 Core，详见 [Conflict Center 实现与验证记录](docs/conflict-center-2026-10-03.md)。共享同步继续使用 Protocol v2；本机选择会产生新的 optimistic mutation，Core 再次变化时仍会重新进入冲突。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
+当前开发实现版本：**v0.5.9 Personal State Sync**。个人偏好、仪表盘布局与自动化定义通过 generation 3 同步，并接入 Settings → Sync 冲突中心。同步采用 **Protocol v3**，旧 v2 客户端会安全拒绝连接并保留队列与游标；请同时升级 Core 和所有 replica。详见 [数据归属与同步边界](docs/sync-scopes.md) 及 [实现与验证报告](docs/personal-state-sync-2026-10-03.md)。设备状态、执行历史和秘密不参与同步；自动化启用仅保存定义配置。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
 
 Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
 

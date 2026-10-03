@@ -494,7 +494,7 @@ def test_parallel_first_ledger_reads_seed_once(tmp_path):
         with local.factory() as db:
             assert db.scalar(select(func.count()).select_from(LocalSyncState)) == 1
             assert db.scalar(select(func.count()).select_from(LocalMutation)) == 1
-            assert db.get(LocalSyncState, local.workspace_id).queue_seed_version == 2
+            assert db.get(LocalSyncState, local.workspace_id).queue_seed_version == 3
     finally:
         client.close()
         local.engine.dispose()

@@ -230,7 +230,7 @@ def main():
     password = secrets.token_urlsafe(24)
     core_engine = create_engine(core_url)
     with core_engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0015_agent_data_actions"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
     with TemporaryDirectory(prefix="nexa-background-sync-") as temporary:
         directory = Path(temporary)
         core = Server(directory, "core", core_env={"NEXA_MODE": "core", "DATABASE_URL": core_url,

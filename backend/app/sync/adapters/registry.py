@@ -3,8 +3,9 @@ from .ledger import ADAPTERS as LEDGER
 
 from .websites import ADAPTERS as WEBSITES
 from .data import ADAPTERS as DATA
+from .personal_state import ADAPTERS as PERSONAL
 
-REGISTRY = {adapter.entity_type: adapter for adapter in [*LEDGER, *WEBSITES, *DATA]}
+REGISTRY = {adapter.entity_type: adapter for adapter in [*LEDGER, *WEBSITES, *DATA, *PERSONAL]}
 
 
 def get_adapter(entity_type):

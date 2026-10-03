@@ -27,6 +27,41 @@ const { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS, useAuthStore, resolveCon
 const metadata = { connected: true, coreUrl: 'http://127.0.0.1:8000', clientId: 'client', workspaceId: 'workspace', installationId: 'installation', clientName: 'Nexa Windows', platform: 'windows', appVersion: '0.5.6', connectedAt: '2026-10-02T01:00:00Z' }
 const status = { enabled: true, running: false, connected: true, blocked: false, pending: 3, conflicts: 0, inFlight: 0, rejected: 0, cursor: 0, queueSeeded: true, lastAttemptAt: null, lastSuccessAt: null, nextRetryAt: null, lastError: null }
 const reply = (value, code = 200) => new Response(JSON.stringify(value), { status: code, headers: { 'Content-Type': 'application/json' } })
+
+test('personal preferences present existing user choices with readable differences', () => {
+  const value = { entityType: 'user.preferences', local: { theme: 'dark', language: 'zh-CN', timezone: 'Asia/Shanghai', appearance: { accent: 'mint' } },
+    remote: { theme: 'light', language: 'en-US', timezone: 'UTC', appearance: { accent: 'blue' } } }
+  assert.equal(conflictEntityLabel(value.entityType), '个人偏好')
+  const rows = conflictFields(value)
+  assert.equal(rows.find(row => row.key === 'theme').local, 'dark')
+  assert.equal(rows.find(row => row.key === 'language').remote, 'en-US')
+  assert.equal(rows.find(row => row.key === 'theme').different, true)
+  assert.equal(rows.find(row => row.key === 'appearance').json, true)
+})
+
+test('dashboard conflict summarizes widget visibility and ordering before collapsed configuration', () => {
+  const value = { entityType: 'dashboard.layout', local: { widgets: [{ id: 'ledger' }, { id: 'clock' }] }, remote: { widgets: [{ id: 'clock' }] } }
+  const rows = conflictFields(value)
+  assert.equal(conflictEntityLabel(value.entityType), '仪表盘布局')
+  assert.equal(rows[0].local, '2 个显示组件：账本 → 时钟与天气')
+  assert.equal(rows[0].remote, '1 个显示组件：时钟与天气')
+  assert.equal(rows[0].json, false)
+  assert.equal(rows[0].different, true)
+  assert.equal(rows[1].json, true)
+  assert.notEqual(rows[0].key, rows[1].key)
+})
+
+test('automation conflict presents definition enabled/trigger/action and delete restoration', () => {
+  const value = { entityType: 'automation.definition', local: { name: 'Daily Summary', enabled: true, triggerType: 'schedule', triggerConfigJson: { cron: '0 9 * * *' }, workflowJson: [{ kind: 'DO', text: 'Notify' }] },
+    remote: null, remoteDeleted: true, localDeleted: false }
+  assert.equal(conflictTitle(value), 'Daily Summary')
+  assert.equal(conflictEntityLabel(value.entityType), '自动化定义')
+  const rows = conflictFields(value)
+  assert.equal(rows.find(row => row.key === 'enabled').local, '是')
+  assert.equal(rows.find(row => row.key === 'triggerType').local, 'schedule')
+  assert.equal(rows.find(row => row.key === 'workflowJson').json, true)
+  assert.match(conflictConfirmation(value, 'local'), /恢复 Core/)
+})
 async function settle() { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)) }
 
 async function mount(handler, conflictsMode = false) {

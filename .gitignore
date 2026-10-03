@@ -25,6 +25,7 @@ agent-adapters/openclaw/plugin/dist/
 output/openclaw-sdk/
 output/openclaw-*.tgz
 output/node-runtime/
+output/v059/
 backend/build/
 backend/dist/
 src-tauri/target/

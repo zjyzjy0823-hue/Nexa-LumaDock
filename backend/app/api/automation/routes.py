@@ -9,9 +9,14 @@ from ...database import get_db
 from ...models import AutomationWorkflow, AutomationExecution, User, utcnow
 from ...security import current_user, read_user_for
 from ...workspaces import get_personal_workspace
+from ...sync.publisher import prepare_write, publish, delete_entity
+from ...sync.adapters import get_adapter
+from ...sync.adapters.personal_state import AutomationData
+from pydantic import ValidationError
+from ..personal_route import SafePersonalRoute
 
-router = APIRouter(prefix="/api/automation", tags=["automation"])
-v1_router = APIRouter(prefix="/api/v1/automations", tags=["automation"])
+router = APIRouter(prefix="/api/automation", tags=["automation"], route_class=SafePersonalRoute)
+v1_router = APIRouter(prefix="/api/v1/automations", tags=["automation"], route_class=SafePersonalRoute)
 Trigger = Literal["manual", "schedule", "device_status", "agent_event", "webhook"]
 
 
@@ -42,16 +47,28 @@ class WorkflowPatch(BaseModel):
 
 
 def workflow_or_404(db: Session, user: User, id: str) -> AutomationWorkflow:
-    item = db.scalar(select(AutomationWorkflow).where(AutomationWorkflow.id == id, AutomationWorkflow.user_id == user.id))
+    item = db.scalar(select(AutomationWorkflow).where(AutomationWorkflow.id == id, AutomationWorkflow.user_id == user.id,
+                                                     AutomationWorkflow.deleted_at.is_(None)))
     if item is None:
         raise HTTPException(404, "Workflow not found")
     return item
 
 
 def workflow_out(item: AutomationWorkflow) -> dict:
-    return {"id": item.id, "name": item.name, "description": item.description, "enabled": item.enabled,
-            "triggerType": item.trigger_type, "triggerConfigJson": item.trigger_config_json,
-            "workflowJson": item.workflow_json, "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
+    definition = get_adapter("automation.definition").serialize(item)
+    return {"id": item.id, "name": definition["name"], "description": definition["description"], "enabled": item.enabled,
+            "triggerType": definition["triggerType"], "triggerConfigJson": definition["triggerConfigJson"],
+            "workflowJson": definition["workflowJson"], "createdAt": iso_utc(item.created_at), "updatedAt": iso_utc(item.updated_at)}
+
+
+def validate_definition(item):
+    adapter = get_adapter("automation.definition")
+    try:
+        # Strict input validation, unlike the legacy allowlist projection.
+        data = AutomationData.model_validate({key: getattr(item, attr) for key, attr in adapter.fields.items()})
+    except ValidationError:
+        raise HTTPException(422, "Unsupported automation definition") from None
+    adapter.apply_data(item, data)
 
 
 def execution_out(item: AutomationExecution) -> dict:
@@ -62,20 +79,24 @@ def execution_out(item: AutomationExecution) -> dict:
 
 @router.get("")
 def legacy_automation(user: User = Depends(read_user_for("Automation")), db: Session = Depends(get_db)):
-    items = db.scalars(select(AutomationWorkflow).where(AutomationWorkflow.user_id == user.id)).all()
+    items = db.scalars(select(AutomationWorkflow).where(AutomationWorkflow.user_id == user.id, AutomationWorkflow.deleted_at.is_(None))).all()
     return {"workflows": [workflow_out(item) for item in items], "total": len(items)}
 
 
 @v1_router.get("")
 def list_workflows(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [workflow_out(item) for item in db.scalars(select(AutomationWorkflow).where(AutomationWorkflow.user_id == user.id).order_by(AutomationWorkflow.created_at.desc())).all()]
+    return [workflow_out(item) for item in db.scalars(select(AutomationWorkflow).where(AutomationWorkflow.user_id == user.id, AutomationWorkflow.deleted_at.is_(None)).order_by(AutomationWorkflow.created_at.desc())).all()]
 
 
 @v1_router.post("", status_code=201)
 def create_workflow(payload: WorkflowInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = AutomationWorkflow(id=str(uuid4()), user_id=user.id,
                               workspace_id=get_personal_workspace(db, user).id, **payload.model_dump())
-    db.add(item); db.commit(); db.refresh(item)
+    validate_definition(item)
+    db.add(item)
+    publish(db, item)
+    db.commit(); db.refresh(item)
     return workflow_out(item)
 
 
@@ -86,6 +107,7 @@ def get_workflow(id: str, user: User = Depends(current_user), db: Session = Depe
 
 @v1_router.patch("/{id}")
 def patch_workflow(id: str, payload: WorkflowPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    prepare_write(db, user)
     item = workflow_or_404(db, user, id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
@@ -93,13 +115,17 @@ def patch_workflow(id: str, payload: WorkflowPatch, user: User = Depends(current
         setattr(item, key, value.strip() if key == "name" else value)
     if not item.name:
         raise HTTPException(422, "Name is required")
+    validate_definition(item)
+    publish(db, item)
     db.commit(); db.refresh(item)
     return workflow_out(item)
 
 
 @v1_router.delete("/{id}", status_code=204)
 def delete_workflow(id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(workflow_or_404(db, user, id)); db.commit()
+    prepare_write(db, user)
+    delete_entity(db, workflow_or_404(db, user, id))
+    db.commit()
 
 
 @v1_router.get("/{id}/executions")

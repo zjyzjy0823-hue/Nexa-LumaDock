@@ -28,7 +28,7 @@ export interface SyncRunResult extends SyncCounts {
 export const getSyncStatus = (token: string, signal?: AbortSignal) => apiRequest<SyncStatus>('/api/v1/sync/status', { signal }, token)
 export const runSync = (token: string) => apiRequest<SyncRunResult>('/api/v1/sync/run', { method: 'POST' }, token)
 
-export type SyncEntityType = 'ledger.category' | 'ledger.transaction' | 'website.category' | 'website' | 'data.collection' | 'data.record'
+export type SyncEntityType = 'ledger.category' | 'ledger.transaction' | 'website.category' | 'website' | 'data.collection' | 'data.record' | 'user.preferences' | 'dashboard.layout' | 'automation.definition'
 export type ConflictStrategy = 'local' | 'remote'
 export type ConflictPayload = Record<string, unknown>
 export interface SyncConflict {

@@ -8,18 +8,26 @@ import { conflictEntityLabel, conflictFields, conflictTime, conflictTitle, detec
 import { useLedgerStore } from '../../stores/ledger'
 import { useWebsitesStore } from '../../stores/websites'
 import { useDataStore } from '../../stores/data'
+import { useSettingsStore } from '../../stores/settings'
+import { useAutomationStore } from '../../stores/automation'
+import { useAuthStore } from '../../stores/auth'
 
 const props = defineProps<{ open: boolean; refreshStatus: () => Promise<void> }>()
 const emit = defineEmits<{ close: []; action: [message: string] }>()
 const ledger = useLedgerStore()
 const websites = useWebsitesStore()
 const data = useDataStore()
+const settings = useSettingsStore()
+const automation = useAutomationStore()
+const auth = useAuthStore()
 const { conflicts, selected, references, listLoading, detailLoading, resolving, error, busy, refresh, select, resolve } =
   useSyncConflicts(toRef(props, 'open'), message => emit('action', message), async () => {
     // Reload business views on their next visit after authoritative Local changes.
     ledger.invalidate()
     data.invalidate()
     websites.invalidate()
+    if (auth.token && !settings.loading) await settings.load(auth.token, true).catch(() => {})
+    automation.invalidate()
     await props.refreshStatus()
   })
 const rows = computed(() => selected.value ? conflictFields(selected.value, references.value) : [])
@@ -61,8 +69,8 @@ const rows = computed(() => selected.value ? conflictFields(selected.value, refe
               </div>
               <div v-for="row in rows" :key="row.key" class="conflict-field" :class="{ 'conflict-field--different': row.different }" role="row">
                 <span role="rowheader">{{ row.label }}<small v-if="row.different">不同</small></span>
-                <div role="cell"><details v-if="row.json && !selected.localDeleted"><summary>查看记录内容</summary><pre>{{ row.local }}</pre></details><span v-else>{{ row.local }}</span></div>
-                <div role="cell"><details v-if="row.json && !selected.remoteDeleted && selected.remote"><summary>查看记录内容</summary><pre>{{ row.remote }}</pre></details><span v-else>{{ row.remote }}</span></div>
+                <div role="cell"><details v-if="row.json && !selected.localDeleted"><summary>查看详细配置</summary><pre>{{ row.local }}</pre></details><span v-else>{{ row.local }}</span></div>
+                <div role="cell"><details v-if="row.json && !selected.remoteDeleted && selected.remote"><summary>查看详细配置</summary><pre>{{ row.remote }}</pre></details><span v-else>{{ row.remote }}</span></div>
               </div>
             </div>
             <p class="conflict-explanation">保留本机后，后台会将其作为新的修改同步。若 Core 再次更改，冲突会重新出现。</p>

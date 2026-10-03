@@ -136,7 +136,7 @@ try:
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0015_agent_data_actions"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016_personal_state_sync"
             assert connection.execute(text("SELECT mutation_id, base_revision, status, depends_on_mutation_id "
                                            "FROM local_mutation_queue")).one() == ("old-mutation", 0, "pending", None)
             assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue")) == outbox_payload
@@ -164,7 +164,17 @@ try:
         finally:
             with admin_engine.connect() as connection:
                 connection.execute(text(f'DROP DATABASE "{multi_database}" WITH (FORCE)'))
-    print("PostgreSQL 0008 -> 0015 upgrade, Client, Ledger and Sync history preservation: PASS")
+    from test_personal_state_upgrade import verify_personal_upgrade
+    for mode in ("local", "core"):
+        personal_database = "nexa_personal_upgrade_" + uuid4().hex[:12]
+        with admin_engine.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{personal_database}"'))
+        try:
+            verify_personal_upgrade(base_url.set(database=personal_database).render_as_string(hide_password=False), BACKEND, mode)
+        finally:
+            with admin_engine.connect() as connection:
+                connection.execute(text(f'DROP DATABASE "{personal_database}" WITH (FORCE)'))
+    print("PostgreSQL 0008/0013/0015 -> 0016 upgrade, history and generation 3 preservation: PASS")
 finally:
     with admin_engine.connect() as connection:
         connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE_NAME}" WITH (FORCE)'))

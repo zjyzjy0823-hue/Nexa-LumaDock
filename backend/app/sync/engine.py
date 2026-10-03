@@ -83,7 +83,7 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
                 raise SyncRemoteError("invalid_response")
             adapter = get_adapter(entry.entity_type)
             model = adapter.model
-            item = db.get(model, entry.entity_id)
+            item = adapter.find(db, entry.entity_id, workspace_id)
             if item is None or adapter.workspace_id(db, item) != workspace_id:
                 raise SyncRemoteError("invalid_local_state")
             item.sync_revision = revision
@@ -119,7 +119,7 @@ def _acknowledge(factory, workspace_id: str, mutation_id: str, result: dict) -> 
 REJECTION_REASONS = frozenset({"invalid_id", "invalid_fields", "unknown_entity_type",
     "invalid_operation", "invalid_base_revision", "invalid_data", "entity_id_unavailable",
     "category_not_found", "category_type_mismatch", "category_has_transactions",
-    "collection_not_found", "collection_id_immutable"})
+    "collection_not_found", "collection_id_immutable", "delete_unsupported"})
 
 
 def _validate_snapshot(adapter, payload, deleted):
@@ -162,6 +162,8 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
     entity_type, entity_id = change.get("entityType"), change.get("entityId")
     operation, revision = change.get("operation"), change.get("revision")
     adapter = get_adapter(entity_type)
+    if adapter.identity_error(entity_id, operation):
+        raise SyncRemoteError("invalid_response")
     if (not isinstance(entity_id, str) or
             operation not in ("upsert", "delete") or type(revision) is not int or revision <= 0):
         raise SyncRemoteError("invalid_response")
@@ -174,7 +176,7 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
             raise SyncRemoteError("invalid_response")
         adapter = get_adapter(entity_type)
         model, schema = adapter.model, adapter.schema
-        item = db.get(model, entity_id)
+        item = adapter.find(db, entity_id, workspace_id)
         if item is not None and adapter.workspace_id(db, item) != workspace_id:
             raise SyncRemoteError("ownership_conflict")
         if item is not None and revision <= item.sync_revision:
@@ -282,7 +284,7 @@ def _repair_acknowledged_tails(factory, workspace_id: str) -> None:
             if predecessor is not None:
                 continue
             adapter = get_adapter(tail.entity_type)
-            item = db.get(adapter.model, tail.entity_id)
+            item = adapter.find(db, tail.entity_id, workspace_id)
             if item is None or adapter.workspace_id(db, item) != workspace_id or item.sync_revision <= tail.base_revision:
                 raise SyncRemoteError("invalid_local_state")
             tail.base_revision = item.sync_revision

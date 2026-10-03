@@ -19,6 +19,18 @@ class SyncAdapter:
     parent_field: str | None = None
     push_requires_active_parent: bool = True
 
+    def entity_id(self, item):
+        return item.id
+
+    def find(self, db, entity_id, workspace_id):
+        return db.get(self.model, entity_id, populate_existing=True)
+
+    def identity_error(self, entity_id, operation):
+        return None
+
+    def accepts_initial_upsert(self, item):
+        return False
+
     def serialize(self, item):
         from ...utils.time import iso_utc
         from datetime import datetime

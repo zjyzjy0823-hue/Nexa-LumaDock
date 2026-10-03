@@ -65,7 +65,7 @@ def delete(local, entity_type, item_id):
 
 def test_registry_contract():
     assert set(REGISTRY) == {"ledger.category", "ledger.transaction", "website.category", "website",
-                             "data.collection", "data.record"}
+                             "data.collection", "data.record", "user.preferences", "dashboard.layout", "automation.definition"}
     for parent, child in (("ledger.category", "ledger.transaction"),
                           ("website.category", "website"), ("data.collection", "data.record")):
         assert get_adapter(parent).push_priority("upsert") < get_adapter(child).push_priority("upsert")
@@ -287,7 +287,7 @@ def test_ordinary_api_publication_and_tombstone_reads(client, monkeypatch, mode)
     assert client.delete(f"/api/v1/websites/{site['id']}", headers=auth).status_code == 204
     assert client.get("/api/v1/websites", headers=auth).json() == []
     if mode == "core":
-        feed = client.get(ROOT + "/changes?protocolVersion=2", headers=credential).json()
+        feed = client.get(ROOT + "/changes?protocolVersion=3", headers=credential).json()
         assert {row["entityType"] for row in feed["changes"]} == {"website.category", "website", "data.collection", "data.record"}
         assert len(feed["changes"]) == 12
         assert [row["revision"] for row in feed["changes"]] == list(range(1, 13))
@@ -340,6 +340,6 @@ def test_core_ordinary_child_write_adopts_legacy_parent_before_history(client, m
         "url": "https://example.com", "categoryId": category_id}).status_code == 201
     assert client.post(f"/api/v1/data/collections/{collection_id}/records", headers=auth,
                        json={"name": "Child"}).status_code == 201
-    feed = client.get(ROOT + "/changes?protocolVersion=2", headers=credential).json()
+    feed = client.get(ROOT + "/changes?protocolVersion=3", headers=credential).json()
     assert [row["entityType"] for row in feed["changes"]] == [
         "website.category", "data.collection", "website", "data.record"]

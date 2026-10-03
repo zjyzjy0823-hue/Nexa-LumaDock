@@ -5,8 +5,9 @@ const entityLabels: Record<SyncEntityType, string> = {
   'ledger.category': '账本分类', 'ledger.transaction': '账本交易',
   'website.category': '网站分类', website: '网站',
   'data.collection': '数据集合', 'data.record': '数据记录',
+  'user.preferences': '个人偏好', 'dashboard.layout': '仪表盘布局', 'automation.definition': '自动化定义',
 }
-type Field = { key: string; label: string; kind?: 'type' | 'amount' | 'time' | 'boolean' | 'reference' | 'json' }
+type Field = { key: string; label: string; kind?: 'type' | 'amount' | 'time' | 'boolean' | 'reference' | 'json' | 'widgets' | 'workflow' }
 const fields: Record<SyncEntityType, Field[]> = {
   'ledger.category': [{ key: 'name', label: '名称' }, { key: 'type', label: '类型', kind: 'type' }, { key: 'icon', label: '图标' }],
   'ledger.transaction': [{ key: 'type', label: '类型', kind: 'type' }, { key: 'amount', label: '金额', kind: 'amount' },
@@ -19,6 +20,12 @@ const fields: Record<SyncEntityType, Field[]> = {
   'data.collection': [{ key: 'name', label: '名称' }, { key: 'description', label: '描述' }, { key: 'icon', label: '图标' }, { key: 'tone', label: '颜色' }],
   'data.record': [{ key: 'name', label: '名称' }, { key: 'status', label: '状态' }, { key: 'category', label: '分类' },
     { key: 'collectionId', label: '所属集合', kind: 'reference' }, { key: 'dataJson', label: '记录内容', kind: 'json' }],
+  'user.preferences': [{ key: 'theme', label: '主题' }, { key: 'language', label: '语言' }, { key: 'timezone', label: '时区' },
+    { key: 'appearance', label: '外观', kind: 'json' }, { key: 'notifications', label: '通知', kind: 'json' }],
+  'dashboard.layout': [{ key: 'widgets', label: '组件与顺序', kind: 'widgets' }, { key: 'widgets', label: '布局配置', kind: 'json' }],
+  'automation.definition': [{ key: 'name', label: '名称' }, { key: 'description', label: '描述' }, { key: 'enabled', label: '启用配置', kind: 'boolean' },
+    { key: 'triggerType', label: '触发类型' }, { key: 'triggerConfigJson', label: '触发配置', kind: 'json' },
+    { key: 'workflowJson', label: '动作摘要', kind: 'workflow' }, { key: 'workflowJson', label: '动作定义', kind: 'json' }],
 }
 
 export const conflictEntityLabel = (entityType: SyncEntityType) => entityLabels[entityType] ?? '同步数据'
@@ -47,6 +54,15 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? 'null'
 }
 function display(value: unknown, field: Field, references: Record<string, string>) {
+  if (field.kind === 'workflow') {
+    const nodes = Array.isArray(value) ? value as { kind: string; label?: string; text?: string }[] : []
+    return nodes.map(node => `${({ WHEN: '触发', IF: '条件', DO: '动作' } as Record<string, string>)[node.kind] ?? node.kind}：${node.text || node.label || '—'}`).join(' → ') || '无动作'
+  }
+  if (field.kind === 'widgets') {
+    const widgets = Array.isArray(value) ? value as { id: string }[] : []
+    const labels: Record<string, string> = { 'quick-access': '快捷访问', clock: '时钟与天气', devices: '设备', agents: '智能体', ledger: '账本', system: '系统', collections: '数据集', automation: '自动化', notes: '最近记录' }
+    return `${widgets.length} 个显示组件：${widgets.map(widget => labels[widget.id] ?? widget.id).join(' → ') || '无'}`
+  }
   if (field.kind === 'json') return JSON.stringify(value ?? {}, null, 2)
   if (value === null || value === undefined || value === '') return field.kind === 'reference' ? (field.key === 'collectionId' ? '无集合' : '未分类') : '—'
   if (field.kind === 'amount') {
@@ -62,7 +78,7 @@ function display(value: unknown, field: Field, references: Record<string, string
 }
 export function conflictFields(conflict: SyncConflict, references: Record<string, string> = {}) {
   return (fields[conflict.entityType] ?? []).map(field => ({
-    key: field.key, label: field.label, json: field.kind === 'json',
+    key: field.kind === 'widgets' ? 'widgetSummary' : field.kind === 'workflow' ? 'workflowSummary' : field.key, label: field.label, json: field.kind === 'json',
     local: conflict.localDeleted ? '已删除' : display(conflict.local?.[field.key], field, references),
     remote: conflict.remoteDeleted ? '已删除' : !conflict.remote ? 'Core 中不存在' : display(conflict.remote[field.key], field, references),
     different: conflict.localDeleted !== conflict.remoteDeleted || canonical(conflict.local?.[field.key]) !== canonical(conflict.remote?.[field.key]),

@@ -9,8 +9,13 @@ from ..database import get_db
 from ..models import User, UserPreference
 from ..security import current_user, hash_password, verify_password
 from ..schemas import UserPublic
+from ..workspaces import get_personal_workspace
+from ..sync.publisher import prepare_write, publish
+from ..sync.adapters.personal_state import PreferencesData, project
+from pydantic import ValidationError
+from .personal_route import SafePersonalRoute
 
-router = APIRouter(prefix="/api/v1", tags=["settings"])
+router = APIRouter(prefix="/api/v1", tags=["settings"], route_class=SafePersonalRoute)
 DEFAULT_NOTIFICATIONS = {"events": {"agentComplete": True, "deviceOffline": True, "automationFailure": True,
                                      "budgetAlert": False, "securityAlert": True},
                          "channels": {"desktop": True, "email": False, "telegram": False, "webhook": False}}
@@ -46,21 +51,30 @@ class PasswordPatch(BaseModel):
     new_password: str = Field(min_length=8, max_length=256)
 
 
-def preference(db: Session, user: User) -> UserPreference:
+def preference(db: Session, user: User, *, commit=True) -> UserPreference:
     item = db.scalar(select(UserPreference).where(UserPreference.user_id == user.id))
     if item is None:
-        item = UserPreference(user_id=user.id, theme="system", language="zh-CN", timezone="Asia/Shanghai", settings_json={})
+        item = UserPreference(user_id=user.id, workspace_id=get_personal_workspace(db, user).id,
+                              theme="system", language="zh-CN", timezone="Asia/Shanghai", settings_json={})
         db.add(item)
-        db.commit()
-        db.refresh(item)
+        db.flush()
+        if commit:
+            db.commit()
+            db.refresh(item)
     return item
 
 
 def public_settings(item: UserPreference) -> dict:
     extra = item.settings_json or {}
-    return {"theme": item.theme, "language": item.language, "timezone": item.timezone,
-            "notifications": extra.get("notifications", DEFAULT_NOTIFICATIONS), "appearance": extra.get("appearance", {}),
-            "sync": extra.get("sync", {}), "security": extra.get("security", {})}
+    values = project(PreferencesData, {"theme": item.theme, "language": item.language,
+        "timezone": item.timezone, "appearance": extra.get("appearance", {}),
+        "notifications": extra.get("notifications", {})})
+    values.pop("schemaVersion")
+    values.update(sync={key: value for key, value in (extra.get("sync") or {}).items()
+                       if key in {"mode", "serverUrl", "automatic", "cellular", "lastSynced"}},
+                  security={key: value for key, value in (extra.get("security") or {}).items()
+                       if key in {"twoFactor", "requireRemoteConfirmation", "trustedDevices", "activeSessions", "apiTokens"}})
+    return values
 
 
 @router.get("/settings")
@@ -70,14 +84,22 @@ def get_settings(user: User = Depends(current_user), db: Session = Depends(get_d
 
 @router.patch("/settings")
 def patch_settings(payload: SettingsPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    item = preference(db, user)
+    prepare_write(db, user)
+    item = preference(db, user, commit=False)
     values = payload.model_dump(exclude_unset=True)
+    sync_values = {key: value for key, value in values.items() if key in PreferencesData.model_fields}
+    try:
+        PreferencesData.model_validate(sync_values)
+    except ValidationError:
+        raise HTTPException(422, "Invalid personal preferences") from None
     for key in ("theme", "language", "timezone"):
         if key in values:
             if values[key] is None:
                 raise HTTPException(422, f"{key} cannot be null")
             setattr(item, key, values.pop(key))
     item.settings_json = {**(item.settings_json or {}), **values}
+    if sync_values:
+        publish(db, item)
     db.commit()
     db.refresh(item)
     return public_settings(item)

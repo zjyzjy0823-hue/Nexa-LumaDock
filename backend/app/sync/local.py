@@ -55,7 +55,7 @@ def queued_entries(db: Session, item) -> list[LocalMutation]:
         select(LocalMutation).where(
             LocalMutation.workspace_id == adapter_for(item).workspace_id(db, item),
             LocalMutation.entity_type == entity_type(item),
-            LocalMutation.entity_id == item.id,
+            LocalMutation.entity_id == adapter_for(item).entity_id(item),
             LocalMutation.status != "resolved",
         )
     ).all()
@@ -76,7 +76,7 @@ def _new_mutation(db, item, operation: str, payload: dict | None) -> LocalMutati
         mutation_id=str(uuid4()),
         workspace_id=adapter_for(item).workspace_id(db, item),
         entity_type=entity_type(item),
-        entity_id=item.id,
+        entity_id=adapter_for(item).entity_id(item),
         operation=operation,
         base_revision=item.sync_revision,
         payload_json=payload,
@@ -91,7 +91,7 @@ def record_local_upsert(db: Session, item) -> LocalMutation:
         # disable autoflush, so a newly created Local row needs its initial zero now.
         item.sync_revision = 0
     payload = adapter_for(item).serialize(item)
-    # The outbox sends the exact same complete business shape as Protocol v2.
+    # The outbox sends the complete business shape defined by its adapter.
     adapter_for(item).schema.model_validate(payload)
     entries = queued_entries(db, item)
     entry = next((value for value in entries if value.status == "pending"), None)

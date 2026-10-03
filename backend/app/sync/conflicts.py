@@ -64,6 +64,8 @@ def _adapter(entity_type):
 
 
 def _snapshot(entry, adapter):
+    if adapter.identity_error(entry.entity_id, entry.operation):
+        raise HTTPException(409, "invalid_conflict_snapshot")
     snapshot = entry.conflict_json
     required = {"currentRevision", "current", "deleted"}
     if (not isinstance(snapshot, dict) or not required <= set(snapshot) or
@@ -75,6 +77,8 @@ def _snapshot(entry, adapter):
         except (ValueError, TypeError):
             raise HTTPException(409, "invalid_conflict_snapshot") from None
     revision, payload, deleted = (snapshot["currentRevision"], snapshot["current"], snapshot["deleted"])
+    if payload is None and adapter.identity_error(entry.entity_id, "delete"):
+        raise HTTPException(409, "invalid_conflict_snapshot")
     if (type(revision) is not int or not 0 <= revision <= 2**63 - 1 or
             type(deleted) is not bool or
             (entry.result_revision is not None and entry.result_revision != revision) or
@@ -91,7 +95,7 @@ def _snapshot(entry, adapter):
 
 
 def _item(db, workspace_id, entry, adapter):
-    item = db.get(adapter.model, entry.entity_id, populate_existing=True)
+    item = adapter.find(db, entry.entity_id, workspace_id)
     if item is None or adapter.workspace_id(db, item) != workspace_id:
         raise HTTPException(409, "invalid_local_state")
     return item

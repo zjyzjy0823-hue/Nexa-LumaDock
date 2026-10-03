@@ -15,13 +15,13 @@ def test_client_credential_and_http_safety(monkeypatch):
         assert request.headers["Authorization"] == "Bearer nc_live_test"
         if request.method == "POST":
             body = json.loads(request.read())
-            assert body["protocolVersion"] == 2
+            assert body["protocolVersion"] == 3
             assert set(body["mutations"][0]) == {"mutationId", "entityType", "entityId",
                                                   "operation", "baseRevision", "data"}
-            return httpx.Response(200, json={"protocolVersion": 2, "results": [
+            return httpx.Response(200, json={"protocolVersion": 3, "results": [
                 {"mutationId": "test-id", "status": "applied", "revision": 1}]})
-        assert request.url.params["protocolVersion"] == "2"
-        return httpx.Response(200, json={"protocolVersion": 2, "changes": [],
+        assert request.url.params["protocolVersion"] == "3"
+        return httpx.Response(200, json={"protocolVersion": 3, "changes": [],
                                          "cursor": 0, "hasMore": False, "workspaceRevision": 1})
 
     def client_factory(**kwargs):

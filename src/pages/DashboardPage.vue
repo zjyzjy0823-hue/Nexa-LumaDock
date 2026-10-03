@@ -50,6 +50,7 @@ onMounted(async () => {
     if (!auth.token) return
     void devices.load(auth.token, true)
     void agents.load(auth.token)
+    if (!editing.value && !dashboard.saving) void dashboard.load(auth.token).catch(() => {})
   }, 30_000)
   try {
     if (!auth.token) return

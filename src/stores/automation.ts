@@ -24,5 +24,6 @@ export const useAutomationStore = defineStore('automation', () => {
   async function remove(token: string, id: string) { return mutate(async () => { const current = sequence; await automationService.remove(token, id); if (current === sequence) { items.value = items.value.filter(item => item.id !== id); executions.value = executions.value.filter(item => item.workflowId !== id) } }) }
   async function testRun(token: string, id: string) { return mutate(async () => { const current = sequence; const item = await automationService.testRun(token, id); if (current === sequence) executions.value.unshift(item) }) }
   function reset() { ++sequence; items.value = []; executions.value = []; loading.value = false; loaded.value = false; loadedAt.value = 0; error.value = '' }
-  return { items, executions, loading, loaded, error, load, create, update, remove, testRun, reset }
+  function invalidate() { loaded.value = false; loadedAt.value = 0 }
+  return { items, executions, loading, loaded, error, load, create, update, remove, testRun, reset, invalidate }
 })
