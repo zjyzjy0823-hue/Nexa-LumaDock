@@ -301,7 +301,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
       <div class="website-dialog" role="dialog" aria-modal="true" :aria-label="dialogMode === 'add' ? '添加网站' : '编辑网站'">
         <div class="website-dialog__header"><div><span>PERSONAL SPACE</span><h2>{{ dialogMode === 'add' ? '添加网站' : '编辑网站' }}</h2><p>保存一个属于你的快捷入口。</p></div><button type="button" aria-label="关闭" @click="closeDialog"><X :size="19" /></button></div>
         <form @submit.prevent="saveWebsite">
-          <label>网站名称<input v-model="form.name" maxlength="36" placeholder="例如：我的工作台" required /></label>
+          <label>网站名称<input v-model="form.name" maxlength="120" placeholder="例如：我的工作台" required /></label>
           <label>网址<input v-model="form.url" type="text" inputmode="url" placeholder="https://example.com" required /></label>
           <div class="website-icon-field">
             <label>图标（自动获取，也可手动修改）<input v-model="form.icon" maxlength="500" placeholder="输入网址后自动获取 favicon" /></label>

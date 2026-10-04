@@ -10,6 +10,9 @@ use tauri::{Manager, WindowEvent};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 use tauri_plugin_opener::OpenerExt;
 
+mod backend_startup;
+use backend_startup::{startup_outcome, StartupOutcome};
+
 struct DesktopState {
     child: Mutex<Option<CommandChild>>,
     status: Mutex<String>,
@@ -210,20 +213,25 @@ fn start_backend(app: tauri::AppHandle) {
             }
         });
 
-        let deadline = Instant::now() + Duration::from_secs(25);
-        while Instant::now() < deadline {
-            if app.state::<DesktopState>().status.lock().unwrap().as_str() != "starting" {
-                return;
+        let started = Instant::now();
+        loop {
+            let state = app.state::<DesktopState>();
+            let starting = !state.quitting.load(Ordering::SeqCst)
+                && state.status.lock().unwrap().as_str() == "starting";
+            let ready = starting && healthy();
+            match startup_outcome(started.elapsed(), ready, starting) {
+                StartupOutcome::Ready => {
+                    set_status(&app, "ready");
+                    log_desktop(&data_dir, &format!("Backend is ready after {:.1}s", started.elapsed().as_secs_f64()));
+                    show_main(&app);
+                    return;
+                }
+                StartupOutcome::Cancelled => return,
+                StartupOutcome::TimedOut => break,
+                StartupOutcome::Waiting => std::thread::sleep(Duration::from_millis(250)),
             }
-            if healthy() {
-                set_status(&app, "ready");
-                log_desktop(&data_dir, "Backend is ready");
-                show_main(&app);
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(250));
         }
-        log_desktop(&data_dir, "Backend readiness timed out");
+        log_desktop(&data_dir, &format!("Backend readiness timed out after {:.1}s", started.elapsed().as_secs_f64()));
         stop_backend(&app);
         set_status(&app, "Nexa Backend 启动超时。请查看 logs/backend.log；数据库迁移失败时请先备份 nexa.db。");
         show_main(&app);
