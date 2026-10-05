@@ -2,6 +2,7 @@ node_modules/
 output/v060*
 .venv/
 scripts/__pycache__/
+tests/__pycache__/
 dist/
 .playwright-cli/
 output/playwright/

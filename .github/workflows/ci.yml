@@ -1,6 +1,24 @@
 name: CI
 on: [push, pull_request]
 jobs:
+  validation-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p test_validation_tooling.py
+      - name: Record cumulative validation plan
+        run: |
+          python scripts/detect-change-impact.py --base f59b60de688a5a5b35471e2a47a4a31dd1baaabf --json > validation-plan.json
+          python scripts/detect-change-impact.py --base f59b60de688a5a5b35471e2a47a4a31dd1baaabf >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validation-plan
+          path: validation-plan.json
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -13,6 +31,7 @@ jobs:
       - run: npm run build
       - run: npm run test:core-sync
       - run: npm run test:automation
+      - run: node --test tests/diagnostics.test.mjs
   backend:
     runs-on: ubuntu-latest
     steps:

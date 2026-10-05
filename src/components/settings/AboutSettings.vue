@@ -3,6 +3,7 @@ import { ArrowUpRight, BookOpen, FileText, Github, RefreshCw, Sparkles } from 'l
 import ActionButton from '../ui/ActionButton.vue'
 import SettingRow from './SettingRow.vue'
 import SettingsSection from './SettingsSection.vue'
+import DiagnosticsSettings from './DiagnosticsSettings.vue'
 import type { AboutInfo } from '../../types/settings'
 
 defineProps<{ info: AboutInfo }>()
@@ -22,6 +23,7 @@ const emit = defineEmits<{ action: [message: string] }>()
       <button type="button" @click="emit('action', '使用文档将在正式发布时提供。')"><BookOpen :size="17" /><span>Documentation</span><ArrowUpRight :size="14" /></button>
       <button type="button" @click="emit('action', '许可证信息将在正式发布时提供。')"><FileText :size="17" /><span>Licenses</span><ArrowUpRight :size="14" /></button>
     </div>
+    <DiagnosticsSettings />
   </SettingsSection>
 </template>
 

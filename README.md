@@ -247,3 +247,9 @@ python -m pytest -q
 ## 历史版本：v0.5.5 Agent Data Actions
 
 v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data tools plus `nexa_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Nexa Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. That release used Alembic head `0015_agent_data_actions` and Sync Protocol v2. Settings and other management resources are excluded from Agent Data Actions. See [architecture and installation](docs/agent-data-actions.md).
+
+## v0.6.1 工程验证（开发分支）
+
+本地针对性验证、v0.6.0 实机验收继承及报告命令见
+[Validation workflow](docs/validation-workflow.md)。设置 → 关于增加 Nexa Diagnostics
+与安全复制功能。开发版本为 0.6.1，正式发布仍需后续 Release Validation。
