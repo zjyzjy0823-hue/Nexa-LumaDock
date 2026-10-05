@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import secrets
 import shutil
 import sqlite3
 import socket
@@ -86,6 +87,7 @@ def main() -> None:
         parser.error(f"Build the executable sidecar first: {SIDECAR}")
     data_dir = Path(tempfile.mkdtemp(prefix="NexaDesktopSmoke-")).resolve()
     try:
+        smoke_password = secrets.token_urlsafe(24)
         first = launch(data_dir)
         try:
             assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.6.0"}
@@ -94,7 +96,7 @@ def main() -> None:
                     "Origin": origin,
                 }), timeout=2) as response:
                     assert response.headers["Access-Control-Allow-Origin"] == origin
-            result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": "password123"})
+            result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": smoke_password})
             assert result["access_token"]
             token = result["access_token"]
             website_category = request("/api/v1/website-categories", {"name": "Smoke Sites"}, token)
@@ -148,7 +150,7 @@ def main() -> None:
         try:
             assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id
             assert (data_dir / "secret.key").read_bytes() == secret_bytes
-            result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": "password123"})
+            result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": smoke_password})
             assert result["access_token"]
             assert request("/api/v1/settings", token=token)["theme"] == "dark"
             assert request("/api/dashboard", token=token)["layout_json"] == personal_layout
