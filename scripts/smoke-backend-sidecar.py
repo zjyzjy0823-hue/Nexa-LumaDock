@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import secrets
 import shutil
 import sqlite3
 import socket
@@ -86,15 +87,16 @@ def main() -> None:
         parser.error(f"Build the executable sidecar first: {SIDECAR}")
     data_dir = Path(tempfile.mkdtemp(prefix="NexaDesktopSmoke-")).resolve()
     try:
+        smoke_password = secrets.token_urlsafe(24)
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.5.6"}
+            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.6.0"}
             for origin in ("http://tauri.localhost", "tauri://localhost"):
                 with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                     "Origin": origin,
                 }), timeout=2) as response:
                     assert response.headers["Access-Control-Allow-Origin"] == origin
-            result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": "password123"})
+            result = request("/api/v1/auth/register", {"username": "desktop_smoke", "password": smoke_password})
             assert result["access_token"]
             token = result["access_token"]
             website_category = request("/api/v1/website-categories", {"name": "Smoke Sites"}, token)
@@ -115,11 +117,18 @@ def main() -> None:
             assert request("/api/agent/actions/execute", action, agent_token)["replayed"]
             assert request("/api/agent/actions/catalog", token=agent_token)["dataScopes"] == ["ledger:write", "ledger:read"]
             assert request("/api/dashboard", token=token)["id"]
+            preferences = request("/api/v1/settings", {"theme": "dark", "appearance": {"accent": "mint"}}, token, method="PATCH")
+            assert preferences["theme"] == "dark"
+            personal_layout = request("/api/dashboard", token=token)["layout_json"]
+            personal_layout["widgets"] = personal_layout["widgets"][:3]
+            request("/api/dashboard/layout", personal_layout, token, method="PUT")
+            workflow = request("/api/v1/automations", {"name": "Packaged Daily Summary", "trigger_type": "schedule",
+                "trigger_config_json": {"cron": "0 9 * * *"}, "workflow_json": [{"kind": "DO", "text": "Notify"}]}, token)
             category = request("/api/v1/ledger/categories", {"name": "Food", "type": "expense"}, token)
             transaction = request("/api/v1/ledger/transactions", {
                 "category_id": category["id"], "type": "expense", "amount": "38.00",
                 "description": "Offline lunch", "occurred_at": "2026-09-28T12:00:00Z"}, token)
-            assert request("/api/v1/sync/status", token=token)["pending"] == 7
+            assert request("/api/v1/sync/status", token=token)["pending"] == 10
         finally:
             stop(first, data_dir)
         assert (data_dir / "nexa.db").is_file()
@@ -131,16 +140,21 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0015_agent_data_actions"
-            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 7
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0017_automation_engine"
+            assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 10
+            assert {row[0] for row in connection.execute("SELECT entity_type FROM local_mutation_queue WHERE status='pending'")} >= {
+                "user.preferences", "dashboard.layout", "automation.definition"}
             assert connection.execute("SELECT count(*) FROM agent_action_logs WHERE status='ok'").fetchone()[0] == 1
-            assert connection.execute("SELECT queue_seed_version FROM local_sync_state").fetchone()[0] == 2
+            assert connection.execute("SELECT queue_seed_version FROM local_sync_state").fetchone()[0] == 3
         second = launch(data_dir)
         try:
             assert (data_dir / "installation.id").read_text(encoding="ascii") == installation_id
             assert (data_dir / "secret.key").read_bytes() == secret_bytes
-            result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": "password123"})
+            result = request("/api/v1/auth/login", {"username": "desktop_smoke", "password": smoke_password})
             assert result["access_token"]
+            assert request("/api/v1/settings", token=token)["theme"] == "dark"
+            assert request("/api/dashboard", token=token)["layout_json"] == personal_layout
+            assert request(f"/api/v1/automations/{workflow['id']}", token=token)["name"] == "Packaged Daily Summary"
             assert any(item["id"] == website["id"] for item in request("/api/v1/websites", token=token))
             assert request(f"/api/v1/data/collections/{collection['id']}", token=token)["recordCount"] == 1
             assert request(f"/api/v1/data/collections/{collection['id']}/records", token=token)[0]["id"] == record["id"]
@@ -155,20 +169,24 @@ def main() -> None:
                 "type": "expense", "amount": "1.00", "description": "Transient",
                 "occurred_at": "2026-09-28T12:00:00Z"}, token)
             request(f"/api/v1/ledger/transactions/{transient['id']}", token=token, method="DELETE")
-            assert request("/api/v1/sync/status", token=token)["pending"] == 7
+            assert request("/api/v1/sync/status", token=token)["pending"] == 10
             request(f"/api/v1/website-categories/{website_category['id']}", token=token, method="DELETE")
             assert request(f"/api/v1/websites/{website['id']}", token=token)["categoryId"] is None
             request(f"/api/v1/data/collections/{collection['id']}", token=token, method="DELETE")
             assert request("/api/data", token=token)["totalRecords"] == 0
             request(f"/api/v1/websites/{website['id']}", token=token, method="DELETE")
             assert request("/api/v1/websites", token=token) == []
-            assert request("/api/v1/sync/status", token=token)["pending"] == 3
+            assert request("/api/v1/sync/status", token=token)["pending"] == 6
         finally:
             stop(second, data_dir)
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
             rows = connection.execute("SELECT entity_type, entity_id, base_revision, payload_json "
                                       "FROM local_mutation_queue ORDER BY entity_type").fetchall()
-            assert len(rows) == 3 and {row[1] for row in rows} == {category["id"], transaction["id"], receipt["data"]["entityId"]}
+            assert len(rows) == 6
+            assert {row[1] for row in rows if row[0].startswith("ledger.")} == {
+                category["id"], transaction["id"], receipt["data"]["entityId"]}
+            assert {row[0] for row in rows if not row[0].startswith("ledger.")} == {
+                "user.preferences", "dashboard.layout", "automation.definition"}
             assert all(row[2] == 0 for row in rows)
             assert json.loads(next(row[3] for row in rows if row[1] == transaction["id"]))["description"] == "Offline edited lunch"
             assert connection.execute("SELECT sync_revision FROM ledger_transactions WHERE id=?",
@@ -189,7 +207,7 @@ def main() -> None:
                     if third.poll() is None:
                         stop(third, data_dir)
             print("Packaged sidecar: Unix desktop owner exit stops backend and releases port PASS")
-        print("Packaged sidecar: Agent scopes/create/replay/audit, six-entity offline outbox, tombstones, persistence, login PASS")
+        print("Packaged sidecar: Agent scopes/create/replay/audit, nine-entity offline outbox, tombstones, persistence, login PASS")
     finally:
         temp_root = Path(tempfile.gettempdir()).resolve()
         if data_dir.parent != temp_root or not data_dir.name.startswith("NexaDesktopSmoke-"):

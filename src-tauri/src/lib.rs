@@ -10,6 +10,9 @@ use tauri::{Manager, WindowEvent};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 use tauri_plugin_opener::OpenerExt;
 
+mod backend_startup;
+use backend_startup::{startup_outcome, StartupOutcome};
+
 struct DesktopState {
     child: Mutex<Option<CommandChild>>,
     status: Mutex<String>,
@@ -118,10 +121,16 @@ fn healthy() -> bool {
 fn stop_backend(app: &tauri::AppHandle) {
     let state = app.state::<DesktopState>();
     state.quitting.store(true, Ordering::SeqCst);
+    if state.child.lock().unwrap().is_none() {
+        return;
+    }
     if let Ok(data_dir) = app.path().app_data_dir() {
         let _ = std::fs::write(data_dir.join("backend.shutdown"), b"quit");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && healthy() {
+        // Uvicorn closes its listener before completing lifespan shutdown. Wait
+        // for the owned process to exit, including its bounded HTTP sync work,
+        // rather than treating an unavailable health endpoint as completion.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && state.child.lock().unwrap().is_some() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -204,20 +213,25 @@ fn start_backend(app: tauri::AppHandle) {
             }
         });
 
-        let deadline = Instant::now() + Duration::from_secs(25);
-        while Instant::now() < deadline {
-            if app.state::<DesktopState>().status.lock().unwrap().as_str() != "starting" {
-                return;
+        let started = Instant::now();
+        loop {
+            let state = app.state::<DesktopState>();
+            let starting = !state.quitting.load(Ordering::SeqCst)
+                && state.status.lock().unwrap().as_str() == "starting";
+            let ready = starting && healthy();
+            match startup_outcome(started.elapsed(), ready, starting) {
+                StartupOutcome::Ready => {
+                    set_status(&app, "ready");
+                    log_desktop(&data_dir, &format!("Backend is ready after {:.1}s", started.elapsed().as_secs_f64()));
+                    show_main(&app);
+                    return;
+                }
+                StartupOutcome::Cancelled => return,
+                StartupOutcome::TimedOut => break,
+                StartupOutcome::Waiting => std::thread::sleep(Duration::from_millis(250)),
             }
-            if healthy() {
-                set_status(&app, "ready");
-                log_desktop(&data_dir, "Backend is ready");
-                show_main(&app);
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(250));
         }
-        log_desktop(&data_dir, "Backend readiness timed out");
+        log_desktop(&data_dir, &format!("Backend readiness timed out after {:.1}s", started.elapsed().as_secs_f64()));
         stop_backend(&app);
         set_status(&app, "Nexa Backend 启动超时。请查看 logs/backend.log；数据库迁移失败时请先备份 nexa.db。");
         show_main(&app);

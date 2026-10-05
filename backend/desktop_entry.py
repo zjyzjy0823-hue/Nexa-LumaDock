@@ -105,7 +105,10 @@ def main() -> None:
         import uvicorn
         shutdown_file = data_dir / "backend.shutdown"
         shutdown_file.unlink(missing_ok=True)
-        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_config=None, access_log=False))
+        # The Local scheduler and sync engine lock are process-scoped. Explicitly
+        # keep one worker even when the host sets WEB_CONCURRENCY for other apps.
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port,
+                                               workers=1, log_config=None, access_log=False))
 
         def watch_shutdown() -> None:
             while not server.should_exit:

@@ -1,4 +1,4 @@
-"""Protocol v2 HTTP transport. Only a Client credential crosses this boundary."""
+"""Protocol v3 HTTP transport. Only a Client credential crosses this boundary."""
 
 import httpx
 from .protocol import SYNC_PROTOCOL_VERSION

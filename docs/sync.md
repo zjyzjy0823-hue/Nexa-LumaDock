@@ -1,24 +1,24 @@
-# Nexa Sync Protocol v2
+# Nexa Sync Protocol v3
 
-v0.5.3 introduced manual Ledger synchronization. v0.5.4 extends manual bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. Local writes remain available while Core is offline. Synchronization is started manually with `POST /api/v1/sync/run`; this release has no background worker or sync UI. Settings, Device, Agent, Automation and Dashboard are not synchronized.
+v0.5.3 introduced manual Ledger synchronization. v0.5.4 extended bidirectional Local-first synchronization to `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection` and `data.record`. v0.5.6 added Core Connection and manual sync UI. v0.5.7 added Backend-owned background scheduling around the same Protocol v2 engine. v0.5.8 adds explicit Conflict Center listing, detail and resolution in Settings → Sync; see [Conflict Center](conflict-center-2026-10-03.md). Local writes remain available while Core is offline, and `POST /api/v1/sync/run` remains available. v0.5.9 adds user.preferences, dashboard.layout and automation.definition through generation 3. Device, Agent, runtime history and secrets remain outside sync. See [scope architecture](sync-scopes.md).
 
 ## Authority and identity
 
 Core `/api/v1/sync/changes` and `/api/v1/sync/mutations` requests require an `nc_live_` client credential. Core derives ownership from the authenticated `Client.workspace_id`, then uses the Core workspace owner for owned entities. DataRecord resolves ownership through its DataCollection without duplicate ownership columns. Client payloads never supply `userId`, `workspaceId`, or other ownership IDs. Local binds pulled records to its own user and personal workspace. Local and Core ownership IDs are independent; only entity IDs, business data and Core revisions cross the network.
 
-`CoreConnectionMetadata.schemaVersion: 1` is independent and unchanged. Client and Core must both use `SYNC_PROTOCOL_VERSION = 2`. POST mutations requires JSON `protocolVersion: 2`; GET changes requires query `protocolVersion=2`. Missing versions are treated as legacy v1 and return HTTP 409 `sync_protocol_mismatch` before bootstrap, mutations or feed delivery. Responses declare v2. Local probes the remote version before freezing/replaying mutations and checks every response/page. A v2 Client using a v1 Core reports `protocol_mismatch` and preserves queue/cursor. A v1 Client using a v2 Core receives a mismatch response; its existing UI may render generic `invalid_response`, but cannot skip Website/Data revisions or advance its cursor. Upgrade both ends before resuming manual sync.
+`CoreConnectionMetadata.schemaVersion: 1` is independent and unchanged. Client and Core must both use `SYNC_PROTOCOL_VERSION = 3`. POST requires JSON `protocolVersion: 3`; GET requires query `protocolVersion=3`. Missing versions and Protocol 1/2 return HTTP 409 `sync_protocol_mismatch` before bootstrap, mutation or feed delivery. Every response declares v3. Local probes before freezing/replaying any mutation and validates each page. v0.5.8 cannot consume Personal State and is deliberately refused. Both directions preserve queue/cursor, never filter unknown entities, and require upgrading every replica and Core together. The mutation/baseRevision/cursor/revision/conflict structures remain unchanged; the semantic entity set requires this compatibility boundary.
 
 ## Revisions and changes
 
-Each workspace has a separate integer sequence starting at zero. Core increments it once for each accepted entity change and atomically writes the business row and `SyncChange`. `sync_revision` on an entity row records its last accepted Core revision. Preexisting rows migrate with revision zero. On the first v2 changes request or mutation, Core locks the workspace and adopts active revision-zero rows from unseeded adapter generations, parents before children, in `(created_at, id)` order within each adapter. Each receives a real revision and upsert change; tombstones are skipped. `bootstrap_version` makes adoption idempotent and preserves already seeded Ledger history. Seed order records entry into sync authority, not original creation chronology. The cursor is the last processed workspace revision, never a timestamp or database row ID. Changes and tombstones are retained without compaction.
+Each workspace has a separate integer sequence starting at zero. Core increments it once for each accepted entity change and atomically writes the business row and `SyncChange`. `sync_revision` on an entity row records its last accepted Core revision. Preexisting rows migrate with revision zero. On the first v3 changes request or mutation, Core locks the workspace and adopts active revision-zero rows from unseeded adapter generations, parents before children, in `(created_at, id)` order within each adapter. Each receives a real revision and upsert change; tombstones are skipped. `bootstrap_version` makes adoption idempotent and preserves already seeded Ledger history. Seed order records entry into sync authority, not original creation chronology. The cursor is the last processed workspace revision, never a timestamp or database row ID. Changes and tombstones are retained without compaction.
 
-`GET /api/v1/sync/changes?protocolVersion=2&cursor=0&limit=100` returns up to 100 changes ordered by revision. The response includes `changes`, the last delivered `cursor` (or input cursor when empty), `hasMore`, and `workspaceRevision`. Clients should continue while `hasMore` is true. A cursor past that workspace's current revision returns HTTP 400. A client receives its own changes too.
+`GET /api/v1/sync/changes?protocolVersion=3&cursor=0&limit=100` returns up to 100 changes ordered by revision. The response includes `changes`, the last delivered `cursor` (or input cursor when empty), `hasMore`, and `workspaceRevision`. Clients should continue while `hasMore` is true. A cursor past that workspace's current revision returns HTTP 400. A client receives its own changes too.
 
 An upsert change has `revision`, `entityType`, `entityId`, `operation: "upsert"`, and `data` containing only business fields. A delete change has `operation: "delete"` and `data: null`. Neither contains ownership IDs or credentials.
 
 ## Mutations
 
-`POST /api/v1/sync/mutations` accepts `{"protocolVersion":2,"mutations":[...]}` with 1–100 entries. Each entry supplies a client generated UUID `mutationId`, stable UUID `entityId`, `entityType`, `operation` (`upsert` or `delete`), `baseRevision`, and `data` for upsert. A new ID requires `baseRevision: 0`; an existing ID requires its exact current revision. A stale write returns a per-item `conflict` with `currentRevision`, `current`, and `deleted`. There is no automatic merge or last-write-wins. One invalid entry returns `rejected` with a stable `reason` and does not roll back unrelated entries. The response has `results` in request order.
+`POST /api/v1/sync/mutations` accepts `{"protocolVersion":3,"mutations":[...]}` with 1–100 entries. Each entry supplies a client generated UUID `mutationId`, stable UUID `entityId`, `entityType`, `operation` (`upsert` or `delete`), `baseRevision`, and `data` for upsert. A new ID requires `baseRevision: 0`; an existing ID requires its exact current revision. A stale write returns a per-item `conflict` with `currentRevision`, `current`, and `deleted`. There is no automatic merge or last-write-wins. One invalid entry returns `rejected` with a stable `reason` and does not roll back unrelated entries. The response has `results` in request order.
 
 The Core records each processed `(client_id, mutationId)` result. A retry by that same Client returns the stored result without another write or revision. The same UUID from another Client is a distinct mutation. Each mutation commits independently. The workspace row and `sync_workspace_state` row are locked during revision allocation on PostgreSQL, so competing writes to one entity yield one apply and one conflict. SQLite uses the same service path.
 
@@ -32,7 +32,7 @@ Deletes keep synchronized rows with `deleted_at`. Ordinary reads and Ledger summ
 
 `local_sync_state` tracks a **Local** workspace's last fully applied Core revision, remote Core URL, remote workspace and client IDs, queue seeding time, and sync diagnostics. The cursor starts at zero and advances in the same SQLite transaction as each applied change or persistent conflict. Remote IDs are separate from Local `workspace_id`; binding to a different Core identity raises a conflict without resetting the cursor. Connection metadata and credentials stay outside this table. Disconnecting or revoking a Core Client does not remove Local business data, queue or cursor.
 
-`local_mutation_queue` is a durable intent log, distinct from Core's processed `sync_mutations`. A never-sent `pending` item may compact further edits while retaining its mutation ID and base revision. Before its first HTTP attempt, Local commits `in_flight` and increments `attempt_count`. From then on its mutation ID, base revision, operation and complete Protocol v2 payload are immutable. A timeout or lost response keeps this frozen item for exact replay. Edits made meanwhile form one editable `pending` tail with a new mutation ID and `depends_on_mutation_id` pointing to the predecessor. Acknowledging an applied predecessor sets the business row's Core revision, rebases the tail, clears its dependency and removes the predecessor. It never overwrites newer local edits.
+`local_mutation_queue` is a durable intent log, distinct from Core's processed `sync_mutations`. A never-sent `pending` item may compact further edits while retaining its mutation ID and base revision. Before its first HTTP attempt, Local commits `in_flight` and increments `attempt_count`. From then on its mutation ID, base revision, operation and complete Protocol v3 payload are immutable. A timeout or lost response keeps this frozen item for exact replay. Edits made meanwhile form one editable `pending` tail with a new mutation ID and `depends_on_mutation_id` pointing to the predecessor. Acknowledging an applied predecessor sets the business row's Core revision, rebases the tail, clears its dependency and removes the predecessor. It never overwrites newer local edits.
 
 Deleting a confirmed row compacts an unsent pending upsert into a delete. Deleting a never-confirmed row removes its never-sent pending create and keeps a hidden Local tombstone. A frozen create is never canceled: a later delete becomes a dependent tail and is sent after the create is acknowledged. Deleting an unsynced category first clears that category from active unsynced transactions and refreshes their pending payloads. A synced transaction referencing an unsynced category causes a controlled conflict. Deleting a confirmed category keeps historical transaction references.
 
@@ -50,7 +50,7 @@ An existing conflict follows later authoritative changes: `conflict_json.current
 
 ## Integration verification
 
-`backend/tests/postgres_sync_integration.py` starts a temporary localhost Core HTTP server using the PostgreSQL test database at Alembic head `0014_multi_entity_sync`. It migrates two separate Local SQLite databases, enrolls distinct Clients, saves their credentials separately, and drives their ordinary Ledger/Website/Data APIs and manual sync APIs. Sync requests use the production HTTP client and Core authentication endpoints. Coverage includes ownership mapping, create/update/delete propagation, independent-record merge, same-record conflict and snapshot refresh, ordinary Core API writes, actual Core shutdown/recovery, and credential revocation. Existing deterministic state-machine tests cover commit followed by response loss and immutable replay with later local edits.
+`backend/tests/postgres_sync_integration.py` starts a temporary localhost Core HTTP server using the PostgreSQL test database at Alembic head `0016_personal_state_sync`. It migrates two separate Local SQLite databases, enrolls distinct Clients, saves their credentials separately, and drives their ordinary Ledger/Website/Data APIs and manual sync APIs. Sync requests use the production HTTP client and Core authentication endpoints. Coverage includes ownership mapping, create/update/delete propagation, independent-record merge, same-record conflict and snapshot refresh, ordinary Core API writes, actual Core shutdown/recovery, and credential revocation. Existing deterministic state-machine tests cover commit followed by response loss and immutable replay with later local edits.
 
 After installing `requirements-postgres.txt`, set `DATABASE_URL` to an isolated test PostgreSQL database and `JWT_SECRET` to a temporary secret, run `python -m alembic upgrade head`, then `python tests/postgres_sync_integration.py` from `backend`. The script never contacts public services or prints credentials. CI runs it in the PostgreSQL 16 job alongside migration preservation and concurrency smoke tests.
 
@@ -83,9 +83,40 @@ Website category deletion clears category_id on every active Website and publish
 
 Website CRUD, category CRUD and visit plus Data CRUD use `sync/publisher.py`: Local business changes and outbox are in one transaction; Core locks the workspace before reading mutable rows and writes authoritative revision/change history. Core Web/API edits therefore reach other replicas. Frequent visit updates compact pending Website payloads. Ledger uses the same generic outbox/Core services and retains established category history semantics.
 
-## Settings boundary
+## Personal State boundary (v0.5.9)
 
-UserPreference retains its integer primary key and settings_json; no Settings migration or adapter is added. Future cross-device preferences may include theme, language, timezone, notifications and appearance. Sync/security settings, Core URL, Client credential, installation id, DB path and device-specific configuration must remain Local-only. These are mixed in the current settings row, so wholesale settings_json sync would copy installation and security state. Settings, Device, Agent and Automation sync remain outside v0.5.4.
+UserPreference retains its integer database primary key and mixed settings_json,
+but receives workspace/revision/timestamp metadata in 0016. Preferences and
+Dashboard use deterministic workspace-scoped singleton UUIDs on the wire; numeric
+user/row IDs are never assumed to match across replicas. Adapter lookup owns this
+mapping. Automation retains its existing UUID and gets revision/tombstone metadata.
+
+Only typed existing preferences, system widget reference-canvas layout and typed
+Automation definitions enter Protocol 3. Every JSON payload declares schemaVersion
+1. Recursive allowlists drop unsupported legacy fields; strict new input rejects
+unknown configuration and recognizable credentials/paths without echoing values.
+Core connection, sync/security settings, execution history and device/runtime state
+stay local. Imported/exported local Settings backups use a different schema and
+must still pass the ordinary API's sync serializer.
+
+Generation 3 publishes only the new configured revision-zero rows. Unedited
+built-in defaults are not edits. The first genuine singleton mutation can adopt a
+Core default row still at revision zero. Explicit reset-to-default publishes an
+upsert; singleton delete/arbitrary identities are rejected. Migration/bootstrap
+preserve earlier history, queue, conflicts and cursor. Downgrade refuses retained
+personal history/revisions/tombstones.
+
+All three adapters use ordinary transactional publication and the existing
+after-commit background coordinator. Conflict Center includes readable preferences,
+widget count/order/layout summary and Automation enabled/trigger/action definition;
+complex configuration is collapsed. Both explicit strategies and stale revision
+guards are unchanged. No field merge or scheduler is added. enabled=true stores
+definition intent only; real execution ownership belongs to v0.6.0.
+
+Dashboard refreshes Local layout every 30 seconds while idle and on entry.
+Settings/Automation reload on entry; conflict decisions refresh Settings and
+invalidate Automation. No frontend sync mutations or new frontend sync scheduler
+are introduced. macOS physical validation remains deferred.
 
 ## v0.5.4 regression coverage
 
@@ -96,3 +127,15 @@ PostgreSQL upgrade smoke also tests initialized 0013 → 0014 adoption on real P
 ## v0.5.5 Agent Data Actions
 
 Agent writes enter the same transactional Local outbox through shared business services. They never directly call Core or force connectivity/synchronization. Protocol v2 and bootstrap/queue generations remain unchanged. New migration `0015_agent_data_actions` follows 0014, defaults Agent data scopes to none, and stores local-only safe Action receipts. Agent settings/audit are not new sync entity types. See [Agent Data Actions](agent-data-actions.md).
+
+## v0.5.7 Background Auto Sync
+
+FastAPI Local lifespan owns `sync/background.py`. Startup returns without waiting for Core; saved connections are discovered in the background. Startup/connect schedules an initial cycle after 1 second, committed outbox changes debounce for 0.5 seconds (maximum 2 seconds), and periodic pulls run every 30 seconds. `sync/notifications.py` routes committed workspace intent to its own database's coordinator; rolled-back transactions never publish wake-ups. Business requests perform no Core HTTP calls.
+
+The coordinator calls the existing `run_sync_cycle`, retaining its workspace lock and all freeze/replay, revision, cursor, conflict and tombstone rules. Manual requests join the active cycle or explicitly start one; mutations arriving during a cycle retain a follow-up request. Network failure (`unreachable`/`timeout`, including HTTP 502/503/504) retries after 5, 10, 20, 30 and at most 60 seconds. Success resets backoff. New writes wake scheduling without bypassing the retry deadline. Other failures block automatic attempts until reconnect or explicit manual handling. Safe errors persist in the existing LocalSyncState; retry times and running flags are process-local. No migration is needed.
+
+Disconnect disables scheduling and cooperatively stops the active cycle without removing business rows, outbox, cursor or conflicts. Restart discovers the saved connection and durable pending/frozen mutations. Shutdown stops scheduling, signals cooperative cancellation between engine operations, and awaits the worker's bounded network request. Windows tray close and macOS window close leave the existing backend running. Explicit exit waits for actual sidecar termination, with a bounded fallback.
+
+`GET /api/v1/sync/status` adds `enabled`, `running`, `connected`, `blocked`, `lastAttemptAt` and `nextRetryAt` to its existing counts, cursor, success time and allowlisted error. Settings reads this status every 5 seconds while mounted; it never runs an automatic sync from Vue. Background failures do not repeatedly notify the user. Connection secrets remain outside public status.
+
+Local deployments must use one Backend worker per SQLite database, as the Desktop entry point does. The coordinator and the shared engine lock are process-scoped. For integration tests, `NEXA_SYNC_INITIAL_DELAY_SECONDS`, `NEXA_SYNC_DEBOUNCE_SECONDS`, `NEXA_SYNC_PERIOD_SECONDS` and comma-separated `NEXA_SYNC_RETRY_SECONDS` override centrally validated timings; normal installations use the defaults above. See [background verification and physical release gate](background-auto-sync-2026-10-02.md). The separate PostgreSQL background integration runs production Local sidecars and Core without manual `/sync/run` calls.

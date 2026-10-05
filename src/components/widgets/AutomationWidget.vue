@@ -11,6 +11,7 @@ const items = computed(() => store.items.slice(0, 3))
 const enabledCount = computed(() => store.items.filter(item => item.enabled).length)
 const failedCount = computed(() => store.executions.filter(item => item.status === 'failed').length)
 const recentExecution = computed(() => [...store.executions].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0])
+const recentStatus = computed(() => recentExecution.value ? ({ success: '成功', succeeded: '成功', failed: '失败', queued: '排队中', claimed: '执行中', running: '执行中', skipped: '已跳过', cancelled: '已取消' }[recentExecution.value.status]) : '暂无执行记录')
 onMounted(() => { if (auth.token) void store.load(auth.token).catch(() => {}) })
 async function toggle(id: string, enabled: boolean) {
   if (!auth.token) return
@@ -39,7 +40,7 @@ async function toggle(id: string, enabled: boolean) {
           @click="toggle(item.id, item.enabled)"
         ><span /></button>
       </div>
-      <p v-if="store.loaded && !store.error && store.items.length" class="execution-summary">执行 {{ store.executions.length }} 次 · 失败 {{ failedCount }} 次<br />{{ recentExecution ? `最近执行：${recentExecution.status === 'failed' ? '失败' : recentExecution.status === 'success' ? '成功' : '进行中'}` : '暂无执行记录' }}</p>
+      <p v-if="store.loaded && !store.error && store.items.length" class="execution-summary">{{ store.runtimeError || `执行 ${store.executions.length} 次 · 失败 ${failedCount} 次` }}<br v-if="!store.runtimeError" /><template v-if="!store.runtimeError">{{ recentExecution ? `最近执行：${recentStatus}` : '暂无执行记录' }}</template></p>
     </div>
   </GlassCard>
 </template>

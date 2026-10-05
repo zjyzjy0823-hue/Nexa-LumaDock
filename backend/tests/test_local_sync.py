@@ -82,7 +82,9 @@ def test_offline_create_compaction_and_unsynced_delete(client, users, monkeypatc
         iterator.close()
     assert client.get("/api/v1/sync/status", headers=auth).json() == {
         "pending": 1, "inFlight": 0, "conflicts": 0, "rejected": 0,
-        "cursor": 0, "queueSeeded": True, "lastSuccessAt": None, "lastError": None}
+        "cursor": 0, "queueSeeded": True, "lastSuccessAt": None, "lastError": None,
+        "enabled": False, "running": False, "connected": False, "blocked": False,
+        "lastAttemptAt": None, "nextRetryAt": None}
     assert client.delete(f"{LEDGER}/transactions/{entity_id}", headers=auth).status_code == 204
     assert client.get(f"{LEDGER}/transactions/{entity_id}", headers=auth).status_code == 404
     iterator, db = db_session()

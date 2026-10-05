@@ -1,8 +1,10 @@
 export type AutomationIcon = 'backup' | 'nas' | 'notification' | 'agent' | 'server' | 'calendar' | 'file' | 'webhook' | 'workflow' | 'shield' | 'cloud' | 'database'
-export interface WorkflowNode { kind: 'WHEN' | 'IF' | 'DO'; label: string; text: string; detail: string }
+export interface AutomationAction { type: 'ledger.create' | 'data.create' | 'data.update' | 'agent.run' | 'webhook.post'; config: Record<string, unknown> }
+export interface WorkflowNode { kind: 'WHEN' | 'IF' | 'DO'; label: string; text: string; detail: string; action?: AutomationAction | null }
 export interface AutomationItem { id: string; title: string; description: string; icon: AutomationIcon; enabled: boolean; trigger: string; lastExecution: string; lastExecutionStatus: 'success' | 'failed' | 'never' }
 export interface ExecutionItem { id: string; title: string; description: string; time: string; status: 'success' | 'failed' }
 export interface TriggerItem { id: string; title: string; description: string; icon: AutomationIcon; example: string }
-export interface Workflow { id: string; name: string; description: string; enabled: boolean; triggerType: 'manual' | 'schedule' | 'device_status' | 'agent_event' | 'webhook'; triggerConfigJson: Record<string, unknown>; workflowJson: WorkflowNode[]; createdAt: string; updatedAt: string }
-export interface Execution { id: string; workflowId: string; status: 'queued' | 'running' | 'success' | 'failed'; startedAt: string; finishedAt: string | null; message: string; resultJson: Record<string, unknown> }
+export interface Workflow { id: string; name: string; description: string; enabled: boolean; triggerType: 'manual' | 'schedule' | 'data_changed' | 'agent_completed' | 'device_status' | 'agent_event' | 'webhook'; triggerConfigJson: Record<string, unknown>; workflowJson: WorkflowNode[]; createdAt: string; updatedAt: string }
+export interface Execution { id: string; workflowId: string; status: 'queued' | 'claimed' | 'running' | 'succeeded' | 'success' | 'failed' | 'skipped' | 'cancelled'; startedAt: string; finishedAt: string | null; message: string; resultJson: Record<string, unknown>; resultSummary: Record<string, unknown>; triggerType: string; triggerInstanceId: string; attempt: number; errorCode: string | null; createdAt: string; action: AutomationAction; trigger: Record<string, unknown>; automationRevision: number; nextAttemptAt: string | null }
+export interface AutomationRuntime { authority: 'core'; available: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: string | null }
 export interface WorkflowInput { name: string; description: string; enabled: boolean; trigger_type: Workflow['triggerType']; trigger_config_json: Record<string, unknown>; workflow_json: WorkflowNode[] }

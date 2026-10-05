@@ -37,7 +37,7 @@ def mutation(entity_type="ledger.transaction", entity_id=None, base=0, operation
 
 def push(client, auth, *mutations):
     response = client.post(f"{ROOT}/mutations", headers=auth,
-                           json={"protocolVersion": 2, "mutations": list(mutations)})
+                           json={"protocolVersion": 3, "mutations": list(mutations)})
     assert response.status_code == 200, response.text
     return response.json()["results"]
 
@@ -48,7 +48,7 @@ def db_session():
 
 
 def test_core_only_and_credentials(client):
-    assert client.get(f"{ROOT}/changes?protocolVersion=2", headers={"Authorization": "Bearer nc_live_fake"}).status_code == 404
+    assert client.get(f"{ROOT}/changes?protocolVersion=3", headers={"Authorization": "Bearer nc_live_fake"}).status_code == 404
     assert client.post(f"{ROOT}/mutations", headers={"Authorization": "Bearer nc_live_fake"},
                        json={"mutations": [mutation()]}).status_code == 404
     app.dependency_overrides[require_core_mode] = lambda: None
@@ -56,12 +56,12 @@ def test_core_only_and_credentials(client):
     for headers in (auth, {"Authorization": "Bearer sk_live_fake"},
                     {"Authorization": "Bearer nd_live_fake"},
                     {"Authorization": "Bearer na_live_fake"}):
-        assert client.get(f"{ROOT}/changes?protocolVersion=2", headers=headers).status_code == 401
+        assert client.get(f"{ROOT}/changes?protocolVersion=3", headers=headers).status_code == 401
     credential = enroll(client, auth)
-    assert client.get(f"{ROOT}/changes?protocolVersion=2", headers=credential).json() == {
-        "protocolVersion": 2, "changes": [], "cursor": 0, "hasMore": False, "workspaceRevision": 0}
-    assert client.get(f"{ROOT}/changes?protocolVersion=2&cursor=1", headers=credential).status_code == 400
-    assert client.get(f"{ROOT}/changes?protocolVersion=2&cursor=-1", headers=credential).status_code == 422
+    assert client.get(f"{ROOT}/changes?protocolVersion=3", headers=credential).json() == {
+        "protocolVersion": 3, "changes": [], "cursor": 0, "hasMore": False, "workspaceRevision": 0}
+    assert client.get(f"{ROOT}/changes?protocolVersion=3&cursor=1", headers=credential).status_code == 400
+    assert client.get(f"{ROOT}/changes?protocolVersion=3&cursor=-1", headers=credential).status_code == 422
     assert client.post(f"{ROOT}/mutations", headers=credential, json={"mutations": []}).status_code == 422
 
 
@@ -100,12 +100,12 @@ def test_create_retry_conflict_delete_and_changes(client):
     tombstone = push(client, b, mutation(entity_id=created["entityId"], base=2, operation="delete"))[0]
     assert tombstone["status"] == "conflict" and tombstone["currentRevision"] == 3
     assert tombstone["current"] is None and tombstone["deleted"] is True
-    changes = client.get(f"{ROOT}/changes?protocolVersion=2&cursor=0&limit=2", headers=a).json()
+    changes = client.get(f"{ROOT}/changes?protocolVersion=3&cursor=0&limit=2", headers=a).json()
     assert [row["revision"] for row in changes["changes"]] == [1, 2]
     assert changes["cursor"] == 2 and changes["hasMore"] is True and changes["workspaceRevision"] == 3
     assert changes["changes"][0]["data"]["amount"] == "38.00"
     assert "workspaceId" not in str(changes) and "userId" not in str(changes)
-    tail = client.get(f"{ROOT}/changes?protocolVersion=2&cursor=2&limit=2", headers=a).json()
+    tail = client.get(f"{ROOT}/changes?protocolVersion=3&cursor=2&limit=2", headers=a).json()
     assert tail["changes"][0]["operation"] == "delete" and tail["changes"][0]["data"] is None
     assert tail["cursor"] == 3 and tail["hasMore"] is False
 
@@ -116,7 +116,7 @@ def test_validation_isolation_and_independent_batch(client):
     a, b = enroll(client, user_a), enroll(client, user_b)
     cat_b = mutation("ledger.category", data={"name": "Private", "type": "expense", "icon": "shopping"})
     assert push(client, b, cat_b)[0]["revision"] == 1
-    assert client.get(f"{ROOT}/changes?protocolVersion=2", headers=a).json()["changes"] == []
+    assert client.get(f"{ROOT}/changes?protocolVersion=3", headers=a).json()["changes"] == []
     cross = mutation()
     cross["data"]["categoryId"] = cat_b["entityId"]
     forged = mutation()
@@ -133,8 +133,8 @@ def test_validation_isolation_and_independent_batch(client):
     assert results[-1]["revision"] == 1
     assert push(client, a, mutation("ledger.category", entity_id=cat_b["entityId"],
                                     data={"name": "Hijack", "type": "expense"}))[0]["status"] == "rejected"
-    assert client.get(f"{ROOT}/changes?protocolVersion=2", headers=a).json()["workspaceRevision"] == 1
-    assert client.get(f"{ROOT}/changes?protocolVersion=2", headers=b).json()["workspaceRevision"] == 1
+    assert client.get(f"{ROOT}/changes?protocolVersion=3", headers=a).json()["workspaceRevision"] == 1
+    assert client.get(f"{ROOT}/changes?protocolVersion=3", headers=b).json()["workspaceRevision"] == 1
 
 
 def test_category_tombstone_and_core_ordinary_ledger(client, monkeypatch):
@@ -159,7 +159,7 @@ def test_category_tombstone_and_core_ordinary_ledger(client, monkeypatch):
     assert push(client, credential, mutation(entity_id=str(uuid4()), data={
         "categoryId": category["id"], "type": "expense", "amount": "1.00",
         "description": "Bad", "occurredAt": "2026-09-28T12:00:00Z"}))[0]["reason"] == "category_not_found"
-    changes = client.get(f"{ROOT}/changes?protocolVersion=2", headers=credential).json()
+    changes = client.get(f"{ROOT}/changes?protocolVersion=3", headers=credential).json()
     assert [row["revision"] for row in changes["changes"]] == [1, 2, 3, 4]
     assert changes["changes"][2]["operation"] == "delete"
     assert changes["changes"][1]["data"]["categoryId"] == category["id"]
@@ -194,11 +194,11 @@ def test_core_legacy_seed_once_and_before_mutation(client):
         db.commit()
     finally:
         iterator.close()
-    first = client.get(f"{ROOT}/changes?protocolVersion=2&cursor=0", headers=credential).json()
+    first = client.get(f"{ROOT}/changes?protocolVersion=3&cursor=0", headers=credential).json()
     assert [(row["entityType"], row["revision"]) for row in first["changes"]] == [
         ("ledger.category", 1), ("ledger.transaction", 2)]
     assert first["changes"][1]["data"]["categoryId"] == category_id
-    assert client.get(f"{ROOT}/changes?protocolVersion=2&cursor=0", headers=credential).json() == first
+    assert client.get(f"{ROOT}/changes?protocolVersion=3&cursor=0", headers=credential).json() == first
     iterator, db = db_session()
     try:
         assert db.get(LedgerCategory, category_id).sync_revision == 1
@@ -233,6 +233,6 @@ def test_core_legacy_seed_after_existing_revision_and_post_first(client):
                          data={"name": "Overwrite", "type": "expense", "icon": "shopping"})
     result = push(client, credential, attempted)[0]
     assert result["status"] == "conflict" and result["currentRevision"] == 2
-    changes = client.get(f"{ROOT}/changes?protocolVersion=2&cursor=0", headers=credential).json()
+    changes = client.get(f"{ROOT}/changes?protocolVersion=3&cursor=0", headers=credential).json()
     assert [row["revision"] for row in changes["changes"]] == [1, 2]
     assert changes["changes"][1]["data"]["name"] == "Legacy"

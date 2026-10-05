@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
 import type { User } from '../types/widget'
 
@@ -9,13 +9,19 @@ export const useAuthStore = defineStore('auth', () => {
   localStorage.removeItem('nexa:local-account:v1')
   const token = ref<string | null>(localStorage.getItem(tokenKey))
   const user = ref<User | null>(null)
+  let sessionGeneration = 0
+  watch(token, () => { sessionGeneration += 1 }, { flush: 'sync' })
 
   async function restore() {
-    if (!token.value) return
+    const restoredToken = token.value
+    if (!restoredToken) return
+    const restoredGeneration = sessionGeneration
+    const current = () => token.value === restoredToken && sessionGeneration === restoredGeneration
     try {
-      user.value = await apiRequest<User>('/api/v1/auth/me', {}, token.value)
+      const restoredUser = await apiRequest<User>('/api/v1/auth/me', {}, restoredToken)
+      if (current()) user.value = restoredUser
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) logout()
+      if (current() && error instanceof ApiError && error.status === 401) logout()
       throw error
     }
   }

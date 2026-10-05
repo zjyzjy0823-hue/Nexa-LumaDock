@@ -9,6 +9,7 @@ import ActionButton from '../components/ui/ActionButton.vue'
 import GlassCard from '../components/ui/GlassCard.vue'
 import { useDataStore } from '../stores/data'
 import { useAuthStore } from '../stores/auth'
+import { parseRecordJson } from '../utils/recordJson'
 import type { DataCollection, CollectionRecord, DataOverview } from '../types/data'
 
 const emit = defineEmits<{ action: [message: string] }>()
@@ -24,6 +25,7 @@ const draftName = ref('')
 const draftDescription = ref('')
 const draftStatus = ref('active')
 const draftCategory = ref('')
+const draftJson = ref('{}')
 const editingCollection = ref<DataCollection | null>(null)
 const editingRecord = ref<CollectionRecord | null>(null)
 const dialogKind = ref<'collection' | 'record'>('collection')
@@ -73,21 +75,29 @@ async function createCollection() {
   const name = draftName.value.trim()
   const description = draftDescription.value.trim()
   if (!name) {
-    formError.value = '请输入集合名称。'
+    formError.value = dialogKind.value === 'record' ? '请输入记录名称。' : '请输入集合名称。'
     return
   }
   if (!auth.token) return
   try {
     if (dialogKind.value === 'record') {
-      if (editingRecord.value) await store.updateRecord(auth.token, editingRecord.value.id, { name, status: draftStatus.value, category: draftCategory.value })
-      else if (selectedCollection.value) await store.createRecord(auth.token, selectedCollection.value.id, { name, status: draftStatus.value, category: draftCategory.value, data_json: {} })
+      const payload = { name, status: draftStatus.value, category: draftCategory.value, data_json: parseRecordJson(draftJson.value) }
+      if (editingRecord.value) await store.updateRecord(auth.token, editingRecord.value.id, payload)
+      else if (selectedCollection.value) await store.createRecord(auth.token, selectedCollection.value.id, payload)
     } else if (editingCollection.value) await store.update(auth.token, editingCollection.value.id, { name, description })
     else { const item = await store.create(auth.token, { name, description, icon: 'custom', tone: 'blue' }); selectedId.value = item.id }
     closeCreate(); emit('action', '已保存。')
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
 function openEditCollection(item: DataCollection) { dialogKind.value = 'collection'; editingCollection.value = item; draftName.value = item.name; draftDescription.value = item.description; createOpen.value = true }
-function openRecord(item?: CollectionRecord) { dialogKind.value = 'record'; editingRecord.value = item ?? null; draftName.value = item?.name ?? ''; draftStatus.value = item?.status ?? 'active'; draftCategory.value = item?.category ?? ''; createOpen.value = true }
+async function openRecord(item?: CollectionRecord) {
+  dialogKind.value = 'record'; editingRecord.value = item ?? null; draftName.value = item?.name ?? ''
+  draftStatus.value = item?.status ?? 'active'; draftCategory.value = item?.category ?? ''
+  draftJson.value = JSON.stringify(item?.dataJson ?? {}, null, 2)
+  formError.value = ''; createOpen.value = true
+  await nextTick()
+  nameInput.value?.focus()
+}
 async function removeCollection(item: DataCollection) { if (!auth.token || !(await confirmAction(`删除集合「${item.name}」及其记录？`))) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 async function removeRecord(item: CollectionRecord) { if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return; try { await store.removeRecord(auth.token, item.id); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 
@@ -158,7 +168,11 @@ onUnmounted(() => {
           <form @submit.prevent="createCollection">
             <label>名称<input ref="nameInput" v-model="draftName" type="text" maxlength="120" placeholder="名称" /></label>
             <label v-if="dialogKind === 'collection'">描述<input v-model="draftDescription" type="text" maxlength="500" placeholder="描述" /></label>
-            <template v-else><label>状态<input v-model="draftStatus" type="text" maxlength="40" /></label><label>分类<input v-model="draftCategory" type="text" maxlength="80" /></label></template>
+            <template v-else>
+              <label>状态<input v-model="draftStatus" type="text" maxlength="40" /></label>
+              <label>分类<input v-model="draftCategory" type="text" maxlength="80" /></label>
+              <label>记录内容（JSON）<textarea v-model="draftJson" aria-label="记录内容（JSON）" rows="4" spellcheck="false" placeholder="{}" /></label>
+            </template>
             <p v-if="formError" class="data-page__form-error" role="alert">{{ formError }}</p>
             <div class="data-page__dialog-actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Plus :size="15" />保存</ActionButton></div>
           </form>
@@ -196,7 +210,7 @@ onUnmounted(() => {
 .data-page__no-results strong { color:#fff; font-size:14px; }
 .data-page__details { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(280px,.9fr); align-items:start; gap:14px; margin-top:20px; }
 .data-page__dialog-backdrop { position:fixed; inset:0; z-index:100; display:grid; place-items:center; padding:20px; background:rgba(24,37,74,.4); backdrop-filter:blur(9px); }
-.data-page__dialog { width:min(100%,440px); height:auto; padding:24px; }
+.data-page__dialog { width:min(100%,440px); height:auto; max-height:calc(100dvh - 40px); overflow-y:auto; padding:24px; }
 .data-page__dialog-heading { display:flex; align-items:start; justify-content:space-between; gap:12px; }
 .data-page__dialog-heading span { color:#879bda; font-size:9px; font-weight:760; letter-spacing:.17em; }
 .data-page__dialog-heading h2 { margin:6px 0 4px; color:#fff; font-size:22px; letter-spacing:-.035em; text-shadow:0 1px 8px rgba(20,33,71,.28); }
@@ -205,7 +219,8 @@ onUnmounted(() => {
 .data-page__dialog form { display:grid; gap:15px; margin-top:24px; }
 .data-page__dialog label { display:grid; gap:7px; color:rgba(255,255,255,.9); font-size:11px; font-weight:690; }
 .data-page__dialog input { height:39px; width:100%; padding:0 12px; border:1px solid rgba(130,152,197,.28); border-radius:10px; outline:none; color:#2e3f5e; background:rgba(255,255,255,.84); font-size:12px; }
-.data-page__dialog input:focus { border-color:#839fec; box-shadow:0 0 0 3px rgba(118,150,231,.13); }
+.data-page__dialog textarea { width:100%; min-height:96px; padding:10px 12px; resize:vertical; border:1px solid rgba(130,152,197,.28); border-radius:10px; outline:none; color:#2e3f5e; background:rgba(255,255,255,.84); font:12px/1.5 monospace; }
+.data-page__dialog input:focus,.data-page__dialog textarea:focus { border-color:#839fec; box-shadow:0 0 0 3px rgba(118,150,231,.13); }
 .data-page__dialog input::placeholder { color:#aebacc; }
 .data-page__form-error { margin:-5px 0 0; color:#c45d69; font-size:11px; }
 .data-page__dialog-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:8px; }

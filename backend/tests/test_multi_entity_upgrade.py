@@ -45,7 +45,7 @@ def verify_upgrade(database_url, backend, mode):
     upgrade("head")
     engine = create_engine(database_url)
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0015_agent_data_actions"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0017_automation_engine"
         assert conn.scalar(text("SELECT queue_seed_version FROM local_sync_state")) == 1
         assert conn.scalar(text("SELECT bootstrap_version FROM sync_workspace_state")) == 1
         for name in ("website_categories", "websites", "data_collections", "data_records"):
@@ -65,12 +65,12 @@ def verify_upgrade(database_url, backend, mode):
         if mode == "local":
             entries = db.scalars(select(LocalMutation)).all()
             assert len(entries) == 4 and {entry.entity_type for entry in entries} == expected
-            assert state.queue_seed_version == 2 and state.cursor == 7
+            assert state.queue_seed_version == 3 and state.cursor == 7
         else:
             changes = db.scalars(select(SyncChange).where(SyncChange.revision > 7).order_by(SyncChange.revision)).all()
             assert len(changes) == 4 and {row.entity_type for row in changes} == expected
             assert [row.revision for row in changes] == [8, 9, 10, 11]
-            assert state.bootstrap_version == 2 and state.current_revision == 11
+            assert state.bootstrap_version == 3 and state.current_revision == 11
         assert db.get(LedgerCategory, ledger_id).sync_revision == 7
     engine.dispose()
 

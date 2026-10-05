@@ -3,12 +3,16 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import core_connection
 from ..models import User
 from ..runtime_mode import require_local_mode
 from ..security import current_user
+from ..database import get_db
+from ..workspaces import get_personal_workspace
+from ..sync.notifications import get_coordinator
 
 
 router = APIRouter(prefix="/api/v1/core", tags=["core-connection"],
@@ -27,9 +31,16 @@ class ConnectRequest(BaseModel):
 
 
 @router.post("/connect")
-def connect(payload: ConnectRequest, user: User = Depends(current_user)):
-    return core_connection.connect(user.id, payload.coreUrl, payload.username, payload.password,
-                                   payload.clientName, payload.platform, payload.appVersion)
+def connect(payload: ConnectRequest, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    user_id = user.id
+    workspace_id = get_personal_workspace(db, user).id
+    db.rollback()
+    result = core_connection.connect(user_id, payload.coreUrl, payload.username, payload.password,
+                                     payload.clientName, payload.platform, payload.appVersion)
+    coordinator = get_coordinator(db.get_bind())
+    if coordinator is not None:
+        coordinator.connection_changed(user_id, workspace_id, True)
+    return result
 
 
 @router.get("/connection")
@@ -43,5 +54,12 @@ def connection_test(user: User = Depends(current_user)):
 
 
 @router.delete("/connection")
-def disconnect(user: User = Depends(current_user)):
-    return core_connection.disconnect(user.id)
+def disconnect(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    user_id = user.id
+    workspace_id = get_personal_workspace(db, user).id
+    db.rollback()
+    result = core_connection.disconnect(user_id)
+    coordinator = get_coordinator(db.get_bind())
+    if coordinator is not None:
+        coordinator.connection_changed(user_id, workspace_id, False)
+    return result

@@ -261,7 +261,9 @@ def test_conflict_snapshot_tracks_remote_delete_and_restore(network):
     with n.b.factory() as db:
         conflict = db.scalar(select(LocalMutation).where(LocalMutation.entity_id == item_id))
         assert conflict.result_revision == 3
-        assert conflict.conflict_json == {"currentRevision": 3, "current": None, "deleted": True}
+        assert {key: value for key, value in conflict.conflict_json.items() if key != "detectedAt"} == {
+            "currentRevision": 3, "current": None, "deleted": True}
+        assert conflict.conflict_json["detectedAt"]
         item = db.get(LedgerTransaction, item_id)
         assert item.description == "Local 42" and item.sync_revision == 1
         assert item.deleted_at is None

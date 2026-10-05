@@ -1,4 +1,5 @@
 node_modules/
+output/v060*
 .venv/
 scripts/__pycache__/
 dist/
@@ -25,6 +26,7 @@ agent-adapters/openclaw/plugin/dist/
 output/openclaw-sdk/
 output/openclaw-*.tgz
 output/node-runtime/
+output/v059/
 backend/build/
 backend/dist/
 src-tauri/target/

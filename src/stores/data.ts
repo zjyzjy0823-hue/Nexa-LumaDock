@@ -31,5 +31,6 @@ export const useDataStore = defineStore('data', () => {
   async function updateRecord(token: string, id: string, payload: Partial<RecordInput>) { return mutate(async () => { const current = sequence; const record = await dataService.updateRecord(token, id, payload); if (current === sequence) items.value = items.value.map(item => ({ ...item, records: item.records.map(old => old.id === id ? { ...record, statusTone: 'info' } : old) })) }) }
   async function removeRecord(token: string, id: string) { return mutate(async () => { const current = sequence; await dataService.removeRecord(token, id); if (current === sequence) items.value = items.value.map(item => ({ ...item, records: item.records.filter(record => record.id !== id), recordCount: item.recordCount - (item.records.some(record => record.id === id) ? 1 : 0) })) }) }
   function reset() { ++sequence; items.value = []; loading.value = false; loaded.value = false; loadedAt.value = 0; error.value = '' }
-  return { items, loading, loaded, error, load, create, update, remove, createRecord, updateRecord, removeRecord, reset }
+  function invalidate() { loaded.value = false; loadedAt.value = 0 }
+  return { items, loading, loaded, error, load, create, update, remove, createRecord, updateRecord, removeRecord, reset, invalidate }
 })

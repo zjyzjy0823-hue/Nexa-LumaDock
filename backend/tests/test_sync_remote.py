@@ -15,13 +15,13 @@ def test_client_credential_and_http_safety(monkeypatch):
         assert request.headers["Authorization"] == "Bearer nc_live_test"
         if request.method == "POST":
             body = json.loads(request.read())
-            assert body["protocolVersion"] == 2
+            assert body["protocolVersion"] == 3
             assert set(body["mutations"][0]) == {"mutationId", "entityType", "entityId",
                                                   "operation", "baseRevision", "data"}
-            return httpx.Response(200, json={"protocolVersion": 2, "results": [
+            return httpx.Response(200, json={"protocolVersion": 3, "results": [
                 {"mutationId": "test-id", "status": "applied", "revision": 1}]})
-        assert request.url.params["protocolVersion"] == "2"
-        return httpx.Response(200, json={"protocolVersion": 2, "changes": [],
+        assert request.url.params["protocolVersion"] == "3"
+        return httpx.Response(200, json={"protocolVersion": 3, "changes": [],
                                          "cursor": 0, "hasMore": False, "workspaceRevision": 1})
 
     def client_factory(**kwargs):
@@ -40,7 +40,8 @@ def test_client_credential_and_http_safety(monkeypatch):
     assert all(request.url.host == "core.example" for request in seen)
 
 
-@pytest.mark.parametrize("status,code", [(401, "unauthorized"), (503, "unreachable"),
+@pytest.mark.parametrize("status,code", [(401, "unauthorized"), (502, "unreachable"),
+                                           (503, "unreachable"), (504, "unreachable"),
                                            (302, "invalid_response")])
 def test_safe_remote_error_codes(monkeypatch, status, code):
     original_client = httpx.Client
@@ -51,6 +52,24 @@ def test_safe_remote_error_codes(monkeypatch, status, code):
             remote.get_changes(0)
     assert error.value.code == code
     assert "nc_live_" not in str(error.value)
+
+
+@pytest.mark.parametrize("failure,code", [(httpx.ConnectError, "unreachable"),
+                                         (httpx.ReadTimeout, "timeout"),
+                                         (httpx.ConnectTimeout, "timeout")])
+def test_network_failures_are_safe_retryable_codes(monkeypatch, failure, code):
+    original_client = httpx.Client
+
+    def fail(request):
+        raise failure("private nc_live_secret Authorization traceback", request=request)
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(fail), **kwargs))
+    with SyncRemoteClient("https://core.example", "nc_live_test") as remote:
+        with pytest.raises(SyncRemoteError) as error:
+            remote.get_changes(0)
+    assert error.value.code == code
+    assert str(error.value) == code
 
 
 @pytest.mark.parametrize("status,body", [(200, {"protocolVersion": 1}),

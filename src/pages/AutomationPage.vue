@@ -1,197 +1,98 @@
 <script setup lang="ts">
-import { confirmAction } from '../composables/useConfirm'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Activity, AlertCircle, CheckCircle2, Plus, Sparkles, X, Zap } from 'lucide-vue-next'
-import ActionButton from '../components/ui/ActionButton.vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { Plus, Play, X } from 'lucide-vue-next'
 import GlassCard from '../components/ui/GlassCard.vue'
-import AutomationCard from '../components/automation/AutomationCard.vue'
-import ExecutionList from '../components/automation/ExecutionList.vue'
-import TriggerLibrary from '../components/automation/TriggerLibrary.vue'
-import WorkflowBuilder from '../components/automation/WorkflowBuilder.vue'
-import { triggerLibrary } from '../mock/automation'
+import ActionButton from '../components/ui/ActionButton.vue'
 import { useAutomationStore } from '../stores/automation'
 import { useAuthStore } from '../stores/auth'
-import type { AutomationItem, WorkflowNode, ExecutionItem, Workflow } from '../types/automation'
-
+import { confirmAction } from '../composables/useConfirm'
+import { automationService } from '../services/automation'
+import type { AutomationAction, Execution, Workflow, WorkflowInput } from '../types/automation'
 const emit = defineEmits<{ action: [message: string] }>()
 const store = useAutomationStore(), auth = useAuthStore()
-const selectedId = ref('')
-const selectedWorkflow = computed(() => store.items.find(item => item.id === selectedId.value) ?? store.items[0] ?? null)
-const workflowNodes = computed<WorkflowNode[]>(() => selectedWorkflow.value?.workflowJson?.length ? selectedWorkflow.value.workflowJson : [
-  { kind: 'WHEN', label: '触发条件', text: '电脑上线', detail: '设备事件' },
-  { kind: 'IF', label: '判断条件', text: '始终执行', detail: '' },
-  { kind: 'DO', label: '执行动作', text: '发送通知', detail: '' },
-])
-const automationItems = computed<AutomationItem[]>(() => store.items.map(item => {
-  const last = store.executions.find(execution => execution.workflowId === item.id)
-  const trigger = triggerLibrary.find(entry => triggerType(entry.id) === item.triggerType)
-  return { id: item.id, title: item.name, description: item.description, icon: trigger?.icon ?? 'workflow', enabled: item.enabled,
-    trigger: String(item.triggerConfigJson.label ?? trigger?.example ?? item.triggerType), lastExecution: last?.startedAt.slice(0, 16) ?? '尚未执行', lastExecutionStatus: last?.status === 'failed' ? 'failed' : last ? 'success' : 'never' }
-}))
-const executions = computed<ExecutionItem[]>(() => store.executions.map(item => ({ id: item.id,
-  title: store.items.find(workflow => workflow.id === item.workflowId)?.name ?? '已删除工作流', description: item.message,
-  time: item.startedAt.slice(0, 16), status: item.status === 'failed' ? 'failed' : 'success' })))
-function triggerType(id: string): Workflow['triggerType'] { return ({ device: 'device_status', schedule: 'schedule', webhook: 'webhook', agent: 'agent_event' } as Record<string, Workflow['triggerType']>)[id] ?? 'manual' }
-onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
-const selectedTriggerId = ref('device')
-watch(selectedWorkflow, item => { selectedTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item?.triggerType)?.id ?? 'device' })
-const expanded = ref(false)
-const createOpen = ref(false)
-const newName = ref('')
-const newDescription = ref('')
-const newTriggerId = ref('device')
-const editingId = ref('')
-const firstField = ref<HTMLInputElement | null>(null)
-
-const runningCount = computed(() => automationItems.value.filter(item => item.enabled).length)
-const visibleAutomations = computed(() => expanded.value ? automationItems.value : automationItems.value.slice(0, 4))
-const stats = computed(() => [
-  { label: '已启用工作流', value: `${runningCount.value} / ${automationItems.value.length}`, detail: '仅保存启用状态', icon: Zap, tone: 'blue' },
-  { label: '今日执行次数', value: String(store.executions.filter(item => item.startedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)).length), detail: '测试执行记录', icon: Activity, tone: 'violet' },
-  { label: '成功率', value: `${store.executions.length ? Math.round(store.executions.filter(item => item.status === 'success').length / store.executions.length * 100) : 0}%`, detail: '测试执行成功率', icon: CheckCircle2, tone: 'mint' },
-  { label: '错误次数', value: String(store.executions.filter(item => item.status === 'failed').length), detail: '需要关注的执行', icon: AlertCircle, tone: 'amber' },
-])
-
-function openCreate() {
-  editingId.value = ''; newName.value = ''; newDescription.value = ''
-  createOpen.value = true
-  nextTick(() => firstField.value?.focus())
+const open = ref(false), editingId = ref(''), selectedId = ref(''), firstField = ref<HTMLInputElement | null>(null), formError = ref('')
+const detail = ref<Execution | null>(null)
+const triggers = { manual: '手动', schedule: '定时', data_changed: '数据变更', agent_completed: 'Agent 任务完成' }
+const actions = { 'ledger.create': '创建账本交易', 'data.create': '创建数据记录', 'data.update': '更新数据记录', 'agent.run': '运行 Agent 任务', 'webhook.post': 'HTTP Webhook' }
+const statuses: Record<string, string> = { queued: '排队中', claimed: '已领取', running: '执行中', succeeded: '成功', success: '模拟成功', failed: '失败', skipped: '已跳过', cancelled: '已取消' }
+function defaults() { return { name: '', description: '', enabled: true, trigger: 'manual' as Workflow['triggerType'], action: 'data.create' as AutomationAction['type'], scheduleType: 'daily', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', time: '22:00', at: new Date().toISOString(), seconds: 3600, weekdays: [0], catchUp: 'catch_up_once', entityType: 'data.record', operation: '', agentFilter: '', target: '', title: '', amount: '1.00', ledgerType: 'expense', occurredAt: new Date().toISOString(), recordStatus: 'active', category: '', payload: '{}', url: '', headers: '{}', timeout: 10, extra: {} as Record<string, unknown> } }
+const form = reactive(defaults())
+const selected = computed(() => store.items.find(item => item.id === selectedId.value) ?? store.items[0])
+function actionLabel(item: Workflow) {
+  const action = item.workflowJson.find(node => node.action)?.action
+  return action ? actions[action.type] : '仅模拟'
 }
+const history = computed(() => store.executions.filter(item => item.workflowId === selected.value?.id))
+const counters = computed(() => ['queued', 'running', 'succeeded', 'failed'].map(status => ({ status, count: store.executions.filter(item => item.status === status || (status === 'running' && item.status === 'claimed')).length })))
+const date = (value?: string | null) => value ? new Date(value).toLocaleString() : '—'
+const duration = (item: Execution) => item.finishedAt ? `${Math.max(0, (Date.parse(item.finishedAt) - Date.parse(item.startedAt)) / 1000).toFixed(1)}s` : '—'
+let poll: ReturnType<typeof setInterval> | undefined
+function openCreate() { Object.assign(form, defaults()); editingId.value = ''; formError.value = ''; open.value = true; nextTick(() => firstField.value?.focus()) }
 defineExpose({ openCreate })
-
-function closeCreate() { createOpen.value = false }
-
-async function toggleAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (item && auth.token) { try { await store.update(auth.token, id, { enabled: !item.enabled }) } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') } } }
-function editAutomation(id: string) { const item = store.items.find(entry => entry.id === id); if (!item) return; editingId.value = id; newName.value = item.name; newDescription.value = item.description; newTriggerId.value = triggerLibrary.find(entry => triggerType(entry.id) === item.triggerType)?.id ?? 'device'; createOpen.value = true }
-async function removeAutomation(id: string) { if (!auth.token || !(await confirmAction('删除此工作流及其执行历史？'))) return; try { await store.remove(auth.token, id); emit('action', '工作流已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
-async function runTest(id: string) { if (!auth.token) return; try { await store.testRun(auth.token, id); emit('action', '测试执行已记录，未运行任何动作。') } catch (error) { emit('action', error instanceof Error ? error.message : '试运行失败') } }
-
-function selectTrigger(id: string) {
-  const trigger = triggerLibrary.find(item => item.id === id)
-  if (!trigger) return
-  selectedTriggerId.value = id
-  newTriggerId.value = id
-  if (selectedWorkflow.value && auth.token) store.update(auth.token, selectedWorkflow.value.id, {
-    trigger_type: triggerType(id), trigger_config_json: { label: trigger.example },
-    workflow_json: workflowNodes.value.map(node => node.kind === 'WHEN' ? { ...node, text: trigger.example, detail: trigger.title } : node),
-  }).catch(error => emit('action', error instanceof Error ? error.message : '保存失败'))
+function edit(item: Workflow) {
+  openCreate(); editingId.value = item.id; form.name = item.name; form.description = item.description; form.enabled = item.enabled; form.trigger = item.triggerType
+  const t = item.triggerConfigJson, s = t.schedule as Record<string, unknown> | undefined
+  if (s) Object.assign(form, { scheduleType: s.type, timezone: s.timezone, time: s.time, at: s.at ?? form.at, seconds: s.seconds, weekdays: s.weekdays, catchUp: s.catch_up })
+  form.entityType = String(t.entity_type ?? 'data.record'); form.operation = String(t.operation ?? ''); form.agentFilter = String(t.agent_id ?? '')
+  const a = item.workflowJson.find(node => node.action)?.action
+  if (a) { const c = a.config; form.action = a.type; form.extra = { ...c }; form.target = String(c.collection_id ?? c.record_id ?? c.agent_id ?? ''); form.title = String(c.title ?? c.name ?? c.description ?? ''); form.amount = String(c.amount ?? '1.00'); form.ledgerType = String(c.type ?? 'expense'); form.occurredAt = String(c.occurred_at ?? form.occurredAt); form.recordStatus = String(c.status ?? 'active'); form.category = String(c.category ?? ''); form.payload = JSON.stringify(c.data_json ?? c.body ?? {}, null, 2); form.headers = JSON.stringify(c.headers ?? {}, null, 2); form.url = String(c.url ?? ''); form.timeout = Number(c.timeout ?? 10) }
 }
-
-async function updateWorkflow(nodes: WorkflowNode[]) { if (selectedWorkflow.value && auth.token) try { await store.update(auth.token, selectedWorkflow.value.id, { workflow_json: nodes }); emit('action', '工作流节点已保存。') } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败') } }
-
-async function createAutomation() {
-  const title = newName.value.trim()
-  if (!title) return
-  const trigger = triggerLibrary.find(item => item.id === newTriggerId.value) ?? triggerLibrary[0]!
+function object(value: string): Record<string, unknown> { const parsed = JSON.parse(value); if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('请填写 JSON 对象'); return parsed }
+function offsetTime(value: string) { if (!/(Z|[+-]\d{2}:\d{2})$/i.test(value)) throw new Error('时间必须包含时区偏移，例如 2026-10-03T22:00:00+08:00'); return new Date(value).toISOString() }
+async function operate(action: () => Promise<unknown>) { try { await action() } catch (error) { emit('action', error instanceof Error ? error.message : '操作失败') } }
+async function save() {
   if (!auth.token) return
   try {
-    if (editingId.value) await store.update(auth.token, editingId.value, { name: title, description: newDescription.value.trim(), trigger_type: triggerType(newTriggerId.value), trigger_config_json: { label: trigger.example },
-      workflow_json: (store.items.find(item => item.id === editingId.value)?.workflowJson ?? workflowNodes.value).map(node => node.kind === 'WHEN' ? { ...node, text: trigger.example, detail: trigger.title } : node) })
-    else { const item = await store.create(auth.token, { name: title, description: newDescription.value.trim(), enabled: true, trigger_type: triggerType(newTriggerId.value), trigger_config_json: { label: trigger.example }, workflow_json: [
-      { kind: 'WHEN', label: '触发条件', text: trigger.example, detail: trigger.title },
-      { kind: 'IF', label: '判断条件', text: '始终执行', detail: '' },
-      { kind: 'DO', label: '执行动作', text: '发送通知', detail: '' },
-    ] }); selectedId.value = item.id }
-  } catch (error) { emit('action', error instanceof Error ? error.message : '保存失败'); return }
-  expanded.value = true
-  closeCreate()
-  newName.value = ''
-  newDescription.value = ''
-  newTriggerId.value = 'device'
-  emit('action', `「${title}」已保存。`)
+    let triggerConfig: Record<string, unknown> = {}
+    if (form.trigger === 'schedule') triggerConfig = { schedule: { type: form.scheduleType, timezone: form.timezone, time: form.time, weekdays: form.weekdays, seconds: form.seconds, catch_up: form.catchUp, ...(['once','interval'].includes(form.scheduleType) ? { at: offsetTime(form.at) } : {}) } }
+    if (form.trigger === 'data_changed') triggerConfig = { entity_type: form.entityType, ...(form.operation ? { operation: form.operation } : {}) }
+    if (form.trigger === 'agent_completed') triggerConfig = form.agentFilter ? { agent_id: form.agentFilter } : {}
+    let config: Record<string, unknown>
+    if (form.action === 'ledger.create') config = { ...form.extra, type: form.ledgerType, amount: form.amount, description: form.title, occurred_at: offsetTime(form.occurredAt) }
+    else if (form.action === 'agent.run') config = { agent_id: form.target, title: form.title, description: String(form.extra.description ?? '') }
+    else if (form.action === 'webhook.post') config = { url: form.url, headers: object(form.headers), body: object(form.payload), timeout: form.timeout }
+    else config = { [form.action === 'data.create' ? 'collection_id' : 'record_id']: form.target, name: form.title, status: form.recordStatus, category: form.category, data_json: object(form.payload) }
+    const value: WorkflowInput = { name: form.name.trim(), description: form.description, enabled: form.enabled, trigger_type: form.trigger, trigger_config_json: triggerConfig, workflow_json: [{ kind: 'DO', label: '执行动作', text: actions[form.action], detail: '', action: { type: form.action, config } }] }
+    if (editingId.value) await store.update(auth.token, editingId.value, value); else selectedId.value = (await store.create(auth.token, value)).id
+    open.value = false; emit('action', '自动化定义已保存'); await store.refreshRuntime(auth.token)
+  } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
-
-function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && createOpen.value) closeCreate() }
-onMounted(() => document.addEventListener('keydown', onKeydown))
-onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+async function remove(item: Workflow) { if (auth.token && await confirmAction('删除此自动化？Core 将取消尚未开始的执行。')) await operate(() => store.remove(auth.token!, item.id)) }
+async function showDetail(item: Execution) { if (auth.token) await operate(async () => { detail.value = await automationService.detail(auth.token!, item.workflowId, item.id) }) }
+function onKey(event: KeyboardEvent) { if (event.key === 'Escape') { open.value = false; detail.value = null } }
+onMounted(() => { if (auth.token) store.load(auth.token, true).catch(() => {}); poll = setInterval(() => { if (auth.token && store.loaded) store.refreshRuntime(auth.token).catch(() => {}) }, 5000); document.addEventListener('keydown', onKey) })
+onUnmounted(() => { clearInterval(poll); document.removeEventListener('keydown', onKey) })
 </script>
-
 <template>
   <div class="automation-page">
-    <h1 class="automation-visually-hidden">自动化</h1>
-    <div class="automation-page-actions" aria-label="自动化操作"><ActionButton size="sm" @click="openCreate"><Plus :size="16" />新建自动化</ActionButton></div>
-    <p v-if="store.loading" role="status">正在加载工作流…</p>
-    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
-
-    <section v-if="store.loaded" class="automation-stats" aria-label="自动化概览">
-      <GlassCard v-for="stat in stats" :key="stat.label" class="automation-stat" :class="`automation-stat--${stat.tone}`">
-        <div class="automation-stat__top"><span>{{ stat.label }}</span><span class="automation-stat__icon"><component :is="stat.icon" :size="18" :stroke-width="1.8" /></span></div>
-        <strong>{{ stat.value }}</strong><small>{{ stat.detail }}</small>
-      </GlassCard>
-    </section>
-
-    <div v-if="store.loaded" class="automation-main-grid">
-      <section class="automation-flows" aria-labelledby="automation-flows-title">
-        <div class="automation-section-heading"><div><span>ACTIVE WORKFLOWS</span><h2 id="automation-flows-title">我的自动化 <small>{{ automationItems.length }}</small></h2></div><button type="button" @click="expanded = !expanded">{{ expanded ? '收起列表' : '查看全部' }}<span aria-hidden="true">→</span></button></div>
-        <div v-if="!automationItems.length">还没有工作流，请创建一个。</div>
-        <div class="automation-card-grid"><AutomationCard v-for="item in visibleAutomations" :key="item.id" :automation="item" @toggle="toggleAutomation" @select="selectedId = $event" @edit="editAutomation" @remove="removeAutomation" @test="runTest" /></div>
-      </section>
-      <WorkflowBuilder v-if="selectedWorkflow" :nodes="workflowNodes" @update:nodes="updateWorkflow" />
-    </div>
-
-    <div v-if="store.loaded" class="automation-secondary-grid">
-      <ExecutionList :executions="executions" />
-      <TriggerLibrary :triggers="triggerLibrary" :selected-id="selectedTriggerId" @select="selectTrigger" />
-    </div>
-
-    <Teleport to="body">
-      <div v-if="createOpen" class="automation-modal-backdrop" @click.self="closeCreate">
-        <GlassCard class="automation-modal" role="dialog" aria-modal="true" aria-labelledby="automation-modal-title">
-          <div class="automation-modal__heading"><div><span>WORKFLOW</span><h2 id="automation-modal-title">{{ editingId ? '编辑' : '新建' }}自动化</h2><p>保存工作流配置；真实调度尚未启用。</p></div><button type="button" aria-label="关闭" @click="closeCreate"><X :size="17" /></button></div>
-          <form class="automation-modal__form" @submit.prevent="createAutomation">
-            <label>名称<input ref="firstField" v-model="newName" type="text" placeholder="例如：夜间同步" maxlength="40" required /></label>
-            <label>描述<textarea v-model="newDescription" placeholder="这个自动化会做什么？" rows="3" maxlength="120" /></label>
-            <label>触发器<select v-model="newTriggerId"><option v-for="trigger in triggerLibrary" :key="trigger.id" :value="trigger.id">{{ trigger.title }}</option></select></label>
-            <div class="automation-modal__actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Sparkles :size="15" />保存工作流</ActionButton></div>
-          </form>
-        </GlassCard>
-      </div>
+    <div class="heading"><div><h1>自动化</h1><p>由 Core 统一调度和执行；配置保留在本地并同步。</p></div><ActionButton @click="openCreate"><Plus :size="16" />新建自动化</ActionButton></div>
+    <p v-if="store.error" role="alert">{{ store.error }} <button @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p><p v-if="store.loading" role="status">正在加载…</p>
+    <GlassCard v-if="store.runtimeError" role="status">{{ store.runtimeError }}<ActionButton size="sm" variant="secondary" :disabled="store.refreshing" @click="auth.token && store.refreshRuntime(auth.token)">刷新</ActionButton></GlassCard>
+    <div class="counters"><GlassCard v-for="counter in counters" :key="counter.status"><span>{{ statuses[counter.status] }}</span><strong>{{ counter.count }}</strong></GlassCard></div>
+    <div class="content-grid"><section aria-label="自动化定义"><h2>我的自动化</h2><p v-if="store.loaded && !store.items.length">还没有自动化，请创建一个。</p>
+      <GlassCard v-for="item in store.items" :key="item.id" class="workflow" :class="{ selected: selected?.id === item.id }"><button class="workflow-title" @click="selectedId = item.id">{{ item.name }}</button><p>{{ item.description }}</p><p>{{ item.enabled ? '已启用' : '已停用' }} · {{ triggers[item.triggerType as keyof typeof triggers] ?? '旧版配置' }} → {{ actionLabel(item) }}</p>
+        <small>下次执行：{{ store.runtimes[item.id] ? date(store.runtimes[item.id]?.nextRunAt) : 'Core 状态不可用' }}<br />上次执行：{{ date(store.runtimes[item.id]?.lastRunAt) }} · {{ statuses[store.runtimes[item.id]?.lastResult ?? ''] ?? '—' }}</small>
+        <div class="actions"><ActionButton size="sm" :disabled="store.loading || !item.workflowJson.some(node => node.action)" @click="auth.token && operate(() => store.run(auth.token!, item.id))"><Play :size="13" />立即运行</ActionButton><ActionButton size="sm" variant="secondary" :disabled="store.loading" @click="auth.token && operate(() => store.testRun(auth.token!, item.id))">模拟测试</ActionButton><ActionButton size="sm" variant="secondary" @click="edit(item)">编辑</ActionButton><ActionButton size="sm" variant="secondary" :disabled="store.loading" @click="auth.token && operate(() => store.update(auth.token!, item.id, { enabled: !item.enabled }))">{{ item.enabled ? '停用' : '启用' }}</ActionButton><ActionButton size="sm" variant="danger" :disabled="store.loading" @click="remove(item)">删除</ActionButton></div>
+      </GlassCard></section>
+      <GlassCard class="history"><div class="heading"><h2>执行记录 · {{ selected?.name ?? '选择自动化' }}</h2><ActionButton size="sm" variant="secondary" :disabled="store.refreshing" @click="auth.token && store.refreshRuntime(auth.token)">刷新</ActionButton></div><p v-if="!history.length">{{ store.runtimeError ? '执行记录暂不可用' : '暂无执行记录' }}</p>
+        <div class="table-scroll"><table v-if="history.length"><thead><tr><th>状态 / 触发方式</th><th>开始 / 耗时</th><th>结果 / 失败原因</th><th>尝试</th></tr></thead><tbody><tr v-for="item in history" :key="item.id"><td><button @click="showDetail(item)">{{ statuses[item.status] }}</button><small>{{ triggers[item.triggerType as keyof typeof triggers] ?? '模拟' }}</small></td><td>{{ date(item.attempt ? item.startedAt : item.createdAt) }}<small>{{ duration(item) }}</small></td><td>{{ item.errorCode ?? (item.resultJson?.simulated ? '未执行任何真实动作' : JSON.stringify(item.resultSummary)) }}</td><td>{{ item.attempt }}</td></tr></tbody></table></div>
+      </GlassCard></div>
+    <Teleport to="body"><div v-if="open" class="modal-backdrop" @click.self="open = false"><GlassCard class="modal" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><div class="heading"><h2 id="automation-editor-title">{{ editingId ? '编辑' : '新建' }}自动化</h2><button aria-label="关闭" @click="open = false"><X :size="18" /></button></div>
+      <form @submit.prevent="save"><label>名称<input ref="firstField" v-model="form.name" required maxlength="120" /></label><label>描述<input v-model="form.description" maxlength="500" /></label><label class="checkbox"><input v-model="form.enabled" type="checkbox" />启用</label><label>触发器<select v-model="form.trigger"><option v-for="(label,key) in triggers" :key="key" :value="key">{{ label }}</option></select></label>
+        <template v-if="form.trigger === 'schedule'"><label>计划<select v-model="form.scheduleType"><option value="once">一次</option><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">间隔</option></select></label><label>时区<input v-model="form.timezone" required placeholder="Asia/Shanghai" /></label><label v-if="['daily','weekly'].includes(form.scheduleType)">时间<input v-model="form.time" type="time" required /></label><label v-if="form.scheduleType === 'weekly'">星期<select v-model="form.weekdays" multiple><option v-for="(label,day) in ['一','二','三','四','五','六','日']" :key="day" :value="day">星期{{ label }}</option></select></label><label v-if="['once','interval'].includes(form.scheduleType)">开始时间（含时区偏移）<input v-model="form.at" required placeholder="2026-10-03T22:00:00+08:00" /></label><label v-if="form.scheduleType === 'interval'">间隔（秒）<input v-model="form.seconds" type="number" min="10" max="31536000" required /></label><label>错过计划<select v-model="form.catchUp"><option value="catch_up_once">恢复后补执行一次</option><option value="skip">跳过</option></select></label></template>
+        <template v-if="form.trigger === 'data_changed'"><label>数据类型<select v-model="form.entityType"><option value="data.record">数据记录</option><option value="ledger.transaction">账本交易</option><option value="website">网站</option></select></label><label>变更<select v-model="form.operation"><option value="">所有变更</option><option value="upsert">创建或更新</option><option value="delete">删除</option></select></label></template><label v-if="form.trigger === 'agent_completed'">Core Agent ID（留空监听全部）<input v-model="form.agentFilter" maxlength="36" /></label>
+        <label>动作<select v-model="form.action" @change="form.extra = {}"><option v-for="(label,key) in actions" :key="key" :value="key">{{ label }}</option></select></label>
+        <template v-if="form.action === 'ledger.create'"><label>交易类型<select v-model="form.ledgerType"><option value="expense">支出</option><option value="income">收入</option></select></label><label>金额<input v-model="form.amount" type="number" min="0.01" step="0.01" required /></label><label>交易说明<input v-model="form.title" required maxlength="200" /></label><label>交易时间（含时区偏移）<input v-model="form.occurredAt" required /></label></template>
+        <template v-else-if="form.action === 'webhook.post'"><label>HTTPS URL<input v-model="form.url" type="url" required /></label><label>公开请求头（JSON）<textarea v-model="form.headers" rows="2" /></label><label>JSON 请求体<textarea v-model="form.payload" rows="4" /></label><label>超时（秒）<input v-model="form.timeout" type="number" min="1" max="30" required /></label><p>仅公网 HTTPS，不允许凭证或敏感请求头。远端须支持 Idempotency-Key 才能防止重复副作用。</p></template>
+        <template v-else><label>{{ form.action === 'agent.run' ? 'Core Agent ID' : form.action === 'data.create' ? '集合 ID' : '记录 ID' }}<input v-model="form.target" required maxlength="36" /></label><label>{{ form.action === 'agent.run' ? '任务标题' : '记录名称' }}<input v-model="form.title" required maxlength="160" /></label><template v-if="form.action !== 'agent.run'"><label>状态<input v-model="form.recordStatus" maxlength="40" /></label><label>分类<input v-model="form.category" maxlength="80" /></label><label>JSON 数据<textarea v-model="form.payload" rows="4" /></label></template><p v-else>成功创建 Core Agent 任务即视为动作成功。</p></template>
+        <p v-if="formError" role="alert">{{ formError }}</p><div class="actions"><ActionButton variant="secondary" @click="open = false">取消</ActionButton><ActionButton type="submit" :disabled="store.loading">保存</ActionButton></div>
+      </form></GlassCard></div>
+      <div v-if="detail" class="modal-backdrop" @click.self="detail = null"><GlassCard class="modal" role="dialog" aria-modal="true" aria-labelledby="execution-detail-title"><div class="heading"><h2 id="execution-detail-title">执行详情</h2><button aria-label="关闭" @click="detail = null"><X :size="18" /></button></div><dl><dt>自动化</dt><dd>{{ store.items.find(item => item.id === detail?.workflowId)?.name }}</dd><dt>Execution ID</dt><dd>{{ detail.id }}</dd><dt>触发器</dt><dd>{{ detail.triggerType }} · {{ detail.triggerInstanceId }}</dd><dt>定义版本</dt><dd>{{ detail.automationRevision }}</dd><dt>状态 / 尝试</dt><dd>{{ statuses[detail.status] }} / {{ detail.attempt }}</dd><dt>开始 / 结束</dt><dd>{{ date(detail.startedAt) }} / {{ date(detail.finishedAt) }}</dd><dt>下次重试</dt><dd>{{ date(detail.nextAttemptAt) }}</dd><dt>动作</dt><dd>{{ detail.action?.type ?? '模拟' }}</dd><dt>结果</dt><dd>{{ JSON.stringify(detail.resultSummary) }}</dd><dt>失败原因</dt><dd>{{ detail.errorCode ?? '—' }}</dd></dl></GlassCard></div>
     </Teleport>
   </div>
 </template>
-
 <style scoped>
-.automation-page { min-width: 0; padding-bottom: 24px; }
-.automation-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.automation-page-actions { display: flex; justify-content: flex-end; align-items: center; min-height: 31px; margin-bottom: 14px; }
-.automation-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; margin-bottom: 14px; }
-.automation-stat { min-height: 127px; }
-.automation-stat :deep(.glass-card__body) { display: flex; flex-direction: column; overflow: visible; }
-.automation-stat__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.automation-stat__top > span:first-child { color: rgba(255,255,255,.86); font-size: 11px; font-weight: 670; text-shadow: 0 1px 8px rgba(25,38,76,.24); }
-.automation-stat__icon { display: grid; width: 31px; height: 31px; flex: none; place-items: center; border: 1px solid rgba(255,255,255,.4); border-radius: 10px; color: white; background: rgba(113,143,235,.39); }
-.automation-stat--violet .automation-stat__icon { background: rgba(160,117,216,.4); }
-.automation-stat--mint .automation-stat__icon { background: rgba(64,183,146,.41); }
-.automation-stat--amber .automation-stat__icon { background: rgba(218,157,76,.4); }
-.automation-stat strong { margin-top: 2px; color: white; font-size: clamp(25px,2.3vw,32px); font-weight: 740; letter-spacing: -.05em; line-height: 1.16; text-shadow: 0 2px 10px rgba(29,44,100,.19); }
-.automation-stat small { margin-top: 6px; color: rgba(255,255,255,.73); font-size: 10px; text-shadow: 0 1px 8px rgba(25,38,76,.2); }
-.automation-main-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(300px,.93fr); align-items: stretch; gap: 15px; }
-.automation-flows { min-width: 0; }
-.automation-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; min-height: 46px; margin-bottom: 12px; }
-.automation-section-heading > div > span { color: rgba(242,248,255,.67); font-size: 9px; font-weight: 750; letter-spacing: .16em; }
-.automation-section-heading h2 { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; color: #fff; font-size: 20px; font-weight: 650; letter-spacing: -.035em; text-shadow: 0 2px 14px rgba(35,53,103,.2); }
-.automation-section-heading h2 small { display: grid; width: 21px; height: 21px; place-items: center; border: 1px solid rgba(255,255,255,.27); border-radius: 7px; background: rgba(255,255,255,.12); font-size: 10px; letter-spacing: 0; }
-.automation-section-heading button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 1px; border: 0; color: rgba(255,255,255,.86); background: none; font-size: 11px; font-weight: 640; white-space: nowrap; }
-.automation-section-heading button:hover { color: #fff; }
-.automation-section-heading button span { font-size: 16px; line-height: .6; }
-.automation-card-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px; }
-.automation-secondary-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: stretch; gap: 15px; margin-top: 16px; }
-.automation-modal-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(24,39,83,.35); backdrop-filter: blur(9px); }
-.automation-modal { width: min(100%,470px); height: auto; max-height: min(650px,calc(100dvh - 32px)); padding: 24px; }
-.automation-modal :deep(.glass-card__body) { overflow-y: auto; }
-.automation-modal__heading { display: flex; justify-content: space-between; gap: 14px; }
-.automation-modal__heading span { color: rgba(255,255,255,.73); font-size: 10px; font-weight: 750; letter-spacing: .16em; }
-.automation-modal__heading h2 { margin: 5px 0 4px; color: #fff; font-size: 23px; letter-spacing: -.04em; text-shadow: 0 1px 10px rgba(27,42,84,.3); }
-.automation-modal__heading p { margin: 0; color: rgba(255,255,255,.75); font-size: 12px; }
-.automation-modal__heading button { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid rgba(255,255,255,.3); border-radius: 9px; color: #fff; background: rgba(255,255,255,.16); }
-.automation-modal__form { display: grid; gap: 15px; margin-top: 24px; }
-.automation-modal__form label { display: flex; flex-direction: column; gap: 7px; color: rgba(255,255,255,.88); font-size: 11px; font-weight: 660; }
-.automation-modal__form input,.automation-modal__form textarea,.automation-modal__form select { width: 100%; min-height: 39px; padding: 10px 11px; border: 1px solid rgba(131,151,197,.26); border-radius: 11px; outline: none; color: #354665; background: rgba(255,255,255,.83); font: inherit; font-size: 12px; }
-.automation-modal__form input:focus,.automation-modal__form textarea:focus,.automation-modal__form select:focus { border-color: #839eec; box-shadow: 0 0 0 3px rgba(118,150,231,.13); }
-.automation-modal__form textarea { resize: vertical; }
-.automation-modal__form input::placeholder,.automation-modal__form textarea::placeholder { color: #b0bdcf; }
-.automation-modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 7px; }
-@media (max-width: 1200px) { .automation-main-grid { grid-template-columns: minmax(0,1.3fr) minmax(290px,1fr); } .automation-card-grid { grid-template-columns: 1fr; } }
-@media (max-width: 900px) { .automation-stats { grid-template-columns: repeat(2,minmax(0,1fr)); } .automation-main-grid { grid-template-columns: 1fr; } .automation-card-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .automation-secondary-grid { grid-template-columns: 1fr; } }
-@media (max-width: 560px) { .automation-stats { gap: 10px; } .automation-stat { min-height: 116px; padding: 14px; } .automation-card-grid { grid-template-columns: 1fr; } .automation-section-heading h2 { font-size: 18px; } }
+.workflow,.history,.modal { height:auto; } .modal { transform:none; overflow-x:hidden; } .modal:hover { transform:none; } .modal :deep(.glass-card__body) { min-width:0; flex:none; }
+.automation-page { padding-bottom:24px; color:#fff; } .heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; } h1 { font-size:25px; margin:0; } h2 { font-size:17px; margin:0 0 12px; } p { font-size:12px; line-height:1.6; } .counters { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:16px 0; } .counters strong { display:block; font-size:30px; margin-top:10px; } .content-grid { display:grid; grid-template-columns:minmax(300px,1fr) minmax(400px,1.4fr); gap:18px; align-items:start; } .workflow { margin-bottom:14px; border:var(--glass-tile-border); background:var(--glass-tile-background); color:#354665; } .selected { outline:2px solid #8a9fe6; } .workflow-title { font-weight:700; font-size:16px; border:0; background:none; color:inherit; padding:0; cursor:pointer; } .actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:15px; } small { display:block; font-size:11px; line-height:1.7; } .table-scroll { overflow:auto; } table { border-collapse:collapse; width:100%; font-size:11px; } th,td { padding:12px 8px; text-align:left; border-bottom:1px solid #ffffff35; word-break:break-word; } td button,.heading>button { background:#ffffffa0; border:0; border-radius:8px; color:#354665; padding:6px 10px; cursor:pointer; } .modal-backdrop { position:fixed; z-index:120; inset:0; display:grid; place-items:center; padding:16px; background:#18275366; backdrop-filter:blur(9px); } .modal { width:min(100%,540px); max-height:calc(100dvh - 32px); overflow:auto; color:#fff; } .modal :deep(.glass-card__body) { overflow:visible; } form { display:grid; gap:12px; } label { display:grid; gap:6px; font-size:12px; } input,textarea,select { width:100%; padding:9px 11px; border:1px solid #94abd477; border-radius:9px; color:#354665; background:#ffffffe8; font:inherit; } .checkbox { display:flex; align-items:center; } .checkbox input { width:auto; } dt { font-size:11px; opacity:.8; margin-top:14px; } dd { margin:4px 0; font-size:12px; overflow-wrap:anywhere; } @media(max-width:1000px) { .content-grid { grid-template-columns:1fr; } } @media(max-width:600px) { .counters { grid-template-columns:repeat(2,1fr); } .heading { align-items:start; } }
+.modal { overflow-x:hidden; }
 </style>

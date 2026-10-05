@@ -26,7 +26,7 @@ def lock_workspace_state(db: Session, workspace_id: str) -> SyncWorkspaceState:
 
 def append_change(db: Session, state: SyncWorkspaceState,
                   item, operation: str,
-                  client_id: str | None = None) -> int:
+                  client_id: str | None = None, *, emit_event=True) -> int:
     db.flush()
     state.current_revision += 1
     state.updated_at = utcnow()
@@ -34,10 +34,14 @@ def append_change(db: Session, state: SyncWorkspaceState,
     entity_type = adapter_for(item).entity_type
     db.add(SyncChange(id=str(uuid4()), workspace_id=state.workspace_id,
                       revision=state.current_revision, entity_type=entity_type,
-                      entity_id=item.id, operation=operation,
+                      entity_id=adapter_for(item).entity_id(item), operation=operation,
                       payload_json=adapter_for(item).serialize(item) if operation == "upsert" else None,
                       origin_client_id=client_id))
     db.flush()
+    if emit_event:
+        from ..automation.events import business_change
+        business_change(db, state.workspace_id, state.current_revision, entity_type,
+                        adapter_for(item).entity_id(item), operation, sync=client_id is not None)
     return state.current_revision
 
 
@@ -56,7 +60,7 @@ def ensure_core_sync_initialized(db: Session, workspace_id: str) -> SyncWorkspac
         if adapter.generation <= state.bootstrap_version:
             continue
         for item in adapter.legacy_rows(db, workspace_id):
-            append_change(db, state, item, "upsert")
+            append_change(db, state, item, "upsert", emit_event=False)
     state.bootstrap_version = seed_version()
     state.initialized_at = utcnow()
     db.flush()
@@ -108,8 +112,11 @@ def apply_mutation(db: Session, client: Client, mutation: dict) -> dict:
             adapter = get_adapter(etype)
             model, schema = adapter.model, adapter.schema
             # Global IDs are unique. Never return another workspace's record data.
-            item = db.get(model, eid)
-            if item is not None and adapter.workspace_id(db, item) != client.workspace_id:
+            item = adapter.find(db, eid, client.workspace_id)
+            identity_error = adapter.identity_error(eid, operation)
+            if identity_error:
+                reject(identity_error)
+            elif item is not None and adapter.workspace_id(db, item) != client.workspace_id:
                 reject("entity_id_unavailable")
             else:
                 current_revision = item.sync_revision if item is not None else 0
@@ -117,7 +124,8 @@ def apply_mutation(db: Session, client: Client, mutation: dict) -> dict:
                     result.update(status="conflict", currentRevision=current_revision,
                                   current=adapter_for(item).serialize(item) if item is not None and item.deleted_at is None else None,
                                   deleted=bool(item is not None and item.deleted_at is not None))
-                elif item is not None and base == 0 and operation == "upsert":
+                elif (item is not None and base == 0 and operation == "upsert"
+                      and not adapter.accepts_initial_upsert(item)):
                     result.update(status="conflict", currentRevision=current_revision,
                                   current=adapter_for(item).serialize(item) if item.deleted_at is None else None,
                                   deleted=item.deleted_at is not None)
