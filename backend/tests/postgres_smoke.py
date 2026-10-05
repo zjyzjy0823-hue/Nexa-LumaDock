@@ -63,7 +63,7 @@ username = f"core_smoke_{uuid4().hex[:12]}"
 with TestClient(app) as client:
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.6.0"}
+    assert health.json() == {"status": "ok", "service": "nexa", "version": "0.6.1"}
     registered = client.post("/api/v1/auth/register", json={
         "username": username, "password": "smoke-test-password",
     })
@@ -100,6 +100,16 @@ with TestClient(app) as client:
         assert row.token_hash != credential_a
         assert row.token_last4 == credential_a[-4:]
     auth_a = {"Authorization": "Bearer " + credential_a}
+    diagnostic = client.get("/api/v1/client/diagnostics", headers=auth_a)
+    assert diagnostic.status_code == 200
+    assert diagnostic.json()["protocol"] == 3
+    assert diagnostic.json()["clientId"] == created_client.json()["id"]
+    assert diagnostic.json()["automation"] == {"scheduler": True, "worker": True}
+    assert credential_a not in diagnostic.text
+    system = client.get("/api/v1/settings/diagnostics", headers=headers)
+    assert system.status_code == 200
+    assert system.json()["database"] == {"kind": "postgresql", "status": "ok"}
+    assert system.json()["protocol"]["compatible"] is True
     assert client.get("/api/v1/client/me", headers=auth_a).json()["workspaceId"] == workspace.json()["id"]
     heartbeat = client.post("/api/v1/client/heartbeat", headers=auth_a, json={"appVersion": "0.5.3"})
     assert heartbeat.status_code == 200, heartbeat.text

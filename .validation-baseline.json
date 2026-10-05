@@ -1,0 +1,16 @@
+{
+  "baselineVersion": "0.6.0",
+  "baselineCommit": "f59b60de688a5a5b35471e2a47a4a31dd1baaabf",
+  "syncProtocol": 3,
+  "alembicHead": "0017_automation_engine",
+  "notes": "Windows and macOS physical validation reported PASS by the v0.6.0 release owner. These are inherited results, not executions by this tool.",
+  "validations": {
+    "offline-recovery": {"status": "PASS", "boundaries": ["sync", "protocol", "database", "identity", "connection", "sidecar"]},
+    "keep-local": {"status": "PASS", "boundaries": ["sync", "conflict", "protocol", "database", "identity", "connection", "sidecar"]},
+    "keep-remote": {"status": "PASS", "boundaries": ["sync", "conflict", "protocol", "database", "identity", "connection", "sidecar"]},
+    "windows-desktop": {"status": "PASS", "boundaries": ["sidecar", "desktop", "packaging", "windows-packaging", "database", "identity", "connection"]},
+    "macos-desktop": {"status": "PASS", "boundaries": ["sidecar", "desktop", "packaging", "macos-packaging", "database", "identity", "connection"]},
+    "background-sync": {"status": "PASS", "boundaries": ["sync", "protocol", "database", "identity", "connection", "sidecar"]},
+    "conflict-center": {"status": "PASS", "boundaries": ["sync", "conflict", "protocol", "database", "identity", "connection", "sidecar"]}
+  }
+}

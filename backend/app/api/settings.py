@@ -14,8 +14,10 @@ from ..sync.publisher import prepare_write, publish
 from ..sync.adapters.personal_state import PreferencesData, project
 from pydantic import ValidationError
 from .personal_route import SafePersonalRoute
+from .diagnostics import router as diagnostics_router
 
 router = APIRouter(prefix="/api/v1", tags=["settings"], route_class=SafePersonalRoute)
+router.include_router(diagnostics_router)
 DEFAULT_NOTIFICATIONS = {"events": {"agentComplete": True, "deviceOffline": True, "automationFailure": True,
                                      "budgetAlert": False, "securityAlert": True},
                          "channels": {"desktop": True, "email": False, "telegram": False, "webhook": False}}
