@@ -1,20 +1,54 @@
 # Nexa Desktop — Nexa-LumaDock
 
-当前开发实现版本：**v0.6.0 Real Automation Engine**。自动化定义继续通过 generation 3、Protocol v3 同步；Core 统一调度和执行，Local 代理立即运行与执行历史。支持 Manual、Schedule、Data Changed、Agent Task Completed 触发器，以及 Ledger、Data、Agent、HTTPS Webhook 动作。详见 [数据归属与同步边界](docs/sync-scopes.md) 及 [实现与验证报告](docs/automation-engine-2026-10-03.md)。设备状态、执行历史和秘密不参与同步；请同时升级 Core 和所有 replica。产品版本号表示本地实现版本，已发布版本以 Releases 为准；macOS 实机及真实 Windows ↔ Core ↔ Mac 最终验收仍 deferred，尚未标记 cross-platform release ready。
+最新正式发布：**[v0.6.0 — Real Automation Engine](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/tag/v0.6.0)**。
 
-Nexa 是 Windows 10/11 x64 桌面个人控制中心。安装后从开始菜单打开 **Nexa**，桌面窗口、FastAPI Backend 和 SQLite 会自动启动；关闭窗口后驻留系统托盘。普通用户无需安装 Python、Node.js 或 Rust。现有 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 工作流和 Ledger 均保留。
+Nexa 是面向 **Windows 10/11 x64 和 macOS Intel x86_64** 的桌面个人控制中心。应用启动时自动启动 FastAPI Backend 和本地 SQLite，普通用户无需安装 Python、Node.js 或 Rust。支持 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 和 Ledger；连接独立的 PostgreSQL Nexa Core 后，可使用跨设备同步和真实自动化执行。
+
+## 下载与安装
+
+| 平台 | v0.6.0 安装包 |
+| --- | --- |
+| Windows 10/11 x64 | [Nexa_0.6.0_x64-setup.exe](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/download/v0.6.0/Nexa_0.6.0_x64-setup.exe) |
+| macOS Intel x86_64 | [Nexa_0.6.0_x64.dmg](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/download/v0.6.0/Nexa_0.6.0_x64.dmg) |
+
+安装包 SHA-256：
+
+```text
+Nexa_0.6.0_x64-setup.exe
+3d8c8a48fcfa898de3ed3d03bb918605fe59540d52ad7a12320014c60b61d1aa
+
+Nexa_0.6.0_x64.dmg
+b943e7b7163156e06e90c7035b2e111d0ba351db95608fc3cc6d6a297d1155aa
+```
+
+macOS 安装包目前**未签名、未经过 Apple 公证**，首次打开可能出现 Gatekeeper 提示。当前发布和实机验收覆盖 Intel x86_64；Apple Silicon 原生构建与 Universal Binary 尚未验证。
+
+## v0.6.0 主要功能
+
+- **Core 权威自动化**：支持 Manual、Schedule、Data Changed、Agent Task Completed 触发器，以及 Ledger、Data、Agent、公开 HTTPS Webhook 动作。Core 统一调度和执行，Local 转发立即运行请求并读取 Core 执行历史。
+- **持久化运行状态**：自动化执行与事件持久化，包含重试、lease/fencing 和幂等保护；Local 不运行真实自动化 scheduler 或 worker。
+- **本地优先与后台同步**：Ledger、Websites、Data 可离线读写；修改持久保存在 outbox，连接恢复后自动同步。
+- **Conflict Center**：支持 Keep Local / Keep Remote，保留真实冲突及远端快照，显式决定最终值。
+- **个人状态同步**：同步安全个人偏好、Dashboard 布局和 Automation 定义；设备状态、执行历史、运行时表和凭证不参与 replica 同步。
+- **桌面可靠性**：改进 sidecar 启停与恢复，打包 IANA 时区数据，支持干净 Windows 环境中的设置与时区校验。
+
+当前版本使用 **Sync Protocol 3**、personal-state **generation 3**，Alembic head 为 **`0017_automation_engine`**。请同时升级 Core 和所有桌面客户端。同步边界见 [数据归属与同步边界](docs/sync-scopes.md)，实现细节见 [开发阶段实现与验证记录](docs/automation-engine-2026-10-03.md)。
+
+Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/actions/runs/37304312269) 六项 required jobs 全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
+
+## 版本演进
 
 v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。v0.5.5 新增 Local-only Agent Data Actions、显式 dataScopes、原子审计/幂等 receipt 和 OpenClaw 原生 typed Tool Plugin；已有 Agent 默认无数据权限，write 不包含 delete。详见 [Agent Data Actions](docs/agent-data-actions.md)。
 
 ## Nexa Desktop
 
-推荐个人用户使用 [Windows 安装包](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases)。首次启动会在用户 AppData 中创建数据库和密钥，随后直接显示登录/注册页。点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步 Ledger、Websites 和 Data；Settings → Sync 保留立即同步与显式冲突处理入口。
+个人用户可直接安装上方对应平台的安装包。首次启动会在用户数据目录中创建数据库和密钥，随后显示登录/注册页。Windows 点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。macOS 关闭窗口后 Backend 保持运行，使用 Cmd+Q 完整退出。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步业务数据及安全个人状态；Settings → Sync 提供同步状态、立即同步和 Conflict Center。
 
 开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
 
 ```powershell
 npm ci
-python -m pip install -r backend/requirements.txt
+python -m pip install -r backend/requirements.txt 'pyinstaller>=6,<7'
 npm run desktop:build
 ```
 
@@ -95,7 +129,7 @@ Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/nexa
 
 Automation 的真实运行需要连接 Core，并配置一个支持的触发器和类型化动作。旧工作流保留，模拟 `test-run` 不产生业务副作用。Webhook 仅允许公开 HTTPS 目标，不支持凭据或秘密；远端应识别 `Idempotency-Key`。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
 
-Settings 的存储用量、跨设备同步和双重身份验证尚未实现。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。通知尚无统一事件来源，保持空状态。
+Settings 中的安全个人偏好（theme、language、timezone、appearance、notifications）支持后台同步；全局主题切换、存储用量统计和双重身份验证尚未提供。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。通知尚无统一事件来源，保持空状态。
 
 ## Agent Runtime
 
@@ -150,8 +184,15 @@ Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 S
 | GET、PATCH、DELETE | `/api/v1/data/records/{id}` | 记录读取、修改、删除 |
 | GET、POST | `/api/v1/automations` | 工作流列表与创建 |
 | GET、PATCH、DELETE | `/api/v1/automations/{id}` | 工作流读取、修改、删除 |
-| GET | `/api/v1/automations/{id}/executions` | 执行历史 |
+| POST | `/api/v1/automations/{id}/run` | 请求 Core 创建真实手动执行；Local 转发请求 |
+| GET | `/api/v1/automations/{id}/executions?runtime=true` | Core 执行历史；Local 转发查询 |
+| GET | `/api/v1/automations/{id}/executions/{execution_id}` | 真实执行详情 |
+| GET | `/api/v1/automations/{id}/runtime` | Core 自动化运行状态 |
 | POST | `/api/v1/automations/{id}/test-run` | 写入模拟成功的执行记录，不运行真实动作 |
+| GET | `/api/v1/sync/status` | Local 队列计数和后台同步状态 |
+| POST | `/api/v1/sync/run` | 手动运行与后台同步共用的同步引擎 |
+| GET | `/api/v1/sync/conflicts`、`/api/v1/sync/conflicts/{conflict_id}` | Local 冲突列表与详情 |
+| POST | `/api/v1/sync/conflicts/{conflict_id}/resolve` | 显式 Keep Local / Keep Remote |
 | GET、POST | `/api/v1/ledger/categories`、`/api/v1/ledger/transactions` | 分类与交易列表、创建 |
 | GET、PATCH、DELETE | `/api/v1/ledger/categories/{id}`、`/api/v1/ledger/transactions/{id}` | 分类与交易读取、修改、删除 |
 | GET | `/api/v1/ledger/summary?month=YYYY-MM` | 月度收支、趋势与分类统计 |
@@ -161,7 +202,7 @@ Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 S
 
 API Key 在 API 页面创建；请求体为 `{"name":"Production App","scopes":["Devices"],"expires_in_days":90}`。名称去首尾空白后须为 1–48 个字符；可用 scope 为 `Devices`、`Agents`、`Data`、`Automation`、`Read`，期限为 30、90、365 天或 `null`（永不过期）。`Read` 允许读取上述四个 GET 接口，其他 scope 只允许相应模块。Key 的明文仅在创建成功响应和当次页面弹窗中出现；请立即复制保存，关闭或刷新后无法找回。列表仅显示掩码。停用或过期的 Key 无法调用接口，过期 Key 无法重新启用。Key 不能访问账户、Dashboard、Key 管理或其他写入接口；这些接口仍须使用 JWT。API 页面中的请求日志、用量统计和 Webhook 暂不可用。
 
-设备添加后默认离线。旧 `POST /api/v1/devices/{id}/heartbeat` 仍接受用户 JWT，供兼容与开发调试；真实 Windows Client 使用下方 Device Token 接口。最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。当前版本未接入 AI 任务执行器，页面不会伪造指标、模型调用或任务完成结果。
+设备添加后默认离线。旧 `POST /api/v1/devices/{id}/heartbeat` 仍接受用户 JWT，供兼容与开发调试；真实 Windows Client 使用下方 Device Token 接口。最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。AI 任务通过已配置的 Agent Runtime Adapter 执行，页面不会伪造指标、模型调用或任务完成结果。
 
 ## Device Runtime
 
@@ -185,9 +226,9 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-v0.5.4 provides manual bidirectional synchronization for `ledger.category`, `ledger.transaction`, `website.category`, `website`, `data.collection`, and `data.record`. Offline edits remain durable; Core assigns authoritative revisions, and conflicts preserve local edits while tracking the latest remote snapshot. Local SQLite and Core PostgreSQL upgrade through `0014_multi_entity_sync`, with generation-based bootstrap preserving existing Ledger history. Client and Core must both use Protocol v2; mixed v0.5.3/v0.5.4 synchronization fails safely without losing queued edits or cursor state. Settings, Device, Agent, Automation and Dashboard are not synchronized. Background synchronization, sync UI and conflict resolution UI remain outside this release. Real HTTP/PostgreSQL/two-SQLite integration runs in `backend-postgres` CI. See [Sync Protocol v2](docs/sync.md).
+当前同步覆盖 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`、`user.preferences`、`dashboard.layout` 和 `automation.definition`。Core 分配权威 revision；Local 离线编辑持久化，后台同步处理重试、恢复与冲突，Conflict Center 提供显式解决入口。Local SQLite 和 Core PostgreSQL 升级至 `0017_automation_engine`，Client 与 Core 使用 Protocol 3。Device、Agent、凭证和真实自动化运行时状态不参与 replica 同步。详见 [同步协议](docs/sync.md) 和 [同步边界](docs/sync-scopes.md)。
 
-GitHub Actions runs frontend, backend SQLite, backend PostgreSQL, Windows device client, OpenClaw adapter, and desktop build checks on pushes and pull requests.
+GitHub Actions 在 push 和 pull request 上运行 `frontend`、`backend`、`backend-postgres`、`device-client`、`openclaw-adapter` 和 `desktop-windows`。Windows desktop job 包含原生构建、packaged sidecar smoke、安装包校验和 CI artifact 上传；PostgreSQL job 包含真实同步、后台恢复、冲突、个人状态和自动化集成测试。macOS 原生构建及跨设备验收在实机执行，不由 Windows job 替代。
 
 ## License
 
@@ -203,6 +244,6 @@ cd backend
 python -m pytest -q
 ```
 
-## v0.5.5 Agent Data Actions
+## 历史版本：v0.5.5 Agent Data Actions
 
-The native OpenClaw plugin exposes 29 typed Ledger/Website/Data tools plus `nexa_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Nexa Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. Product version is 0.5.5; Alembic head is `0015_agent_data_actions`; Sync Protocol remains v2. Settings and other management resources are excluded. See [architecture and installation](docs/agent-data-actions.md).
+v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data tools plus `nexa_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Nexa Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. That release used Alembic head `0015_agent_data_actions` and Sync Protocol v2. Settings and other management resources are excluded from Agent Data Actions. See [architecture and installation](docs/agent-data-actions.md).
