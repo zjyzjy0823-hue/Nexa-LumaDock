@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import re
 
 from change_impact import ROOT, arguments, git, human, plan
 
@@ -61,13 +62,17 @@ def commands(result):
 def ci_status(run_id, head):
     if not run_id:
         return {"status": "NOT_RUN", "runId": None, "url": None}
-    response = subprocess.run(["gh", "run", "view", run_id, "--json", "headSha,status,conclusion,url,jobs"], cwd=ROOT, capture_output=True, text=True)
+    response = subprocess.run(["gh", "run", "view", run_id, "--json", "headSha,workflowName,status,conclusion,url,jobs"], cwd=ROOT, capture_output=True, text=True)
     if response.returncode:
         raise ValueError("Unable to verify GitHub CI run")
     run = json.loads(response.stdout)
     if run["headSha"] != head:
         raise ValueError("CI run belongs to a different commit")
-    passed = run["conclusion"] == "success" and all(job["conclusion"] == "success" for job in run["jobs"])
+    if run["workflowName"] != "CI":
+        raise ValueError("Run is not the repository CI workflow")
+    required_jobs = set(re.findall(r"^  ([\w-]+):\s*$", (ROOT / ".github/workflows/ci.yml").read_text(), re.M))
+    completed_jobs = {job["name"] for job in run["jobs"] if job["conclusion"] == "success"}
+    passed = bool(required_jobs) and required_jobs <= completed_jobs and run["conclusion"] == "success" and all(job["conclusion"] == "success" for job in run["jobs"])
     return {"status": "PASS" if passed else "PENDING" if run["status"] != "completed" else "FAIL", "runId": run_id, "url": run["url"]}
 
 

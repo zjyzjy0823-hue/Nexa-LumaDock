@@ -118,7 +118,8 @@ class ImpactTests(unittest.TestCase):
         self.assertEqual(release.ci_status(None, "head")["status"], "NOT_RUN")
 
     def test_ci_requires_exact_commit_and_all_jobs_success(self):
-        run = {"headSha": "current", "status": "completed", "conclusion": "success", "url": "https://example.invalid", "jobs": [{"conclusion": "success"}]}
+        run = {"headSha": "current", "workflowName": "CI", "status": "completed", "conclusion": "success", "url": "https://example.invalid",
+               "jobs": [{"name": name, "conclusion": "success"} for name in ("frontend", "backend", "backend-postgres", "device-client", "openclaw-adapter", "desktop-windows", "validation-impact")]}
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "PASS")
             with self.assertRaises(ValueError):
@@ -129,6 +130,13 @@ class ImpactTests(unittest.TestCase):
         run.update(status="in_progress", conclusion="")
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "PENDING")
+        run["workflowName"] = "Other workflow"
+        with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
+            with self.assertRaises(ValueError):
+                release.ci_status("123", "current")
+        run.update(workflowName="CI", status="completed", conclusion="success", jobs=[])
+        with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
+            self.assertEqual(release.ci_status("123", "current")["status"], "FAIL")
 
 
 class SimpleResult:
