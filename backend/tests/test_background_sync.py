@@ -121,6 +121,43 @@ async def completed(coordinator, runner, count):
                  all(state.active is None for state in coordinator._workspaces.values()))
 
 
+async def initial_cycle_completed(coordinator, workspace_id):
+    await settle(lambda: coordinator.snapshot(workspace_id)["lastAttemptAt"] is not None)
+    active = coordinator._workspaces[workspace_id].active
+    if active is not None:
+        # No-op executor jobs can finish before the real SQLite/HTTP worker.
+        # Join the actual cycle; its finally block publishes the terminal state.
+        await asyncio.wait_for(asyncio.shield(active), timeout=5)
+    await settle()
+
+
+@async_test
+async def test_initial_cycle_completion_wait_joins_worker(local):
+    clock, runner = FakeClock(), Runner([result("unreachable")])
+    runner.release.clear()
+    coordinator = make_coordinator(local, clock, runner)
+    await restored(coordinator)
+    completion = None
+    try:
+        clock.advance(1)
+        assert await asyncio.to_thread(runner.started.wait, 5)
+        completion = asyncio.create_task(initial_cycle_completed(coordinator, local.workspace_id))
+        await settle()
+        await settle()
+        assert not completion.done()
+        assert coordinator.snapshot(local.workspace_id)["running"]
+        runner.release.set()
+        await completion
+        state = coordinator.snapshot(local.workspace_id)
+        assert not state["running"] and not state["blocked"]
+        assert state["nextRetryAt"] == (clock.utcnow() + timedelta(seconds=5)).isoformat()
+    finally:
+        runner.release.set()
+        await coordinator.stop()
+        if completion is not None:
+            await asyncio.gather(completion, return_exceptions=True)
+
+
 @async_test
 async def test_startup_initial_and_periodic_sync(local):
     clock, runner = FakeClock(), Runner()
@@ -445,8 +482,7 @@ async def test_real_engine_transport_failure_retry_classification_and_queue_safe
     await restored(coordinator)
     try:
         clock.advance(1)
-        await settle(lambda: coordinator.snapshot(local.workspace_id)["lastAttemptAt"] is not None and
-                     not coordinator.snapshot(local.workspace_id)["running"])
+        await initial_cycle_completed(coordinator, local.workspace_id)
         state = coordinator.snapshot(local.workspace_id)
         assert state["blocked"] is not retryable
         assert bool(state["nextRetryAt"]) is retryable
