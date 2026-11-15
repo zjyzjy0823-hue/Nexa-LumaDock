@@ -1,5 +1,6 @@
 """One shared Local sync cycle; every network call is outside a SQLite transaction."""
 
+import logging
 from contextlib import nullcontext
 from threading import Lock
 
@@ -17,8 +18,28 @@ from .protocol import SYNC_PROTOCOL_VERSION
 from .remote import SyncRemoteClient, SyncRemoteError
 
 
+logger = logging.getLogger(__name__)
+
 _locks_guard = Lock()
 _workspace_locks: dict[tuple[str, str], Lock] = {}
+
+# A cursor beyond the Core revision is not corruption: Core lost the history this
+# replica is based on (rebuild/restore) and only a snapshot can recover it.
+RESYNC_REQUIRED = "resync_required"
+# Snapshot recovery is a whole-workspace operation, so it waits for a running cycle
+# exactly like a conflict decision does (see conflicts.RESOLVE_LOCK_TIMEOUT_SECONDS).
+RESYNC_LOCK_TIMEOUT_SECONDS = 10.0
+RESYNC_PAGE_LIMIT = 200
+RESYNC_SNAPSHOT_RESTARTS = 2
+# A snapshot may omit the parent of a child it still returns: the parent was written
+# after the pinned revision and is filtered out. Storage-level foreign keys would
+# reject such a child (PostgreSQL), so the child is deferred rather than applied.
+# Deferring alone is not enough — the child's own change revision is <= R, so
+# `/changes?cursor=R` will never replay it — therefore a round with skips is
+# followed by one more snapshot round, which pins a newer revision that does
+# include the parent.
+RESYNC_SKIPPED = frozenset({"missing_category", "collection_not_found"})
+RESYNC_SNAPSHOT_ROUNDS = 2
 
 
 class SyncCycleCancelled(Exception):
@@ -156,12 +177,81 @@ def _send(factory, workspace_id: str, remote, mutation_id: str, cancel_event=Non
         raise
 
 
+def _apply_entity(db, user_id: int, workspace_id: str, entity_type: str, entity_id: str,
+                  operation: str, revision: int, data) -> str:
+    """Apply one remote entity state at ``revision``; the caller owns the transaction.
+
+    Shared by the `/changes` replay (`_apply_change`) and snapshot recovery
+    (`_apply_snapshot`) so both keep exactly one ownership/conflict semantic. It
+    never touches the cursor: each caller decides what advancing it means.
+
+    Returns ``applied``, ``deleted``, ``conflict``, ``echo`` (Core echoed a revision
+    this replica already holds, so the local pending tail wins) or ``absent`` (a
+    tombstone for an entity this replica never had).
+    """
+    adapter = get_adapter(entity_type)
+    schema = adapter.schema
+    item = adapter.find(db, entity_id, workspace_id)
+    if item is not None and adapter.workspace_id(db, item) != workspace_id:
+        raise SyncRemoteError("ownership_conflict")
+    if item is not None and revision <= item.sync_revision:
+        return "echo"
+    entries = _entries(db, workspace_id, entity_type, entity_id)
+    if entries:
+        conflict = {"currentRevision": revision,
+                    "current": data if operation == "upsert" else None,
+                    "deleted": operation == "delete"}
+        for entry in entries:
+            if entry.status == "pending" and entry.depends_on_mutation_id is not None:
+                # The predecessor owns the unresolved conflict. Keep its
+                # editable tail blocked and avoid a second frozen row.
+                continue
+            if entry.status == "conflict" and revision <= max(
+                    entry.result_revision or 0,
+                    (entry.conflict_json or {}).get("currentRevision", 0)):
+                # A push response can already know a revision beyond the
+                # pull cursor. Older history must not regress that snapshot.
+                continue
+            if entry.status == "conflict" or (
+                    entry.status in ("pending", "in_flight") and entry.base_revision < revision):
+                # Keep the conflict owner's remote snapshot current without
+                # changing the local edit, its base, or its blocked tail.
+                detected_at = (entry.conflict_json or {}).get("detectedAt") or (
+                    iso_utc(entry.updated_at) if entry.status == "conflict" else iso_utc(utcnow()))
+                entry.status = "conflict"
+                entry.conflict_json = {**conflict, "detectedAt": detected_at}
+                entry.result_revision = revision
+        return "conflict"
+    if operation == "upsert":
+        try:
+            payload = schema.model_validate(data)
+        except ValidationError:
+            raise SyncRemoteError("invalid_response") from None
+        reason = adapter.remote_dependency_error(db, workspace_id, payload, item)
+        if reason:
+            raise SyncRemoteError("missing_category" if reason == "category_not_found" else reason)
+        if item is None:
+            item = adapter.create(db, entity_id, user_id, workspace_id, payload)
+            db.add(item)
+        adapter.apply_data(item, payload)
+        item.deleted_at = None
+        item.sync_revision = revision
+        return "applied"
+    if item is None:
+        return "absent"
+    item.deleted_at = utcnow()
+    item.sync_revision = revision
+    return "deleted"
+
+
 def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> None:
     if not isinstance(change, dict):
         raise SyncRemoteError("invalid_response")
     entity_type, entity_id = change.get("entityType"), change.get("entityId")
     operation, revision = change.get("operation"), change.get("revision")
     adapter = get_adapter(entity_type)
+    if not isinstance(entity_type, str):
+        raise SyncRemoteError("unknown_entity_type")
     if adapter.identity_error(entity_id, operation):
         raise SyncRemoteError("invalid_response")
     if (not isinstance(entity_id, str) or
@@ -174,62 +264,9 @@ def _apply_change(factory, user_id: int, workspace_id: str, change: dict) -> Non
         state = get_local_sync_state(db, workspace_id)
         if revision != state.cursor + 1:
             raise SyncRemoteError("invalid_response")
-        adapter = get_adapter(entity_type)
-        model, schema = adapter.model, adapter.schema
-        item = adapter.find(db, entity_id, workspace_id)
-        if item is not None and adapter.workspace_id(db, item) != workspace_id:
-            raise SyncRemoteError("ownership_conflict")
-        if item is not None and revision <= item.sync_revision:
-            # Core echoes our own acknowledged mutation. The local pending tail wins.
-            state.cursor = revision
-            db.commit()
-            return
-        entries = _entries(db, workspace_id, entity_type, entity_id)
-        if entries:
-            conflict = {"currentRevision": revision,
-                        "current": change.get("data") if operation == "upsert" else None,
-                        "deleted": operation == "delete"}
-            for entry in entries:
-                if entry.status == "pending" and entry.depends_on_mutation_id is not None:
-                    # The predecessor owns the unresolved conflict. Keep its
-                    # editable tail blocked and avoid a second frozen row.
-                    continue
-                if entry.status == "conflict" and revision <= max(
-                        entry.result_revision or 0,
-                        (entry.conflict_json or {}).get("currentRevision", 0)):
-                    # A push response can already know a revision beyond the
-                    # pull cursor. Older history must not regress that snapshot.
-                    continue
-                if entry.status == "conflict" or (
-                        entry.status in ("pending", "in_flight") and entry.base_revision < revision):
-                    # Keep the conflict owner's remote snapshot current without
-                    # changing the local edit, its base, or its blocked tail.
-                    detected_at = (entry.conflict_json or {}).get("detectedAt") or (
-                        iso_utc(entry.updated_at) if entry.status == "conflict" else iso_utc(utcnow()))
-                    entry.status = "conflict"
-                    entry.conflict_json = {**conflict, "detectedAt": detected_at}
-                    entry.result_revision = revision
-            state.cursor = revision
-            db.commit()
-            return
-        if operation == "upsert":
-            try:
-                data = schema.model_validate(change.get("data"))
-            except ValidationError:
-                raise SyncRemoteError("invalid_response") from None
-            reason = adapter.remote_dependency_error(db, workspace_id, data, item)
-            if reason:
-                raise SyncRemoteError("missing_category" if reason == "category_not_found" else reason)
-            if item is None:
-                item = adapter.create(db, entity_id, user_id, workspace_id, data)
-                db.add(item)
-            adapter.apply_data(item, data)
-            item.deleted_at = None
-        elif item is None:
+        if _apply_entity(db, user_id, workspace_id, entity_type, entity_id,
+                         operation, revision, change.get("data")) == "absent":
             raise SyncRemoteError("invalid_local_state")
-        else:
-            item.deleted_at = utcnow()
-        item.sync_revision = revision
         state.cursor = revision
         db.commit()  # Entity, conflict state and cursor have one crash boundary.
 
@@ -303,6 +340,152 @@ def _counts(factory, workspace_id: str) -> dict:
                 "cursor": state.cursor, "lastError": state.last_error}
 
 
+def _entity_depth(entity_type: str) -> int:
+    """Parent-before-child application order, derived from the adapter graph."""
+    depth, seen = 0, {entity_type}
+    adapter = get_adapter(entity_type)
+    while adapter.parent_type is not None and adapter.parent_type not in seen:
+        seen.add(adapter.parent_type)
+        adapter = get_adapter(adapter.parent_type)
+        depth += 1
+    return depth
+
+
+def _snapshot_row(row, revision: int) -> tuple:
+    """Validate one snapshot entity and normalize it to an application instruction."""
+    if not isinstance(row, dict):
+        raise SyncRemoteError("invalid_response")
+    entity_type, entity_id = row.get("entityType"), row.get("entityId")
+    deleted, entity_revision = row.get("deleted"), row.get("syncRevision")
+    adapter = get_adapter(entity_type)
+    operation = "delete" if deleted is True else "upsert"
+    if (type(deleted) is not bool or adapter.identity_error(entity_id, operation) or
+            not isinstance(entity_id, str) or type(entity_revision) is not int or
+            not 0 <= entity_revision <= revision):
+        raise SyncRemoteError("invalid_response")
+    _validate_snapshot(adapter, row.get("data"), deleted)
+    if not deleted and row.get("data") is None:
+        raise SyncRemoteError("invalid_response")
+    return entity_type, entity_id, operation, entity_revision, row.get("data")
+
+
+def _fetch_snapshot(remote, page_limit: int) -> tuple[int, list]:
+    """Every entity of one pinned snapshot, pages followed to exhaustion.
+
+    ``snapshot_expired`` cannot be resumed: contract §11.4 says to drop the paging
+    state and issue a fresh first request (which pins a new revision). Restarts are
+    bounded so a Core that keeps expiring snapshots cannot spin here forever.
+    """
+    for _attempt in range(RESYNC_SNAPSHOT_RESTARTS + 1):
+        revision, snapshot_id, cursor, rows = None, None, None, []
+        try:
+            while True:
+                page = remote.get_snapshot(snapshot_id=snapshot_id, cursor=cursor, limit=page_limit)
+                if revision is None:
+                    revision = page["workspaceRevision"]
+                elif page["workspaceRevision"] != revision:
+                    # Pages must all describe the revision the first one pinned;
+                    # a moving revision would tear the recovered state.
+                    raise SyncRemoteError("invalid_response")
+                snapshot_id = page["snapshotId"]
+                rows.extend(_snapshot_row(row, revision) for row in page["entities"])
+                if not page["hasMore"]:
+                    return revision, rows
+                cursor = page["cursor"]
+        except SyncRemoteError as error:
+            if error.code != "snapshot_expired":
+                raise
+    raise SyncRemoteError("snapshot_expired")
+
+
+def _apply_snapshot(factory, user_id: int, workspace_id: str, revision: int, rows) -> tuple:
+    """Apply a whole snapshot and advance the cursor to its revision, atomically.
+
+    One transaction for the batch: a crash can only redo the recovery, never leave
+    the cursor ahead of applied state. Nothing is deleted for being *absent* from
+    the snapshot (contract §11.3.1) — only explicit tombstones are applied.
+    """
+    applied = deleted = conflicts = skipped = 0
+    # `(entityType, entityId)` puts `website` before `website.category` and
+    # `data.record` before `data.collection`, so parents are applied first.
+    order = sorted(rows, key=lambda row: (row[2] == "delete", _entity_depth(row[0]), row[0], row[1]))
+    with factory() as db:
+        state = get_local_sync_state(db, workspace_id)
+        for entity_type, entity_id, operation, entity_revision, data in order:
+            try:
+                outcome = _apply_entity(db, user_id, workspace_id, entity_type, entity_id,
+                                        operation, entity_revision, data)
+            except SyncRemoteError as error:
+                if error.code not in RESYNC_SKIPPED:
+                    raise
+                logger.info("Resync deferred %s %s: %s", entity_type, entity_id, error.code)
+                skipped += 1
+                continue
+            # Sessions run with autoflush disabled, so a parent applied earlier in
+            # this same transaction is only visible to the children's `db.get`
+            # after a flush — which keeps the whole batch in one transaction.
+            db.flush()
+            applied += outcome == "applied"
+            deleted += outcome == "deleted"
+            conflicts += outcome == "conflict"
+        state.cursor = revision
+        state.last_error = None
+        db.commit()
+    return applied, deleted, conflicts, skipped
+
+
+def run_resync(factory, user_id: int, workspace_id: str, metadata=None, credential=None,
+               remote=None, *, page_limit: int | None = None) -> dict:
+    """Rebuild this Local replica from a Core snapshot (protocol v3 §11).
+
+    Holds the workspace lock for the whole recovery, so a background cycle can never
+    interleave with it. The outbox is read but never modified: local edits keep their
+    `base_revision` and become conflicts on the next push instead of being dropped.
+    """
+    page_limit = page_limit or RESYNC_PAGE_LIMIT
+    with factory() as db:
+        database_key = str(db.get_bind().url)
+    lock = _lock_for(database_key, workspace_id)
+    if not lock.acquire(timeout=RESYNC_LOCK_TIMEOUT_SECONDS):
+        raise HTTPException(409, "sync_in_progress")
+    try:
+        with factory() as db:
+            if metadata is not None:
+                bind_local_sync_state(db, workspace_id, metadata)
+            # Seed before applying: a revision-zero local row must become a pending
+            # edit (and therefore a conflict) instead of being silently overwritten.
+            seed_local_queue(db, workspace_id)
+            db.commit()
+        if remote is not None:
+            context = nullcontext(remote)
+        elif metadata is not None:
+            context = SyncRemoteClient(metadata.coreUrl, credential or "")
+        else:
+            raise SyncRemoteError("invalid_local_state")
+        applied = deleted = conflicts = 0
+        revision, skipped = 0, 0
+        with context as transport:
+            for _round in range(RESYNC_SNAPSHOT_ROUNDS):
+                revision, rows = _fetch_snapshot(transport, page_limit)
+                round_applied, round_deleted, round_conflicts, skipped = _apply_snapshot(
+                    factory, user_id, workspace_id, revision, rows)
+                applied += round_applied
+                deleted += round_deleted
+                conflicts += round_conflicts
+                if not skipped:
+                    break
+        if skipped:
+            # Two rounds and still short: Core is being written continuously, so the
+            # deferred rows stay missing until the next recovery. Never silent.
+            logger.warning("Resync finished with %s deferred entities at revision %s",
+                           skipped, revision)
+        counts = _counts(factory, workspace_id)
+        return {"workspaceRevision": revision, "applied": applied, "deleted": deleted,
+                "conflicts": conflicts, "pending": counts["pending"], "cursor": counts["cursor"]}
+    finally:
+        lock.release()
+
+
 def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credential: str,
                    remote=None, *, cancel_event=None) -> dict:
     """Synchronize one Local Personal Workspace. A caller may inject a test transport."""
@@ -366,7 +549,11 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
             state = get_local_sync_state(db, workspace_id)
             state.last_error = error.code
             db.commit()
-        return {"status": "error", "pushed": pushed, "pulled": pulled,
+        # `resync_required` is a clean stop, not a cycle failure: the outbox and the
+        # cursor are untouched, the scheduler keeps running, and only the explicit
+        # `POST /sync/resync` (user or UI) rebuilds the replica.
+        return {"status": RESYNC_REQUIRED if error.code == RESYNC_REQUIRED else "error",
+                "pushed": pushed, "pulled": pulled,
                 **_counts(factory, workspace_id), "workspaceRevision": workspace_revision}
     finally:
         lock.release()

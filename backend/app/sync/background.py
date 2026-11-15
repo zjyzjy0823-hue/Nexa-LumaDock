@@ -20,7 +20,7 @@ from sqlalchemy import select
 from .. import core_connection
 from ..models import LocalSyncState, User, Workspace, utcnow
 from ..utils.time import iso_utc
-from .engine import SyncCycleCancelled, _counts, run_sync_cycle
+from .engine import RESYNC_REQUIRED, SyncCycleCancelled, _counts, run_sync_cycle
 from .local import get_local_sync_state
 from .remote import SyncRemoteError
 
@@ -33,6 +33,11 @@ SAFE_SYNC_ERRORS = RETRYABLE_ERRORS | frozenset({
     "ownership_conflict", "missing_category", "collection_not_found",
     "category_not_found", "unknown_entity_type", "missing_collection",
     "collection_id_immutable", "invalid_client", "internal_error",
+    # Recovery states, not failures: the replica is intact but Core lost the
+    # history it was based on (`resync_required`), or the recovery snapshot it
+    # was paging expired and must be restarted (`snapshot_expired`). Both must
+    # reach the UI verbatim instead of being masked as `internal_error`.
+    "resync_required", "snapshot_expired",
 })
 
 
@@ -391,6 +396,16 @@ class BackgroundSyncCoordinator:
                     state.failures = 0
                     state.blocked = False
                     state.due = self.clock() + self.config.periodic_interval
+                elif result.get("status") == RESYNC_REQUIRED:
+                    # Core no longer has the history this replica is based on. That
+                    # is not a transport fault: keep the workspace scheduled and the
+                    # outbox intact so the user can trigger `POST /sync/resync` from
+                    # the UI (design §3: never rebuild automatically).
+                    state.failures = 0
+                    state.blocked = False
+                    state.retry_due = state.next_retry = None
+                    state.due = self.clock() + self.config.periodic_interval
+                    logger.info("Sync paused: resync_required")
                 elif result.get("status") == "busy" or result.get("lastError") in RETRYABLE_ERRORS:
                     index = min(state.failures, len(self.config.retry_delays) - 1)
                     delay = self.config.retry_delays[index]

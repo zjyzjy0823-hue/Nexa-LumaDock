@@ -15,10 +15,11 @@ from ..security import client_from_token, current_user
 from ..sync.protocol import SYNC_PROTOCOL_VERSION
 from ..sync.adapters import seed_version
 from ..sync.local import seed_local_queue
-from ..sync.engine import run_sync_cycle
+from ..sync.engine import run_resync, run_sync_cycle
 from ..sync.conflicts import get_conflict, list_conflicts, resolve_conflict
 from ..sync.notifications import get_coordinator
 from ..sync.background import SAFE_SYNC_ERRORS
+from ..sync.remote import SyncRemoteError
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
 from ..sync.snapshot import (SnapshotCursorInvalid, SnapshotExpired, build_snapshot)
 from ..utils.time import iso_utc
@@ -201,3 +202,39 @@ async def local_run(_local: None = Depends(require_local_mode), user: User = Dep
     # Standalone router embeddings keep the existing manual API and engine.
     from asyncio import to_thread
     return await to_thread(run_sync_cycle, factory, user_id, workspace_id, metadata, credential)
+
+
+# Core-side failures are reported with the same safe code the Local UI already
+# understands; the transport detail and credential never leave the client.
+_RESYNC_ERROR_STATUS = {"unauthorized": 401, "timeout": 503, "unreachable": 503}
+
+
+@router.post("/resync")
+def local_resync(_local: None = Depends(require_local_mode), user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """Rebuild this replica from a Core snapshot after `/changes` reported `resyncRequired`.
+
+    One call: pages the snapshot to exhaustion, applies it entity by entity (keeping
+    every pending local edit as a conflict instead of dropping it), and advances the
+    cursor to the snapshot revision. Concurrent with a sync cycle? It waits up to the
+    lock timeout, then `409 sync_in_progress`.
+    """
+    user_id = user.id
+    workspace_id = get_personal_workspace(db, user).id
+    # Release the request session's read transaction before the recovery opens its
+    # own short write transactions and performs network I/O.
+    db.rollback()
+    metadata = core_connection.load_connection(user_id)
+    if metadata is None:
+        raise HTTPException(409, "Core connection is not configured")
+    try:
+        credential = core_connection.credential_store.load(user_id)
+    except OSError:
+        credential = None
+    if not credential or not credential.startswith("nc_live_"):
+        raise HTTPException(401, "Client credential is unavailable")
+    factory = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False)
+    try:
+        return run_resync(factory, user_id, workspace_id, metadata, credential)
+    except SyncRemoteError as error:
+        raise HTTPException(_RESYNC_ERROR_STATUS.get(error.code, 502), error.code) from None
