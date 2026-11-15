@@ -20,8 +20,10 @@ OFFSET_INPUTS = [
     "2026-10-02T17:48:00+08:00",
     "2026-10-02T05:48:00-04:00",
     "2026-10-02T09:48:00Z",
-    "2026-10-02T09:48:00",
 ]
+# A value without an offset is wall time in the app timezone (see
+# tests/test_ledger_naive_occurred_at.py), so it is not canonicalized here.
+NAIVE_INPUT = "2026-10-02T09:48:00"
 TRANSACTION = {"type": "expense", "amount": "38.00", "description": "Timezone proof"}
 ROOT = "/api/v1/ledger/transactions"
 
@@ -31,6 +33,14 @@ def assert_utc_row(db, entity_id):
     # SQLite can return naive datetimes; its stored wall-clock must already be UTC.
     assert item.occurred_at.replace(tzinfo=None) == UTC_TIME.replace(tzinfo=None)
     assert ledger.transaction_out(item)["occurredAt"] == UTC_TEXT
+
+
+def test_input_schemas_keep_naive_values_for_the_service_layer():
+    for model in (
+        ledger.TransactionInput(**TRANSACTION, occurred_at=NAIVE_INPUT),
+        ledger.TransactionPatch(occurred_at=NAIVE_INPUT),
+    ):
+        assert model.occurred_at == datetime(2026, 10, 2, 9, 48) and model.occurred_at.tzinfo is None
 
 
 @pytest.mark.parametrize("occurred_at", OFFSET_INPUTS)

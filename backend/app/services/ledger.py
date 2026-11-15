@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from ..utils.time import aware_utc, iso_utc, month_key
+from ..utils.time import assume_zone, aware_utc, iso_utc, month_key
 from ..database import runtime_config
 from ..models import LedgerCategory, LedgerTransaction, User, utcnow
 from .ownership import owner_workspace
@@ -47,7 +47,9 @@ class TransactionInput(BaseModel):
     @field_validator("occurred_at")
     @classmethod
     def normalize_occurred_at(cls, value: datetime) -> datetime:
-        return aware_utc(value)
+        # A naive value means wall time in the app timezone; the service layer
+        # resolves it once the effective timezone is known.
+        return aware_utc(value) if value.tzinfo is not None else value
 
     @field_validator("description")
     @classmethod
@@ -69,6 +71,8 @@ class TransactionPatch(BaseModel):
     @field_validator("occurred_at")
     @classmethod
     def normalize_occurred_at(cls, value: datetime | None) -> datetime | None:
+        if value is None or value.tzinfo is None:
+            return value
         return aware_utc(value)
 
     @field_validator("description")
@@ -226,11 +230,13 @@ def create_transaction(
 ):
     prepare_write(db, user)
     check_category(db, user, payload.category_id, payload.type)
+    values = payload.model_dump()
+    values["occurred_at"] = assume_zone(payload.occurred_at, runtime_config.app_timezone)
     item = LedgerTransaction(
         id=str(uuid4()),
         user_id=user.id,
         workspace_id=owner_workspace(db, user),
-        **payload.model_dump(),
+        **values,
     )
     db.add(item)
     publish_ledger(db, item)
@@ -251,6 +257,8 @@ def patch_transaction(
     prepare_write(db, user)
     item = transaction_or_404(db, user, id)
     values = payload.model_dump(exclude_unset=True)
+    if values.get("occurred_at") is not None:
+        values["occurred_at"] = assume_zone(values["occurred_at"], runtime_config.app_timezone)
     kind = values.get("type", item.type)
     category_id = values.get("category_id", item.category_id)
     if kind is None:
