@@ -32,9 +32,9 @@ macOS 安装包目前**未签名、未经过 Apple 公证**，首次打开可能
 - **个人状态同步**：同步安全个人偏好、Dashboard 布局和 Automation 定义；设备状态、执行历史、运行时表和凭证不参与 replica 同步。
 - **桌面可靠性**：改进 sidecar 启停与恢复，打包 IANA 时区数据，支持干净 Windows 环境中的设置与时区校验。
 
-当前版本使用 **Sync Protocol 3**、personal-state **generation 3**，Alembic head 为 **`0017_automation_engine`**。请同时升级 Core 和所有桌面客户端。同步边界见 [数据归属与同步边界](docs/sync-scopes.md)，实现细节见 [开发阶段实现与验证记录](docs/automation-engine-2026-10-03.md)。
+当前版本使用 **Sync Protocol 3**、personal-state **generation 3**，Alembic head 为 **`0018_data_record_tenancy`**。请同时升级 Core 和所有桌面客户端。同步边界见 [数据归属与同步边界](docs/sync-scopes.md)，实现细节见 [开发阶段实现与验证记录](docs/automation-engine-2026-10-03.md)。
 
-Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/actions/runs/37304312269) 六项 required jobs 全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
+Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/actions/runs/37304312269) 八项 required jobs（validation-impact、frontend、contracts、backend、backend-postgres、device-client、openclaw-adapter、desktop-windows）全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
 
 ## 版本演进
 
@@ -60,7 +60,7 @@ npm run desktop:build
 
 ### 开发启动
 
-需要 Node.js 和 Python 3.11+。在 `backend` 目录复制 `.env.example` 为 `.env`，将 `JWT_SECRET` 改为随机长字符串。`.env` 已被 Git 忽略。
+需要 Node.js 22 与 Python 3.12。在 `backend` 目录复制 `.env.example` 为 `.env`，将 `JWT_SECRET` 改为随机长字符串。`.env` 已被 Git 忽略。
 
 ```powershell
 cd backend
@@ -78,6 +78,23 @@ npm run dev
 ```
 
 打开 `http://127.0.0.1:5173/`。首次进入会显示登录与注册页，只需设置用户名和密码。登录后可从侧边栏头像菜单退出；首页问候语使用当前用户名。网站、设备、智能体、设置、数据集合、工作流和账本的更改在刷新浏览器后仍会保留。前端将 `/api` 代理到本地后端。接口文档位于 `http://127.0.0.1:8000/docs`。
+
+### 连接 Nexa Core（Web 模式必读）
+
+Web 开发模式要连 Core，必须先给后端两个环境变量；缺任一个，`POST /api/v1/core/connect` 会返回 409：
+
+| 变量 | 作用 | 缺省后果 |
+| --- | --- | --- |
+| `NEXA_INSTALLATION_ID` | 本机安装身份（UUID） | `409 Local installation ID is not configured` |
+| `NEXA_DATA_DIR` | 存放 Client 凭证的目录 | `409 Local data directory is not configured` |
+
+```bash
+export NEXA_INSTALLATION_ID="11111111-2222-4333-8444-555555555555"
+export NEXA_DATA_DIR="$HOME/.nexa-data"
+mkdir -p "$NEXA_DATA_DIR"
+```
+
+Desktop 安装包由 sidecar 自动注入这两个变量（`backend/desktop_entry.py`），无需手工设置。
 
 ## 项目结构
 
@@ -226,13 +243,13 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 ## CI
 
-当前同步覆盖 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`、`user.preferences`、`dashboard.layout` 和 `automation.definition`。Core 分配权威 revision；Local 离线编辑持久化，后台同步处理重试、恢复与冲突，Conflict Center 提供显式解决入口。Local SQLite 和 Core PostgreSQL 升级至 `0017_automation_engine`，Client 与 Core 使用 Protocol 3。Device、Agent、凭证和真实自动化运行时状态不参与 replica 同步。详见 [同步协议](docs/sync.md) 和 [同步边界](docs/sync-scopes.md)。
+当前同步覆盖 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`、`user.preferences`、`dashboard.layout` 和 `automation.definition`。Core 分配权威 revision；Local 离线编辑持久化，后台同步处理重试、恢复与冲突，Conflict Center 提供显式解决入口。Local SQLite 和 Core PostgreSQL 升级至 `0018_data_record_tenancy`，Client 与 Core 使用 Protocol 3。Device、Agent、凭证和真实自动化运行时状态不参与 replica 同步。详见 [同步协议](docs/sync.md) 和 [同步边界](docs/sync-scopes.md)。
 
-GitHub Actions 在 push 和 pull request 上运行 `frontend`、`backend`、`backend-postgres`、`device-client`、`openclaw-adapter` 和 `desktop-windows`。Windows desktop job 包含原生构建、packaged sidecar smoke、安装包校验和 CI artifact 上传；PostgreSQL job 包含真实同步、后台恢复、冲突、个人状态和自动化集成测试。macOS 原生构建及跨设备验收在实机执行，不由 Windows job 替代。
+GitHub Actions 在 push 和 pull request 上运行 `validation-impact`、`frontend`、`contracts`、`backend`、`backend-postgres`、`device-client`、`openclaw-adapter` 和 `desktop-windows`。Windows desktop job 包含原生构建、packaged sidecar smoke、安装包校验和 CI artifact 上传；PostgreSQL job 包含真实同步、后台恢复、冲突、个人状态和自动化集成测试。macOS 原生构建及跨设备验收在实机执行，不由 Windows job 替代。
 
 契约变更由新增的 `contracts` job 把关：依次运行 `python3 scripts/check-contracts.py`、`node scripts/check-contracts.mjs` 和 `cargo test --manifest-path packages/contracts/rust/Cargo.toml`（契约校验三件套，共用 `packages/contracts/cases.json`，任一失败即拒绝合并）。
 
-本地复现：`bash scripts/ci-local.sh` 依次跑后端 pytest 快速子集与契约三件套；`--contracts-only` 只跑契约部分，`--with-frontend` 附带前端构建。
+本地复现：`bash scripts/ci-local.sh` 依次跑后端全量 pytest 与契约三件套（后端优先用仓库根 `.venv`，其次 `backend/.venv`；两者都没有时报错退出）；`--contracts-only` 只跑契约部分，`--with-frontend` 附带前端构建。
 
 ## License
 
@@ -256,4 +273,4 @@ v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data t
 
 本地针对性验证、v0.6.0 实机验收继承及报告命令见
 [Validation workflow](docs/validation-workflow.md)。设置 → 关于增加 Nexa Diagnostics
-与安全复制功能。开发版本为 0.6.1，正式发布仍需后续 Release Validation。
+与安全复制功能。0.6.1 已打 tag（`v0.6.1`）并包含本页 CI 段所述的契约与 PostgreSQL 门禁；后续补丁仍按 Release Validation 流程验证。

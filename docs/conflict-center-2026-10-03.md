@@ -1,5 +1,8 @@
 # Nexa v0.5.8 Conflict Center
 
+> **状态（2026-11-15 复核）**：本文是 2026-10-03 的 v0.5.8 Conflict Center 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
+
+
 ## Baseline audit
 
 Development starts from `codex/v0.5.7-background-sync` at
@@ -71,7 +74,7 @@ conflict. A busy sync engine returns controlled `409`; the user may try again.
 ## User interface
 
 Settings → Sync opens Conflict Center from the conflict count or attention entry.
-Six adapter entity types have readable fields. Differing values are highlighted;
+Nine adapter entity types have readable fields (six business + preferences, dashboard layout, automation definition). Differing values are highlighted;
 deleted versions are explicit. Data record JSON is available in a collapsed
 formatted view. Both choices require confirmation, including the warning that
 Keep Remote abandons later Local edits. A changed snapshot requires a fresh

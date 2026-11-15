@@ -1,5 +1,8 @@
 # Nexa v0.5.7 Background Auto Sync
 
+> **状态（2026-11-15 复核）**：本文是 2026-10-02 的 v0.5.6 后台自动同步 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
+
+
 Synchronization belongs to the Local Backend. A business write commits its row
 and durable outbox to SQLite before it requests background work. Core availability
 does not affect local write success, and no Vue timer invokes the sync engine.

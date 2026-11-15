@@ -1,5 +1,8 @@
 # v0.5.6 Core Connection + Manual Sync UI — 2026-10-02
 
+> **状态（2026-11-15 复核）**：本文是 2026-10-02 的 v0.5.6 Core Sync UI 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
+
+
 本次在 Windows 本机继续 `codex/v0.5.6-macos-local-client`。fetch 后远端基线为 `898ee82c63d8e63e5bdbe1bdf91dcfb88832ae25`。只补前端 API、状态逻辑和 Settings Sync UI；Backend、Sync Protocol v2、Alembic `0015_agent_data_actions`、queue seed 2、产品版本 0.5.6、Tauri CSP 和平台 shell 均未修改。开发、测试后仅本地提交，不 push、创建 PR、merge、tag 或 Release。
 
 ## 实现

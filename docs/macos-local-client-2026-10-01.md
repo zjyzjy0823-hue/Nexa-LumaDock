@@ -1,5 +1,8 @@
 # Nexa v0.5.6 macOS Local Client QA — 2026-10-01
 
+> **状态（2026-11-15 复核）**：本文是 2026-10-01 的 v0.5.6 macOS Local Client QA 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
+
+
 状态：开发与本地验证进行中，尚未达到 `LOCAL COMPLETE`。以下只记录实际执行结果，未运行的项目不视为通过。
 
 ## 机器与基线

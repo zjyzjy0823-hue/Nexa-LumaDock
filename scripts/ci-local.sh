@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地一键复现 CI：后端 pytest 快速子集 + 契约校验三件套（Python / Node / Rust）。
+# 本地一键复现 CI：后端全量 pytest + 契约校验三件套（Python / Node / Rust）。
 # 用法：bash scripts/ci-local.sh [--contracts-only] [--with-frontend]
 set -euo pipefail
 
@@ -17,7 +17,7 @@ usage() {
   --with-frontend    额外运行前端构建（npm run build），默认略过
   -h, --help         显示本帮助
 
-后端测试使用 backend/.venv 里已有的虚拟环境；缺失时跳过，本脚本不创建 venv。
+后端测试使用仓库根或 backend/ 下已有的 .venv（优先根目录）；都缺失时报错退出，本脚本不创建 venv。
 EOF
 }
 
@@ -41,10 +41,18 @@ fi
 
 if [[ "$CONTRACTS_ONLY" -eq 0 ]]; then
   step "backend: python -m pytest -q"
-  if [[ -x "$ROOT/backend/.venv/bin/python" ]]; then
-    (cd "$ROOT/backend" && .venv/bin/python -m pytest -q)
+  # CI 在 backend/ 下运行；本地 venv 可能在仓库根（README 的安装方式），
+  # 也可能在 backend/，两处都接受，避免静默跳过整个后端套件。
+  PYTEST_PY=""
+  for candidate in "$ROOT/.venv/bin/python" "$ROOT/backend/.venv/bin/python"; do
+    if [[ -x "$candidate" ]]; then PYTEST_PY="$candidate"; break; fi
+  done
+  if [[ -n "$PYTEST_PY" ]]; then
+    echo "==> 使用 $PYTEST_PY"
+    (cd "$ROOT/backend" && "$PYTEST_PY" -m pytest -q)
   else
-    echo "skip: backend/.venv 不存在（本脚本不创建虚拟环境；请按 docs 自建后重跑）"
+    echo "skip: 未找到 .venv（仓库根或 backend/），本脚本不创建虚拟环境；请按 README 自建后重跑" >&2
+    exit 3
   fi
 
   if [[ "$WITH_FRONTEND" -eq 1 ]]; then

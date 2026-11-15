@@ -1,8 +1,8 @@
-# Nexa Desktop v0.5.7
+# Nexa Desktop（当前 0.6.1；本文原始基线 v0.5.7）
 
 ## 安装与首次启动
 
-使用本地构建或正式发布后的 Windows 10/11 x64 的 `Nexa_0.5.7_x64-setup.exe` 安装包并安装。从开始菜单启动 Nexa。桌面程序会自动启动随安装包提供的 FastAPI Backend，创建用户数据目录，生成随机密钥，执行 Alembic 迁移，并在 Backend 就绪后打开现有 Vue 登录/注册页面。用户无需配置 `.env`，也无需安装 Python、Node.js 或 Rust。
+使用本地构建或正式发布后的 Windows 10/11 x64 的 `Nexa_<版本>_x64-setup.exe`（当前 0.6.1） 安装包并安装。从开始菜单启动 Nexa。桌面程序会自动启动随安装包提供的 FastAPI Backend，创建用户数据目录，生成随机密钥，执行 Alembic 迁移，并在 Backend 就绪后打开现有 Vue 登录/注册页面。用户无需配置 `.env`，也无需安装 Python、Node.js 或 Rust。
 
 Windows 数据目录由 Tauri `app_data_dir()` 和稳定标识 `com.isidel.nexa` 决定，通常为 `%APPDATA%\com.isidel.nexa\`。可在资源管理器地址栏输入 `%APPDATA%\com.isidel.nexa` 查找。安装目录与数据目录分离，更新或重新安装程序不会覆盖数据库。目录内容：
 
@@ -22,7 +22,7 @@ com.isidel.nexa/
 
 `nexa.db` 保存用户数据，`secret.key` 保存首次启动生成的 256 位随机 JWT 密钥。`installation.id` 是本机安装实例的稳定 UUID，不是密钥或认证凭证；重新安装后沿用该文件可保留安装身份。Phase 3 加入 Core 后，每个本地用户可有一个 `core-connections` 子目录：JSON 只存连接元数据，`credential` 独立保存 Core 签发的 `nc_live_` bearer secret。请妥善备份用户数据与密钥，保护凭证文件；未来可迁至系统 Keychain。Backend 日志轮转保留最近文件。密码、Token 和密钥不写入常规日志。
 
-可通过 Settings → Sync 或 Local Backend API `POST /api/v1/core/connect` 加入 Core，随后使用 `GET /api/v1/core/connection` 和 `POST /api/v1/core/connection/test` 查询与验证连接；`DELETE /api/v1/core/connection` 只删除本地连接，不撤销远端 Client，也不删除 Ledger、outbox 或游标。需要远端撤销时，用 Core 用户 JWT 调用 `POST /api/v1/clients/{id}/revoke`。公网 Core 必须通过 HTTPS 暴露。v0.5.7 由 Local Backend 在后台自动双向同步 Ledger、Websites 和 Data，原有 `POST /api/v1/sync/run` 和“立即同步”按钮继续保留；`GET /api/v1/sync/status` 返回队列计数和安全调度诊断。Core 离线时本地读写照常可用，离线修改持久保存在 SQLite，恢复 Core 后后台自动补传。关闭 Settings 页面或主窗口不影响后台同步。冲突保留本地编辑，并持续刷新最新远端快照，冲突解决 UI 尚未启用，Dashboard 等其他模块不参与同步。配置和实机 Release Gate 见 [Background Auto Sync](background-auto-sync-2026-10-02.md)。
+可通过 Settings → Sync 或 Local Backend API `POST /api/v1/core/connect` 加入 Core，随后使用 `GET /api/v1/core/connection` 和 `POST /api/v1/core/connection/test` 查询与验证连接；`DELETE /api/v1/core/connection` 只删除本地连接，不撤销远端 Client，也不删除 Ledger、outbox 或游标。需要远端撤销时，用 Core 用户 JWT 调用 `POST /api/v1/clients/{id}/revoke`。公网 Core 必须通过 HTTPS 暴露。v0.5.7 由 Local Backend 在后台自动双向同步 Ledger、Websites 和 Data，原有 `POST /api/v1/sync/run` 和“立即同步”按钮继续保留；`GET /api/v1/sync/status` 返回队列计数和安全调度诊断。Core 离线时本地读写照常可用，离线修改持久保存在 SQLite，恢复 Core 后后台自动补传。关闭 Settings 页面或主窗口不影响后台同步。冲突保留本地编辑，并持续刷新最新远端快照；冲突解决 UI 已随 v0.5.8 提供（Settings → Sync → Conflict Center），Dashboard 布局与 Automation 定义也参与同步。配置和实机 Release Gate 见 [Background Auto Sync](background-auto-sync-2026-10-02.md)。
 
 如果 Core 已注册本安装实例，而本地连接尚未保存成功，重新提供 Core 用户名和密码执行 `connect` 可恢复：Local 会查找同一 `installation.id`，显式轮换 Core 凭证并保存新连接。已撤销的 Client 不会自动恢复。本地连接元数据使用 `schemaVersion: 1` 严格验证，凭证由 `FileCredentialStore` 保存；未来可迁移至系统凭证库。已有 `connection.json` 时，普通 `connect` 不会覆盖，即使凭证文件遗失；该修复场景留给后续专门的 Repair 流程。
 
@@ -30,7 +30,7 @@ com.isidel.nexa/
 
 Windows 10/11 x64：点击窗口右上角 X 会隐藏窗口，Backend 继续运行。从系统托盘的 Nexa 图标选择“打开 Nexa”可以恢复；选择“退出 Nexa”才会退出桌面程序并停止 Backend。再次从开始菜单启动 Nexa 时只会聚焦已有窗口，不会启动第二个 Backend。
 
-Backend 固定监听 `http://127.0.0.1:17800`，仅可从本机访问。`GET /api/health` 返回产品版本 `0.5.7`。远程 Device Client 和原有 OpenClaw Runtime Adapter 可连接可访问的 Core Runtime；OpenClaw Data Tools 必须连接对应 Nexa Local（本机插件可连接 127.0.0.1:17800）。Desktop 的 Local Backend 不直接暴露到局域网。
+Backend 固定监听 `http://127.0.0.1:17800`，仅可从本机访问。`GET /api/health` 返回产品版本 `0.6.1`。远程 Device Client 和原有 OpenClaw Runtime Adapter 可连接可访问的 Core Runtime；OpenClaw Data Tools 必须连接对应 Nexa Local（本机插件可连接 127.0.0.1:17800）。Desktop 的 Local Backend 不直接暴露到局域网。
 
 macOS Intel x86_64：目标为原生 traffic lights、红色关闭后保留本地 Backend、Dock 点击恢复窗口、Cmd+Q 或“退出 Nexa”停止 Backend。实机验证状态以 [macOS QA 报告](macos-local-client-2026-10-01.md) 为准；完成前不声明 macOS 支持验收通过。Apple Silicon 与 Universal Binary 尚未验证。
 
@@ -80,9 +80,9 @@ macOS shell 使用 36px 顶部空间与原生 AppKit 控件；Windows 使用现�
 
 ## v0.5.5 数据升级
 
-同步实体为 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`。首次启动升级至 `0015_agent_data_actions`（包含原有 0014 多实体迁移），保留原数据、Ledger revision、outbox、cursor 与安装身份。Local `queue_seed_version` 会继续为已完成 Ledger seeding 的旧库补入 Website/Data，父实体先于子实体推送。普通页面隐藏 tombstone；删除网站分类会清空网站分类引用，删除 Collection 会逻辑删除 Records。
+同步实体为 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`。首次启动升级至 `0018_data_record_tenancy`（含 0014–0017 历史迁移），保留原数据、Ledger revision、outbox、cursor 与安装身份。Local `queue_seed_version` 会继续为已完成 Ledger seeding 的旧库补入 Website/Data，父实体先于子实体推送。普通页面隐藏 tombstone；删除网站分类会清空网站分类引用，删除 Collection 会逻辑删除 Records。
 
-Client 和 Core 必须同时使用 Sync Protocol v2；混合旧版同步会明确报错，queue/cursor 留存。手动 sync API 保持不变，连接元数据仍为 schemaVersion 1。Settings、Device、Agent、Automation 与 Dashboard 尚未同步；后台同步与冲突解决 UI 尚未实现。v0.5.6 已提供 Core Connection 和 Manual Sync UI，使用说明见下节。Settings 中可能跨设备共享的偏好与必须 Local-only 的连接/安全配置分类见 [Sync 说明](sync.md)。本版本可本地构建安装包，正式下载以随后单独发布的 Release 为准。
+Client 和 Core 必须同时使用 Sync Protocol 3；混合旧版同步会明确报错，queue/cursor 留存。手动 sync API 保持不变，连接元数据仍为 schemaVersion 1。Settings 个人偏好、Dashboard 布局与 Automation 定义已同步；Device、Agent 与 Dashboard 运行时状态不同步；后台同步与冲突解决 UI 均已实现。v0.5.6 已提供 Core Connection 和 Manual Sync UI，使用说明见下节。Settings 中可能跨设备共享的偏好与必须 Local-only 的连接/安全配置分类见 [Sync 说明](sync.md)。本版本可本地构建安装包，正式下载以随后单独发布的 Release 为准。
 
 ## v0.5.6 Core 连接与手动同步
 
@@ -93,7 +93,7 @@ Windows 与 macOS Local Client 可直接在 **设置 → 同步（Settings → S
 3. 数据同步卡片显示真实 pending、conflicts、inFlight、rejected、cursor、上次成功时间和安全错误提示。点击「立即同步」运行一次同步，查看上传/接收数量及更新后的状态。存在冲突时会提示当前版本暂不支持在界面解决。
 4. 「断开连接」需要确认：只移除这台设备保存的 Core 连接信息，不会删除本地数据，也不会自动撤销 Core 上的 Client。使用同一 Core 账户重连时，沿用 Backend 的安装身份恢复和凭证轮换逻辑；连接 UI 不重置 outbox 或 cursor，也不支持直接切换已绑定的 Core 身份。
 
-Core 不可用时，Ledger、Website、Data 仍先写入本机 SQLite。未连接时也能查看 Local outbox，「立即同步」禁用；已连接但 Core 离线时，手动同步安全失败，数据和队列留存。恢复 Core 后测试连接并再次点击「立即同步」即可。本版本没有自动同步、定时同步、启动同步或网络恢复同步；旧 Settings 同步配置字段继续保留兼容，但不再作为真实 Core 连接配置展示。
+Core 不可用时，Ledger、Website、Data 仍先写入本机 SQLite。未连接时也能查看 Local outbox，「立即同步」禁用；已连接但 Core 离线时，手动同步安全失败，数据和队列留存。恢复 Core 后测试连接并再次点击「立即同步」即可。v0.5.7 当时没有后台自动同步；自 v0.5.6 起 Local Backend 已内置后台自动同步（写入去抖 + 30 秒周期 + 退避重试），关闭设置页或主窗口不影响它。旧 Settings 同步配置字段仅保留兼容，不再作为真实 Core 连接配置展示。
 
 连接密码只在表单/连接请求中短暂使用，提交时清空，离开页面也清空；不会保存至 Settings 或浏览器存储。Core 用户登录 Token 和 Client credential 由 Backend 管理，前端只接收公开连接元数据。Desktop 前端只调用 `127.0.0.1:17800` 的 Local API，由 Local Backend 访问 Core；无需改变 Tauri CSP 或允许 WebView 直连 Core。Docker 测试 Core 的 `127.0.0.1:8000` 与 Local 端口不同。
 

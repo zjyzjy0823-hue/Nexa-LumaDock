@@ -15,6 +15,8 @@ python scripts/detect-change-impact.py --base f59b60de688a5a5b35471e2a47a4a31dd1
 python scripts/validate-release.py --include-worktree --run-local --evidence .git/v061-local-validation.json
 ```
 
+> 说明：示例里的 `python` 指仓库根的虚拟环境（`../.venv/bin/python`，Python 3.12）。系统自带 `python3` 没有 fastapi/pytest，直接用它跑 `--run-local` 会失败。
+
 The default impact input includes staged, unstaged and non-ignored untracked
 files. Explicit `--base`/`--head` compares commits; `--include-worktree` adds local
 changes, and requires the current HEAD. Renames inspect both the old and new

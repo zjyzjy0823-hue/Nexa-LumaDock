@@ -1,5 +1,8 @@
 # 架构审计 · v0.6.2 / 062-01
 
+> **进展（2026-11-15）**：本审计的 G3「无 resync/snapshot」与 `data_records` 租户列两项已落地——新增 `GET /api/v1/sync/snapshot`、`POST /api/v1/sync/resync`（protocol 3）与迁移 `0018_data_record_tenancy`；文中的行号与“没有 X”类结论均以当时（v0.6.1 审计时点）为准。
+
+
 **基线** `main @ ab9d3ed`（v0.6.1）
 **审计日期** 2026-11-15
 **任务编号** 062-01（架构审计）

@@ -1,5 +1,8 @@
 # V0.5.9 PERSONAL STATE SYNC REPORT
 
+> **状态（2026-11-15 复核）**：本文是 2026-10-03 的 v0.5.9 个人状态同步 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
+
+
 ## STATUS
 
 V0.5.9 IMPLEMENTATION COMPLETE. Implementation and the checks below are verified
