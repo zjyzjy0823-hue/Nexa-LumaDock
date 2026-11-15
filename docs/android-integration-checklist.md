@@ -11,9 +11,17 @@
 | 同步通道（`/api/v1/sync/*`） | **camelCase** | `entityType`、`baseRevision`、`mutationId` |
 | 业务 REST（`/api/v1/ledger/*` 等） | **snake_case** | `category_id`、`occurred_at` |
 
-⚠️ **业务 REST 不会拒绝未知字段**：传 `categoryId`（camelCase）不会报错，而是**静默忽略**，分类关联直接丢失。Android 端必须按 server 的 snake_case 构造业务请求；同步请求则相反。
+✅ **业务 REST 现在会拒绝未知字段**（v0.6.2 起 `extra="forbid"`）：拼错字段名直接 `422`，不会再静默丢数据。Android 端必须按 snake_case 构造业务请求；同步通道则相反。
 
-> 建议给业务输入模型加 `extra="forbid"`，或统一支持 camelCase alias —— 见「待办」。
+容易写错的几个真实字段：
+
+| 想传的 | 正确字段 | 错误写法（会 422） |
+| --- | --- | --- |
+| 交易分类 | `category_id` | `categoryId` |
+| 记录内容 | `data_json` | `data` / `dataJson` |
+| 发生时间 | `occurred_at` | `occurredAt` |
+
+> 记录内容在同步通道叫 `dataJson`、在业务 REST 叫 `data_json` —— 两套命名各自成立，别混用。
 
 ## 2. 时间格式
 
