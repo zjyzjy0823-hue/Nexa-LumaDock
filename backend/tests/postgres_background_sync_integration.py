@@ -41,7 +41,19 @@ def checked(client, method, path, *, expected=200, **kwargs):
     assert path != "/api/v1/sync/run", "This regression must never invoke manual sync"
     response = client.request(method, path, **kwargs)
     # Do not print response bodies, headers, credentials or raw HTTP exceptions.
-    assert response.status_code == expected, f"{method} {path}: HTTP {response.status_code}"
+    if response.status_code != expected:
+        # Surface only a short, machine-readable FastAPI detail ("sync_in_progress",
+        # "conflict_snapshot_changed", ...). It is an error code, never payload data,
+        # and without it a 409 here is indistinguishable from any other 409.
+        detail = ""
+        try:
+            value = response.json().get("detail")
+            if isinstance(value, str) and 0 < len(value) <= 80 and all(
+                    character.isalnum() or character in "_- " for character in value):
+                detail = f" ({value})"
+        except Exception:
+            pass
+        raise AssertionError(f"{method} {path}: HTTP {response.status_code}{detail}")
     return response.json() if expected != 204 else None
 
 
