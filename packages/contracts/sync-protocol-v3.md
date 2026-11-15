@@ -18,6 +18,7 @@
 | --- | --- | --- |
 | 客户端 → Core | `POST /api/v1/sync/mutations` | Client 凭证 `nc_live_*` |
 | 客户端 ← Core | `GET /api/v1/sync/changes` | Client 凭证 `nc_live_*` |
+| 客户端 ← Core（恢复） | `GET /api/v1/sync/snapshot`（§11） | Client 凭证 `nc_live_*` |
 | 用户 → 本地 Backend | `/api/v1/sync/conflicts*` | 用户 JWT |
 | 设备注册 | `POST /api/v1/clients/enroll` | 用户 JWT（Core 模式） |
 
@@ -31,7 +32,7 @@
 | --- | --- |
 | 编码 | UTF-8 JSON，`Content-Type: application/json` |
 | 命名 | **camelCase**（同步通道唯一命名风格；业务 REST 的 snake_case 不适用于此） |
-| 时间 | ISO 8601 UTC，`YYYY-MM-DDTHH:MM:SS[.ffffff]Z`（`iso_utc()` 产出） |
+| 时间 | ISO 8601 UTC，`YYYY-MM-DDTHH:MM:SS[.ffffff]` + 零偏移标记。**服务端目前输出 `+00:00`**（`iso_utc()`，例 `2026-11-15T03:00:00+00:00`），**客户端必须同时接受 `Z` 与 `+00:00`** 两种零偏移写法；非零偏移（`+08:00` 等）一律拒绝，因为存储侧统一 UTC。v0.7 起服务端统一输出 `Z` |
 | 金额 | **十进制字符串**，不是 JSON number。`"38.50"` ✅ / `38.5` ❌（`schemas.py:47-51` 强制） |
 | ID | UUID v4 字符串（小写连字符格式）。非 UUID → `invalid_id` |
 | 未知字段 | **一律拒绝**，不静默忽略（`extra="forbid"` / `invalid_fields`） |
@@ -195,10 +196,10 @@
 
 | 情况 | 状态码 | body |
 | --- | --- | --- |
-| `cursor > workspaceRevision` | `400` | `{"detail": "Invalid sync cursor"}` |
+| `cursor > workspaceRevision` | `400` | `{"detail": "Invalid sync cursor", "resyncRequired": true, "workspaceRevision": 44}` |
 | `protocolVersion != 3` | `409` | `{"detail": "sync_protocol_mismatch"}` |
 
-> ⚠️ **已知缺口（v0.6.1）**：`cursor` 失效没有独立的机器可读错误码，只有一个英文人话 `detail`；也**没有** resync 端点。客户端只能把它当作 `invalid_response` → 进 blocked 状态（`engine.py` 的现状）。修复属 090-01，届时本契约递增为 `400 {"detail":"sync_cursor_expired","resyncRequired":true}`。在此之前：**客户端不得自行把 cursor 重置为 0**，否则将重复应用全部历史并破坏 outbox 幂等假设。
+> ⚠️ **cursor 失效 = 必须恢复，不是可以重来**：`resyncRequired: true` 表示历史已经对不上号（Core 重建、从备份恢复、工作区被重建）。`detail` 字面量保持 `Invalid sync cursor` 不变（兼容既有断言与日志），新增的两个字段才是机器可读信号（`$defs/CursorError`）。此时**禁止**把 cursor 重置为 0 继续拉取 —— 那会重复应用全部历史并破坏 outbox 幂等假设；正确动作是改走 §11 的快照恢复。详细语义见 §11.5。
 
 ---
 
@@ -310,7 +311,7 @@ bash scripts/ci-local.sh --contracts-only   # 三件套一次跑完
 三者读取同一份 `cases.json`，任何一方失败即视为契约被破坏。当前期望输出：
 
 ```
-CONTRACTS OK cases=32 valid=10 schema-invalid=13 semantic=9
+CONTRACTS OK cases=35 valid=13 schema-invalid=13 semantic=9
 ```
 
 ### 校验分三层（重要）
@@ -321,6 +322,111 @@ CONTRACTS OK cases=32 valid=10 schema-invalid=13 semantic=9
 | 跨字段不变量 | `cursor`/`workspaceRevision`/`revision` 关系（SR-5/6/7） | 各语言校验器 |
 | 实体载荷 | `data` 按 `entityType` 校验（SR-2） | 服务层 + 各语言实体结构 |
 
-`Mutation.data` / `Change.data` 在 schema 里是**不透明对象**（`{"type":"object"}`），因此"amount 是 JSON number""occurredAt 缺 Z"这类问题**不会**在信封层被拒，而在 SR-2 层被拒（对应样例放在 `samples/semantic/`）。这是刻意的分层，不是遗漏：信封要能被任何客户端的传输层复用，实体语义由领域层把关。
+`Mutation.data` / `Change.data` 在 schema 里是**不透明对象**（`{"type":"object"}`），因此"amount 是 JSON number""`occurredAt` 缺时区标记"这类问题**不会**在信封层被拒，而在 SR-2 层被拒（对应样例放在 `samples/semantic/`）。这是刻意的分层，不是遗漏：信封要能被任何客户端的传输层复用，实体语义由领域层把关。
 
 **修订规则**：修改本文件必须同步更新 `schema/`、`samples/`、`cases.json`，并让三种校验器全部通过；否则 CI 拒绝合并。
+
+---
+
+## 11. 快照恢复：`GET /api/v1/sync/snapshot`
+
+> 090-01 / 062-02 的增量。新增能力，**不改动** §3–§5 的任何既有字段；旧客户端忽略本节即可。
+
+当客户端 cursor 超前于 Core（Core 重建、从备份恢复、工作区被重建），`/changes` 无论重试多少次都追不上：它要的历史已经不存在了。快照把"当前状态"整份交给客户端，客户端据此重建本地副本，然后把 cursor 直接推进到 `workspaceRevision`。
+
+```
+GET /api/v1/sync/snapshot?protocolVersion=3&snapshotId=<opaque>&cursor=<opaque>&limit=200
+Authorization: Client nc_live_*
+```
+
+### 11.1 请求参数
+
+| 参数 | 类型 | 约束 | 默认 |
+| --- | --- | --- | --- |
+| `protocolVersion` | int | **必填**（缺失 → `422`）；必须 = 3 | — |
+| `snapshotId` | string | 上一次响应里的不透明值；首请求省略 | — |
+| `cursor` | string | 上一次响应里的不透明 keyset；首请求省略；**必须与 `snapshotId` 同时出现** | — |
+| `limit` | int | 1..500 | `200` |
+
+### 11.2 响应
+
+```json
+{
+  "protocolVersion": 3,
+  "snapshotId": "djF8M2Y5…",
+  "workspaceRevision": 44,
+  "entities": [
+    {"entityType": "ledger.category", "entityId": "2b3c…", "syncRevision": 41,
+     "deleted": false, "data": {"name": "Food", "type": "expense", "icon": "shopping"}},
+    {"entityType": "website", "entityId": "7c1e…", "syncRevision": 42,
+     "deleted": true, "data": null}
+  ],
+  "cursor": "d2Vic2l0ZXw3YzFl…",
+  "hasMore": true
+}
+```
+
+机器可读定义：`$defs/SnapshotPage` + `$defs/SnapshotEntity`。样例：`samples/valid/snapshot-page.json`。
+
+| 规则 | 内容 |
+| --- | --- |
+| 范围 | 9 种实体全量；**包含墓碑**（`deleted: true` / `data: null`），这是客户端识别"远端已删"的唯一途径 |
+| `syncRevision` | **实体级** revision，即下一次 push 的 `baseRevision`；恒有 `syncRevision <= workspaceRevision`。它不是变更日志 revision |
+| `workspaceRevision` | 本次逻辑快照钉住的 revision `R`。翻页期间恒定，不随新写入前进 |
+| 排序 | 严格 `(entityType, entityId)` 升序（`entityType` 按 §2 的字符串序，`entityId` 为小写 UUID 字典序）；跨页无重复、无遗漏 |
+| `hasMore` | 本页之后是否还有实体。`cursor` 为 `null` **当且仅当** `hasMore=false` |
+| `snapshotId` | 标识一次逻辑快照。首请求生成；分页必须原样回传，否则 `400`（见 11.4） |
+| 幂等 | 纯读。同一 `snapshotId` 重复请求同一页结果一致（工作区 revision 未回退时） |
+| 空页 | `entities` 可以为空（cursor 已指向末尾之后），此时 `hasMore=false`、`cursor=null` |
+| 所有权字段 | `data` 只含 §2 的实体字段，**不含** `workspaceId`/`userId`/任何凭证 |
+
+### 11.3 跨页一致性（关键）
+
+1. 首请求在 workspace 行锁内读取 `SyncWorkspaceState.current_revision` 作为 `R`，并把 `R` 编进不透明的 `snapshotId`。
+2. 之后每一页只取 `entity.sync_revision <= R` 的行。
+3. 分页期间的新写入（`revision > R`）被过滤掉，因此不会撕裂快照；它们只会出现在**下一次**快照，或 `cursor=R` 之后的 `/changes` 里。
+4. 由此，快照完成后客户端置 `cursor = R` 是安全的：`/changes?cursor=R` 返回的正是快照之后的全部变更。
+5. 快照**不**清理、**不**修改任何 pending/in-flight 队列（客户端侧的 outbox 语义见 §8）。
+
+### 11.3.1 客户端恢复规则：缺失 ≠ 删除（关键）
+
+第 2 条过滤有一个必然推论：**一条在 `R` 之后被更新的实体，其 `sync_revision > R`，不会出现在本快照里 —— 但它并没有被删除**（它在 `R` 时仍然存在，只是内容已前进到 `R+k`）。
+
+因此客户端应用快照时**只能**：
+
+| 快照条目 | 客户端动作 |
+| --- | --- |
+| `deleted: true`（显式墓碑） | 删除/标记本地行；有 pending 条目时转 conflict |
+| `deleted: false` | 应用 `data`、`sync_revision = syncRevision`；有 pending 条目时转 conflict，不覆盖本地编辑 |
+| **本地有、快照没有** | **保持原样，禁止标删** —— 由 `cursor=R` 之后的 `/changes` 或 push 收敛 |
+
+反例（禁止实现）：把"缺失"当删除。那样恢复会瞬间误删所有在翻页期间被编辑过的实体，再被下一次拉取还原，表现为数据闪断；对分类/集合这类父实体还会触发级联删除。
+
+### 11.4 错误
+
+| 情况 | 状态码 | body |
+| --- | --- | --- |
+| `protocolVersion != 3` | `409` | `{"detail": "sync_protocol_mismatch"}` |
+| `snapshotId` 无法解析 / 属于其他工作区 / 其 `R` 大于当前 revision | `409` | `{"detail": "snapshot_expired"}` |
+| `cursor` 不是本端点产出的值，或 `cursor` 未同时带 `snapshotId` | `400` | `{"detail": "Invalid sync cursor", "resyncRequired": true, "workspaceRevision": n}` |
+| `protocolVersion` 缺失、`limit` 越界 | `422` | 应用的校验错误信封（`detail` 是字段错误数组） |
+
+`snapshot_expired` 的唯一正确反应：**丢弃本地分页状态**，用不带 `snapshotId`/`cursor` 的首请求重新开始（新快照会有新的 `R`）。
+
+`cursor` 必须与 `snapshotId` 同时出现，因为 `snapshotId` 才是钉住 `R` 的东西：只给 cursor 时服务端无法判断该页属于哪次快照，宁可 `400` 也不返回可能跳行的页。
+
+### 11.5 `GET /changes` 的失效 cursor（同批变更）
+
+§4.3 的 `400` body 增加两个字段，`detail` 字面量保持不变：
+
+```json
+{"detail": "Invalid sync cursor", "resyncRequired": true, "workspaceRevision": 44}
+```
+
+- `resyncRequired: true` + `workspaceRevision` 是客户端进入恢复流程的信号，替代此前"`invalid_response` → blocked"的死路。
+- 收到它时 **不得**把 cursor 重置为 0 继续拉取（会重复应用全部历史）；应改走本节。
+- 形状见 `$defs/CursorError`（键集合封闭，恰好这 3 个键）；样例 `samples/valid/cursor-error.json`。
+
+> ⚠️ 非 `400` 的同步通道错误（如 `409`）仍走应用的 `HTTPException` 信封：`{"detail": …, "error": {"code": "request_error", "message": …}}`，比 `$defs/ErrorResponse` 多一个 `error` 键。这是 v0.6.1 起的既有行为，`CursorError` 因此只覆盖 `400` 分支。
+
+> ⚠️ 已知偏差（形态差异，不是非法值）：`adapter.serialize()` 的时间字段经 `iso_utc()` 输出为 `+00:00`（例 `2026-11-15T03:00:00+00:00`），而非 §1 推荐的 `Z`。`$defs/IsoUtc` 现在同时接受两种零偏移写法，所以这类文档**合法**，客户端不得因偏移写法拒收；快照的 `data` 与 `/changes` 的 `data` 逐字节相同，两边表现一致。归一点在 `backend/app/utils/time.py`（v0.7 起输出 `Z`），不在 090-01 的文件域内。样例：`samples/valid/changes-page-offset-timestamps.json`。

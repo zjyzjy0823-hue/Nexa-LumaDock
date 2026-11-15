@@ -4,7 +4,7 @@ Sync Protocol v3 的**唯一权威定义**。三端（桌面 / Android / Core）
 
 | 路径 | 内容 |
 | --- | --- |
-| [`sync-protocol-v3.md`](sync-protocol-v3.md) | 规范正文（含幂等、分页、冲突、删除、兼容矩阵与已知缺口） |
+| [`sync-protocol-v3.md`](sync-protocol-v3.md) | 规范正文（含幂等、分页、冲突、删除、快照恢复、兼容矩阵与已知缺口） |
 | [`schema/sync-v3.schema.json`](schema/sync-v3.schema.json) | 机器可读 JSON Schema（normative） |
 | [`samples/valid/`](samples/valid/) | 必须被接受的样例 |
 | [`samples/invalid/`](samples/invalid/) | 必须被信封（schema）拒绝的样例 |
@@ -22,7 +22,7 @@ bash scripts/ci-local.sh --contracts-only    # 三件套一次跑完
 ```
 
 三者读同一份 `cases.json`：成功时都输出同一行
-`CONTRACTS OK cases=32 valid=10 schema-invalid=13 semantic=9`。任何一方失败即视为契约被破坏，CI 会拒绝合并。
+`CONTRACTS OK cases=35 valid=13 schema-invalid=13 semantic=9`。任何一方失败即视为契约被破坏，CI 会拒绝合并。
 
 ## 两处容易搞混的层次
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ..database import get_db
 from .. import core_connection
-from ..models import Client, LocalMutation, LocalSyncState, User
+from ..models import Client, LocalMutation, LocalSyncState, SyncWorkspaceState, User
 from ..runtime_mode import require_local_mode
 from ..security import client_from_token, current_user
 from ..sync.protocol import SYNC_PROTOCOL_VERSION
@@ -20,6 +20,7 @@ from ..sync.conflicts import get_conflict, list_conflicts, resolve_conflict
 from ..sync.notifications import get_coordinator
 from ..sync.background import SAFE_SYNC_ERRORS
 from ..sync.service import apply_mutation, ensure_core_sync_initialized, get_changes
+from ..sync.snapshot import (SnapshotCursorInvalid, SnapshotExpired, build_snapshot)
 from ..utils.time import iso_utc
 from ..workspaces import get_personal_workspace
 
@@ -95,7 +96,49 @@ def changes(cursor: int = Query(default=0, ge=0), limit: int = Query(default=100
     except Exception:
         db.rollback()
         raise
-    return get_changes(db, client.workspace_id, cursor, limit)
+    try:
+        return get_changes(db, client.workspace_id, cursor, limit)
+    except HTTPException as error:
+        # A cursor beyond the workspace revision is unrecoverable by replaying: say so
+        # machine-readably (`resyncRequired`) instead of leaving the client to map a
+        # bare `detail` to `invalid_response` and block. `detail` stays byte-identical
+        # for existing assertions and logs.
+        if error.status_code != 400 or error.detail != "Invalid sync cursor":
+            raise
+        state = db.get(SyncWorkspaceState, client.workspace_id)
+        return JSONResponse(status_code=400, content={
+            "detail": "Invalid sync cursor",
+            "resyncRequired": True,
+            "workspaceRevision": state.current_revision if state is not None else 0})
+
+
+@router.get("/snapshot")
+def snapshot(protocolVersion: int = Query(...),
+             snapshotId: str | None = Query(default=None),
+             cursor: str | None = Query(default=None),
+             limit: int = Query(default=200, ge=1, le=500),
+             client: Client = Depends(client_from_token), db: Session = Depends(get_db)):
+    if protocolVersion != SYNC_PROTOCOL_VERSION:
+        raise HTTPException(409, "sync_protocol_mismatch")
+    try:
+        # Same bootstrap as `/changes`: the snapshot must expose exactly the state that
+        # history at `workspaceRevision` describes, so legacy revision-zero rows are
+        # adopted into Core history before the snapshot pins its revision.
+        ensure_core_sync_initialized(db, client.workspace_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    try:
+        return build_snapshot(db, client.workspace_id, limit=limit,
+                              snapshot_id=snapshotId, cursor=cursor)
+    except SnapshotExpired:
+        raise HTTPException(409, "snapshot_expired") from None
+    except SnapshotCursorInvalid as error:
+        return JSONResponse(status_code=400, content={
+            "detail": "Invalid sync cursor",
+            "resyncRequired": True,
+            "workspaceRevision": error.workspace_revision})
 
 
 @router.get("/status")

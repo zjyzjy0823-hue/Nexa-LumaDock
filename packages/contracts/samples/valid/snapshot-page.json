@@ -1,0 +1,45 @@
+{
+  "protocolVersion": 3,
+  "snapshotId": "djF8M2Y5ZDBkNWUtMWM0YS00ZjZlLTlhMWItMmMzZDRlNWY2YTdifDQ0fDRhNWI2YzdkOGU5MA",
+  "workspaceRevision": 44,
+  "entities": [
+    {
+      "entityType": "ledger.category",
+      "entityId": "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901",
+      "syncRevision": 41,
+      "deleted": false,
+      "data": {
+        "name": "Food",
+        "type": "expense",
+        "icon": "shopping"
+      }
+    },
+    {
+      "entityType": "website",
+      "entityId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "syncRevision": 44,
+      "deleted": false,
+      "data": {
+        "name": "Nexa Roadmap",
+        "url": "https://github.com/zjyzjy0823-hue/Nexa-LumaDock",
+        "icon": null,
+        "description": "规划文档",
+        "categoryId": null,
+        "favorite": true,
+        "order": 0,
+        "lastVisitedAt": "2026-11-15T03:00:00Z",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "updatedAt": "2026-11-15T03:00:00Z"
+      }
+    },
+    {
+      "entityType": "website",
+      "entityId": "7c1e5b60-2f4d-4a3e-8b9c-1d2e3f4a5b6c",
+      "syncRevision": 42,
+      "deleted": true,
+      "data": null
+    }
+  ],
+  "cursor": "d2Vic2l0ZXw3YzFlNWI2MC0yZjRkLTRhM2UtOGI5Yy0xZDJlM2Y0YTViNmM",
+  "hasMore": true
+}

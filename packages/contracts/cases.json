@@ -74,9 +74,27 @@
       "kind": "valid"
     },
     {
+      "name": "changes-page-offset-timestamps",
+      "file": "samples/valid/changes-page-offset-timestamps.json",
+      "schema": "ChangesResponse",
+      "kind": "valid"
+    },
+    {
       "name": "changes-empty",
       "file": "samples/valid/changes-empty.json",
       "schema": "ChangesResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "snapshot-page",
+      "file": "samples/valid/snapshot-page.json",
+      "schema": "SnapshotPage",
+      "kind": "valid"
+    },
+    {
+      "name": "cursor-error",
+      "file": "samples/valid/cursor-error.json",
+      "schema": "CursorError",
       "kind": "valid"
     },
     {

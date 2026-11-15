@@ -16,16 +16,23 @@
 //!   business code as a `String`.
 //! * **Cross-field rules live in typed invariants.** `ChangesResponse::validate`
 //!   implements SR-5..SR-7; SR-3/SR-8 are enforced by the `Deserialize` impls of
-//!   `Mutation`/`Change`; SR-2 by [`parse_entity_data`].
+//!   `Mutation`/`Change`; the §11.2 snapshot rules by `SnapshotEntity` and
+//!   `SnapshotPage::validate`; SR-2 by [`parse_entity_data`].
 //!
-//! Deliberately stricter than the JSON Schema in three documented spots:
+//! Deliberately stricter than the JSON Schema in four documented spots:
 //!
 //! 1. `IsoUtc` also range-checks month/day/hour/minute/second (the schema pattern is
-//!    digit-only, so it would accept `2026-99-99T99:99:99Z`).
+//!    digit-only, so it would accept `2026-99-99T99:99:99Z`). Both zero-offset
+//!    designators (`Z` and `+00:00`) are accepted, matching the schema; any other
+//!    offset is rejected because the wire format is UTC-only.
 //! 2. `MutationResult` rejects fields that do not belong to the `status` branch it
 //!    carries, and requires `reason = invalid_id` on the early-rejected shape.
 //! 3. `PersonalStateData` is `deny_unknown_fields` even though the schema omits
 //!    `additionalProperties: false` for it; this type is the canonical strict view.
+//! 4. `SnapshotPage`/`SnapshotEntity` enforce the §11.2 cross-field rules the schema
+//!    cannot express: `cursor` is `null` exactly when `hasMore` is `false`, a
+//!    tombstone is `deleted: true` + `data: null`, and `syncRevision` never exceeds
+//!    `workspaceRevision`.
 //!
 //! Nothing here derives `Default` or `Option`-wraps a field that the schema marks
 //! required — silently substituting a default is exactly the failure mode the
@@ -246,12 +253,25 @@ fn check_uuid(value: &str) -> Result<(), String> {
 }
 
 fn check_iso_utc(value: &str) -> Result<(), String> {
-    // YYYY-MM-DDTHH:MM:SS[.ffffff]Z — `iso_utc()` output, contract §1.
-    let bytes = value.as_bytes();
+    // `YYYY-MM-DDTHH:MM:SS[.ffffff]` + a zero-offset designator: `Z` (preferred,
+    // §1) or `+00:00` (what `iso_utc()` emits today). Any other offset is a
+    // non-UTC instant and is rejected: the wire format is UTC-only.
+    let body = match value.strip_suffix('Z') {
+        Some(body) => body,
+        None => match value.strip_suffix("+00:00") {
+            Some(body) => body,
+            None => {
+                return Err("expected the `Z` or `+00:00` UTC designator at the end".to_owned());
+            }
+        },
+    };
+
+    let bytes = body.as_bytes();
     let len = bytes.len();
-    if len != 20 && !(22..=27).contains(&len) {
+    if len != 19 && !(21..=26).contains(&len) {
         return Err(format!(
-            "expected `YYYY-MM-DDTHH:MM:SS[.ffffff]Z` (20 or 22..=27 chars), got {len}"
+            "expected `YYYY-MM-DDTHH:MM:SS[.ffffff]` followed by `Z` or `+00:00` \
+             (19 or 21..=26 chars before the designator), got {len}"
         ));
     }
     let expect_digits = |range: std::ops::Range<usize>| -> Result<(), String> {
@@ -286,14 +306,11 @@ fn check_iso_utc(value: &str) -> Result<(), String> {
         return Err("expected `:` at index 16".to_owned());
     }
     expect_digits(17..19)?;
-    if len != 20 {
+    if len != 19 {
         if bytes[19] != b'.' {
             return Err("expected `.` before the fractional seconds".to_owned());
         }
-        expect_digits(20..len - 1)?;
-    }
-    if bytes[len - 1] != b'Z' {
-        return Err("expected the `Z` UTC designator at the end".to_owned());
+        expect_digits(20..len)?;
     }
 
     let number = |range: std::ops::Range<usize>| -> u32 {
@@ -432,7 +449,9 @@ checked_string_newtype!(
 );
 
 checked_string_newtype!(
-    /// ISO 8601 UTC timestamp with a mandatory `Z`, optional 1..6 fractional digits.
+    /// ISO 8601 UTC timestamp: mandatory zero-offset designator (`Z`, or `+00:00`
+    /// as `iso_utc()` emits today), optional 1..6 fractional digits. Non-zero
+    /// offsets are rejected.
     IsoUtc,
     check_iso_utc
 );
@@ -1430,6 +1449,14 @@ where
     deserialize_bounded_vec(deserializer, 0, 100, "changes")
 }
 
+fn de_snapshot_entities<'de, D>(deserializer: D) -> Result<Vec<SnapshotEntity>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // §11.1 caps `limit` at 500, so a page can never exceed that many rows.
+    deserialize_bounded_vec(deserializer, 0, 500, "entities")
+}
+
 /// Remove a required key from a buffered object, converting it to `T`.
 fn take_field<T: DeserializeOwned>(
     fields: &mut Map<String, Value>,
@@ -1902,6 +1929,171 @@ impl ChangesResponse {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/sync/snapshot (§11)
+// ---------------------------------------------------------------------------
+
+/// One entity of a [`SnapshotPage`].
+///
+/// Tombstones are included on purpose: `deleted: true` + `data: null` is the only
+/// way a client learns that a row is gone remotely. `syncRevision` is the
+/// entity-level revision — the `baseRevision` of the next push — never a change-log
+/// revision, so two rows may legitimately share it.
+///
+/// `Deserialize` is written by hand to enforce the tombstone pairing (a §11.2 rule
+/// the JSON Schema cannot express), mirroring [`Change`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotEntity {
+    pub entity_type: EntityType,
+    pub entity_id: Uuid,
+    /// `0 ..= 2^63-1`. Reuses [`BaseRevision`] because that is exactly its range
+    /// *and* its meaning: the value the next push must send as `baseRevision`.
+    pub sync_revision: BaseRevision,
+    pub deleted: bool,
+    /// `Some` for a live row, `None` for a tombstone; serialized as `null` for
+    /// tombstones, which is what §11.2 mandates.
+    pub data: Option<Map<String, Value>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SnapshotEntityWire {
+    entity_type: EntityType,
+    entity_id: Uuid,
+    sync_revision: BaseRevision,
+    deleted: bool,
+    data: NullableObject,
+}
+
+impl<'de> Deserialize<'de> for SnapshotEntity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = SnapshotEntityWire::deserialize(deserializer)?;
+        let entity = SnapshotEntity {
+            entity_type: wire.entity_type,
+            entity_id: wire.entity_id,
+            sync_revision: wire.sync_revision,
+            deleted: wire.deleted,
+            data: wire.data.0,
+        };
+        match (entity.deleted, entity.data.is_some()) {
+            (true, true) => Err(de::Error::custom(
+                "§11.2: a tombstone (deleted=true) must carry `data: null`",
+            )),
+            (false, false) => Err(de::Error::custom(
+                "§11.2: a live entity (deleted=false) must carry an object `data`",
+            )),
+            _ => Ok(entity),
+        }
+    }
+}
+
+impl SnapshotEntity {
+    /// SR-2: the payload of a live entity. `None` for a tombstone.
+    pub fn entity_payload(&self) -> Result<Option<EntityPayload>, EntityDataError> {
+        match &self.data {
+            Some(data) => {
+                parse_entity_data(self.entity_type, &Value::Object(data.clone())).map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// One page of `GET /api/v1/sync/snapshot` (§11.2).
+///
+/// `workspaceRevision` is pinned by `snapshotId` for the whole paging run, so it
+/// never advances while the client pages; `cursor` is `null` exactly when
+/// `hasMore` is `false`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotPage {
+    pub protocol_version: ProtocolVersion,
+    /// Opaque, `1..=512` chars. Must be echoed verbatim to fetch the next page.
+    pub snapshot_id: BoundedStr<1, 512>,
+    /// The revision this logical snapshot pinned (§11.3).
+    pub workspace_revision: u64,
+    /// At most 500 rows: §11.1 caps `limit` at 500.
+    pub entities: Vec<SnapshotEntity>,
+    /// Required key, nullable value: `None` means "this was the last page".
+    pub cursor: Option<BoundedStr<1, 512>>,
+    pub has_more: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SnapshotPageWire {
+    protocol_version: ProtocolVersion,
+    snapshot_id: BoundedStr<1, 512>,
+    workspace_revision: u64,
+    #[serde(deserialize_with = "de_snapshot_entities")]
+    entities: Vec<SnapshotEntity>,
+    /// `Value`, not `Option<..>`: serde answers a missing `Option` field with
+    /// `None`, which would conflate an absent key with the contract's explicit
+    /// `null`. `Value` surfaces `missing field` instead.
+    cursor: Value,
+    has_more: bool,
+}
+
+impl<'de> Deserialize<'de> for SnapshotPage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = SnapshotPageWire::deserialize(deserializer)?;
+        let cursor = match wire.cursor {
+            Value::Null => None,
+            Value::String(raw) => {
+                Some(BoundedStr::<1, 512>::try_new(raw).map_err(de::Error::custom)?)
+            }
+            other => {
+                return Err(de::Error::custom(format!(
+                    "`cursor` must be a 1..=512 character string or null, got {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+        Ok(SnapshotPage {
+            protocol_version: wire.protocol_version,
+            snapshot_id: wire.snapshot_id,
+            workspace_revision: wire.workspace_revision,
+            entities: wire.entities,
+            cursor,
+            has_more: wire.has_more,
+        })
+    }
+}
+
+impl SnapshotPage {
+    /// §11.2 cross-field rules: `cursor` is `null` **iff** `hasMore` is `false`, and
+    /// no entity may be newer than the revision the snapshot pinned.
+    pub fn validate(&self) -> Result<(), ContractViolation> {
+        if self.cursor.is_some() != self.has_more {
+            return Err(ContractViolation::new(
+                "§11.2",
+                format!(
+                    "`cursor` must be null exactly when `hasMore` is false \
+                     (cursor present: {}, hasMore: {})",
+                    self.cursor.is_some(),
+                    self.has_more
+                ),
+            ));
+        }
+        for entity in &self.entities {
+            if entity.sync_revision.get() > self.workspace_revision {
+                return Err(ContractViolation::new(
+                    "§11.2",
+                    format!(
+                        "`syncRevision` {} exceeds `workspaceRevision` {} for {} {}",
+                        entity.sync_revision,
+                        self.workspace_revision,
+                        entity.entity_type,
+                        entity.entity_id
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Conflicts (local backend, user JWT)
 // ---------------------------------------------------------------------------
 
@@ -1989,6 +2181,52 @@ pub struct EnrollmentResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ErrorResponse {
     pub detail: NonEmptyStr,
+}
+
+/// The `400` body of `GET /sync/changes` (and of a bad snapshot cursor): the cursor
+/// is outside the workspace's history, so the client must resync from a snapshot
+/// instead of blocking on `invalid_response` (§4.3, §11.5).
+///
+/// `detail` and `resyncRequired` are `const`s in the schema, so `Deserialize`
+/// rejects any other value at the envelope layer rather than leaving it to a
+/// semantic pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorError {
+    /// Pinned to [`details::INVALID_SYNC_CURSOR`].
+    pub detail: String,
+    /// Pinned to `true`; kept as a field so the body round-trips byte-for-byte.
+    pub resync_required: bool,
+    pub workspace_revision: u64,
+}
+
+impl<'de> Deserialize<'de> for CursorError {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = Map::<String, Value>::deserialize(deserializer)?;
+        let error = CursorError {
+            detail: take_field(&mut fields, "detail").map_err(de::Error::custom)?,
+            resync_required: take_field(&mut fields, "resyncRequired").map_err(de::Error::custom)?,
+            workspace_revision: take_field(&mut fields, "workspaceRevision")
+                .map_err(de::Error::custom)?,
+        };
+        if error.detail != details::INVALID_SYNC_CURSOR {
+            return Err(de::Error::custom(format!(
+                "`detail` must be `{}`, got `{}`",
+                details::INVALID_SYNC_CURSOR,
+                error.detail
+            )));
+        }
+        if !error.resync_required {
+            return Err(de::Error::custom("`resyncRequired` is pinned to true"));
+        }
+        reject_unknown(
+            &fields,
+            "CursorError",
+            &["detail", "resyncRequired", "workspaceRevision"],
+        )
+        .map_err(de::Error::custom)?;
+        Ok(error)
+    }
 }
 
 /// Well-known `detail` values from the contract (§1, §4.3, §5.2, §6).

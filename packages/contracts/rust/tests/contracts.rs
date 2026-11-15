@@ -109,6 +109,14 @@ fn parse_as(schema: &str, value: Value) -> Result<(), String> {
                 serde_json::from_value(value).map_err(|error| error.to_string())?;
             response.validate().map_err(|error| error.to_string())
         }
+        "SnapshotPage" => {
+            let page: SnapshotPage =
+                serde_json::from_value(value).map_err(|error| error.to_string())?;
+            page.validate().map_err(|error| error.to_string())
+        }
+        "CursorError" => serde_json::from_value::<CursorError>(value)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
         "ConflictsResponse" => serde_json::from_value::<ConflictsResponse>(value)
             .map(|_| ())
             .map_err(|error| error.to_string()),
@@ -140,6 +148,12 @@ fn parse_schema_only(schema: &str, value: Value) -> Result<Value, String> {
             .map_err(|error| error.to_string()),
         "ChangesResponse" => serde_json::from_value::<ChangesResponse>(value)
             .map(|typed| serde_json::to_value(&typed).expect("serialize ChangesResponse"))
+            .map_err(|error| error.to_string()),
+        "SnapshotPage" => serde_json::from_value::<SnapshotPage>(value)
+            .map(|typed| serde_json::to_value(&typed).expect("serialize SnapshotPage"))
+            .map_err(|error| error.to_string()),
+        "CursorError" => serde_json::from_value::<CursorError>(value)
+            .map(|typed| serde_json::to_value(&typed).expect("serialize CursorError"))
             .map_err(|error| error.to_string()),
         "ConflictsResponse" => serde_json::from_value::<ConflictsResponse>(value)
             .map(|typed| serde_json::to_value(&typed).expect("serialize ConflictsResponse"))
@@ -218,13 +232,44 @@ fn cases_json_matches_the_rust_closed_sets() {
     }
 }
 
+/// The three `kind` values `cases.json` is allowed to use.
+const KINDS: [&str; 3] = ["valid", "schema-invalid", "semantic"];
+
 #[test]
 fn cases_json_is_internally_consistent() {
     let file = load_cases();
-    assert_eq!(file.cases.len(), 32, "cases.json case count changed");
-    assert_eq!(cases_of_kind(&file, "valid").len(), 10);
-    assert_eq!(cases_of_kind(&file, "schema-invalid").len(), 13);
-    assert_eq!(cases_of_kind(&file, "semantic").len(), 9);
+
+    // Kind counts are computed from `cases.json` instead of trusting a stale total:
+    // a fixture can no longer be added without the count being recomputed, while the
+    // pinned numbers below still make an accidental deletion as loud as an addition.
+    let mut counts: BTreeMap<&str, usize> = KINDS.iter().map(|kind| (*kind, 0)).collect();
+    for case in &file.cases {
+        let kind = case
+            .kind
+            .as_deref()
+            // Backwards compatibility: semantic rows used to omit `kind`.
+            .or_else(|| case.rule.as_deref().map(|_| "semantic"))
+            .unwrap_or_else(|| panic!("case `{}` declares neither `kind` nor `rule`", case.name));
+        assert!(
+            KINDS.contains(&kind),
+            "case `{}` has unknown kind `{kind}`",
+            case.name
+        );
+        *counts.get_mut(kind).expect("kind is one of KINDS") += 1;
+    }
+
+    assert_eq!(file.cases.len(), 35, "cases.json case count changed");
+    assert_eq!(counts["valid"], 13, "kind=valid count changed");
+    assert_eq!(
+        counts["schema-invalid"], 13,
+        "kind=schema-invalid count changed"
+    );
+    assert_eq!(counts["semantic"], 9, "kind=semantic count changed");
+    assert_eq!(
+        counts.values().sum::<usize>(),
+        file.cases.len(),
+        "every case must fall into exactly one kind"
+    );
 
     let mut names = BTreeSet::new();
     for case in &file.cases {
@@ -606,11 +651,27 @@ fn scalar_formats_are_enforced() {
 
     assert!(IsoUtc::try_from("2026-11-15T08:00:00Z").is_ok());
     assert!(IsoUtc::try_from("2026-11-15T08:00:00.123456Z").is_ok());
+    // `iso_utc()` emits `+00:00`; both zero-offset spellings must be accepted (§1).
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00+00:00").is_ok());
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00.123456+00:00").is_ok());
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00.1+00:00").is_ok());
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00+08:00").is_err(), "non-UTC offset");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00-05:00").is_err(), "non-UTC offset");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00+0000").is_err(), "offset without colon");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00-00:00").is_err(), "negative zero offset");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00+00:00Z").is_err(), "two designators");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00z").is_err(), "lowercase designator");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00.+00:00").is_err(), "empty fraction");
+    assert!(IsoUtc::try_from("2026-11-15T03:00:00.1234567+00:00").is_err(), "7 digits");
     assert!(IsoUtc::try_from("2026-11-15 02:30:00").is_err(), "naive / space");
-    assert!(IsoUtc::try_from("2026-11-15T08:00:00").is_err(), "missing Z");
+    assert!(IsoUtc::try_from("2026-11-15T08:00:00").is_err(), "missing designator");
     assert!(IsoUtc::try_from("2026-11-15T08:00:00.Z").is_err(), "empty fraction");
     assert!(IsoUtc::try_from("2026-11-15T08:00:00.1234567Z").is_err(), "7 digits");
     assert!(IsoUtc::try_from("2026-13-15T08:00:00Z").is_err(), "month 13");
+    assert!(
+        IsoUtc::try_from("2026-13-15T08:00:00+00:00").is_err(),
+        "range checks apply to both spellings"
+    );
 
     assert!(DecimalString::try_from("38.50").is_ok());
     assert!(DecimalString::try_from("0.01").is_ok());
@@ -677,6 +738,22 @@ fn every_layer_rejects_unknown_fields() {
             ),
         ),
         (
+            "SnapshotPage",
+            parse_as(
+                "SnapshotPage",
+                json!({"protocolVersion": 3, "snapshotId": "s", "workspaceRevision": 0,
+                       "entities": [], "cursor": null, "hasMore": false, "total": 0}),
+            ),
+        ),
+        (
+            "CursorError",
+            parse_as(
+                "CursorError",
+                json!({"detail": "Invalid sync cursor", "resyncRequired": true,
+                       "workspaceRevision": 0, "retryAfter": 1}),
+            ),
+        ),
+        (
             "ConflictsResponse",
             parse_as("ConflictsResponse", json!({"conflicts": [], "total": 0})),
         ),
@@ -736,6 +813,16 @@ fn required_keys_must_be_present_even_when_nullable() {
         "localDeleted": false, "remote": null, "remoteRevision": 0,
         "remoteDeleted": true, "createdAt": "2026-11-15T02:00:00Z",
         "updatedAt": "2026-11-15T02:05:00Z", "hasPendingTail": false
+    }))
+    .is_err());
+    // `SnapshotPage.cursor` is required-but-nullable too: omitting it is not "null".
+    assert!(serde_json::from_value::<SnapshotPage>(json!({
+        "protocolVersion": 3, "snapshotId": "s", "workspaceRevision": 1,
+        "entities": [], "hasMore": false
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<SnapshotEntity>(json!({
+        "entityType": "website", "entityId": entity, "syncRevision": 1, "deleted": false
     }))
     .is_err());
 }
@@ -799,6 +886,166 @@ fn changes_invariants_accept_the_valid_pages() {
         serde_json::from_value(read_json("samples/valid/changes-empty.json")).expect("empty page");
     empty.validate().expect("empty page echoes the request cursor");
     assert!(empty.is_caught_up(), "cursor == workspaceRevision, hasMore=false");
+
+    // §1: the server currently emits `+00:00` (`iso_utc()`). Such a page must be
+    // accepted verbatim, and its payloads must pass SR-2 — that is the layer where
+    // the timestamp format is actually checked.
+    let offset: ChangesResponse =
+        serde_json::from_value(read_json("samples/valid/changes-page-offset-timestamps.json"))
+            .expect("`+00:00` timestamps are contract-valid");
+    offset
+        .validate()
+        .expect("the offset page satisfies the same SR-5..SR-7 invariants");
+    assert_eq!(offset.changes.len(), 2);
+    assert_eq!(
+        offset.changes[0].data.as_ref().expect("upsert data")["occurredAt"],
+        json!("2026-11-15T02:30:00+00:00"),
+        "the fixture must keep exercising the `+00:00` spelling"
+    );
+    let payload = offset.changes[0]
+        .entity_payload()
+        .expect("a `+00:00` payload is valid")
+        .expect("upsert carries data");
+    assert_eq!(payload.entity_type(), EntityType::LedgerTransaction);
+}
+
+#[test]
+fn snapshot_pages_are_typed_and_enforce_tombstone_pairing() {
+    let page: SnapshotPage =
+        serde_json::from_value(read_json("samples/valid/snapshot-page.json")).expect("snapshot");
+    page.validate().expect("the valid page satisfies §11.2");
+    assert_eq!(page.protocol_version.get(), SYNC_PROTOCOL_VERSION);
+    assert_eq!(page.workspace_revision, 44);
+    assert!(page.has_more);
+    assert!(page.cursor.is_some(), "hasMore=true requires a cursor");
+    assert_eq!(page.entities.len(), 3);
+    assert_eq!(page.entities[0].entity_type, EntityType::LedgerCategory);
+    assert_eq!(page.entities[0].sync_revision.get(), 41);
+    assert!(!page.entities[0].deleted);
+
+    // Live rows carry the same payload shapes `/changes` does (SR-2).
+    let category = page.entities[0]
+        .entity_payload()
+        .expect("live category payload")
+        .expect("live rows carry data");
+    assert_eq!(category.entity_type(), EntityType::LedgerCategory);
+    let website = page.entities[1]
+        .entity_payload()
+        .expect("live website payload")
+        .expect("live rows carry data");
+    assert_eq!(website.entity_type(), EntityType::Website);
+
+    // Tombstone: deleted=true + data=null, and no payload to validate.
+    let tombstone = &page.entities[2];
+    assert!(tombstone.deleted);
+    assert!(tombstone.data.is_none());
+    assert!(tombstone
+        .entity_payload()
+        .expect("tombstones have no payload")
+        .is_none());
+
+    // The envelope rejects both wrong pairings, in either direction.
+    let mut live_with_null = read_json("samples/valid/snapshot-page.json");
+    live_with_null["entities"][0]["data"] = Value::Null;
+    assert!(
+        serde_json::from_value::<SnapshotPage>(live_with_null).is_err(),
+        "deleted=false with data=null must be rejected"
+    );
+    let mut tombstone_with_data = read_json("samples/valid/snapshot-page.json");
+    tombstone_with_data["entities"][2]["data"] = json!({"name": "ghost"});
+    assert!(
+        serde_json::from_value::<SnapshotPage>(tombstone_with_data).is_err(),
+        "deleted=true with an object data must be rejected"
+    );
+
+    // `cursor` is null exactly when `hasMore` is false (§11.2).
+    let mut dangling_cursor = read_json("samples/valid/snapshot-page.json");
+    dangling_cursor["hasMore"] = json!(false);
+    let dangling: SnapshotPage =
+        serde_json::from_value(dangling_cursor).expect("shape is valid, only the invariant breaks");
+    assert_eq!(
+        dangling.validate().expect_err("cursor without hasMore").rule,
+        "§11.2"
+    );
+
+    let mut null_cursor = read_json("samples/valid/snapshot-page.json");
+    null_cursor["cursor"] = Value::Null;
+    let null_cursor: SnapshotPage =
+        serde_json::from_value(null_cursor).expect("cursor: null is legal");
+    assert_eq!(
+        null_cursor.validate().expect_err("hasMore without cursor").rule,
+        "§11.2"
+    );
+
+    // An entity cannot be newer than the revision the snapshot pinned.
+    let mut too_new = read_json("samples/valid/snapshot-page.json");
+    too_new["entities"][0]["syncRevision"] = json!(45);
+    let too_new: SnapshotPage = serde_json::from_value(too_new).expect("shape is valid");
+    assert_eq!(
+        too_new.validate().expect_err("syncRevision > workspaceRevision").rule,
+        "§11.2"
+    );
+
+    // The final page of a paging run: empty entities, cursor null, hasMore false.
+    let final_page: SnapshotPage = serde_json::from_value(json!({
+        "protocolVersion": 3,
+        "snapshotId": "s",
+        "workspaceRevision": 44,
+        "entities": [],
+        "cursor": null,
+        "hasMore": false
+    }))
+    .expect("empty final page");
+    final_page.validate().expect("empty final page is valid");
+
+    // A page can never exceed `limit` (500) rows.
+    let oversized: Vec<Value> = (0..501)
+        .map(|index| {
+            json!({
+                "entityType": "website",
+                "entityId": format!("1a2b3c4d-5e6f-4a7b-8c9d-{index:012x}"),
+                "syncRevision": 1,
+                "deleted": true,
+                "data": null
+            })
+        })
+        .collect();
+    assert!(
+        serde_json::from_value::<SnapshotPage>(json!({
+            "protocolVersion": 3, "snapshotId": "s", "workspaceRevision": 1,
+            "entities": oversized, "cursor": "c", "hasMore": true
+        }))
+        .is_err(),
+        "maxItems 500"
+    );
+}
+
+#[test]
+fn cursor_error_body_is_pinned() {
+    let value = read_json("samples/valid/cursor-error.json");
+    let error: CursorError = serde_json::from_value(value.clone()).expect("cursor error body");
+    assert_eq!(error.detail, details::INVALID_SYNC_CURSOR);
+    assert!(error.resync_required);
+    assert_eq!(error.workspace_revision, 44);
+    assert_eq!(
+        serde_json::to_value(&error).expect("serialize CursorError"),
+        value,
+        "the 400 body must round-trip unchanged"
+    );
+
+    for broken in [
+        json!({"detail": "Invalid sync cursor", "resyncRequired": false, "workspaceRevision": 44}),
+        json!({"detail": "nope", "resyncRequired": true, "workspaceRevision": 44}),
+        json!({"detail": "Invalid sync cursor", "resyncRequired": true, "workspaceRevision": 44,
+               "extra": 1}),
+        json!({"detail": "Invalid sync cursor", "workspaceRevision": 44}),
+        json!({"detail": "Invalid sync cursor", "resyncRequired": true, "workspaceRevision": -1}),
+    ] {
+        assert!(
+            serde_json::from_value::<CursorError>(broken.clone()).is_err(),
+            "must reject {broken}"
+        );
+    }
 }
 
 #[test]
