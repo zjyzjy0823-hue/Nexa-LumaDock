@@ -18,6 +18,12 @@ from .remote import SyncRemoteError
 
 LIVE_STATUSES = ("pending", "in_flight", "conflict", "rejected")
 
+# A user decision must not fail just because the background cycle happens to hold
+# the workspace lock at that instant (the E2E suites run a 1s cycle, so the odds
+# are high). Wait for the in-flight cycle to finish, then re-read state under the
+# lock; only a genuinely stuck cycle still surfaces sync_in_progress.
+RESOLVE_LOCK_TIMEOUT_SECONDS = 10.0
+
 
 def _timestamp(value):
     if not isinstance(value, str) or len(value) > 64:
@@ -151,7 +157,7 @@ def resolve_conflict(db, user_id, workspace_id, conflict_id, strategy, expected_
     if strategy not in ("local", "remote"):
         raise HTTPException(422, "invalid_resolution_strategy")
     lock = _lock_for(str(db.get_bind().url), workspace_id)
-    if not lock.acquire(blocking=False):
+    if not lock.acquire(timeout=RESOLVE_LOCK_TIMEOUT_SECONDS):
         raise HTTPException(409, "sync_in_progress")
     try:
         # The first DML serializes SQLite business writers before we inspect the
