@@ -1,5 +1,4 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 from uuid import uuid4
@@ -7,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from ..utils.time import aware_utc, iso_utc
+from ..utils.time import aware_utc, iso_utc, month_key
 from ..database import runtime_config
 from ..models import LedgerCategory, LedgerTransaction, User, utcnow
 from .ownership import owner_workspace
@@ -200,6 +199,11 @@ def delete_category(id: str, user: User = None, db: Session = None):
     publish_ledger(db, item, "delete")
 
 
+def _month_of(item: LedgerTransaction) -> str | None:
+    """Calendar month of a transaction in the app timezone (stored values are UTC)."""
+    return month_key(item.occurred_at, runtime_config.app_timezone)
+
+
 def list_transactions(month: str | None = None, user: User = None, db: Session = None):
     items = db.scalars(
         select(LedgerTransaction)
@@ -213,7 +217,7 @@ def list_transactions(month: str | None = None, user: User = None, db: Session =
     return [
         transaction_out(item)
         for item in items
-        if month is None or item.occurred_at.strftime("%Y-%m") == month
+        if month is None or _month_of(item) == month
     ]
 
 
@@ -269,9 +273,7 @@ def delete_transaction(id: str, user: User = None, db: Session = None):
 
 
 def summary(month: str | None = None, user: User = None, db: Session = None):
-    month = month or datetime.now(ZoneInfo(runtime_config.app_timezone)).strftime(
-        "%Y-%m"
-    )
+    month = month or month_key(datetime.now(timezone.utc), runtime_config.app_timezone)
     items = db.scalars(
         select(LedgerTransaction).where(
             LedgerTransaction.user_id == user.id,
@@ -279,7 +281,7 @@ def summary(month: str | None = None, user: User = None, db: Session = None):
             LedgerTransaction.deleted_at.is_(None),
         )
     ).all()
-    current = [item for item in items if item.occurred_at.strftime("%Y-%m") == month]
+    current = [item for item in items if _month_of(item) == month]
     income = sum(
         (item.amount for item in current if item.type == "income"), Decimal("0")
     )
@@ -300,8 +302,9 @@ def summary(month: str | None = None, user: User = None, db: Session = None):
     trends: dict[str, Decimal] = {}
     for item in items:
         if item.type == "expense":
-            key = item.occurred_at.strftime("%Y-%m")
-            trends[key] = trends.get(key, Decimal("0")) + item.amount
+            key = _month_of(item)
+            if key is not None:
+                trends[key] = trends.get(key, Decimal("0")) + item.amount
     return {
         "month": month,
         "income": str(income),
