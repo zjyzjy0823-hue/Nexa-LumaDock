@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import sqlite3
@@ -23,6 +24,34 @@ from desktop_target import require_native, resolve_target, sidecar_path
 
 ROOT = Path(__file__).resolve().parents[1]
 SIDECAR: Path
+
+
+def expected_alembic_head() -> str:
+    """Head revision of backend/migrations, derived from the migration files.
+
+    Hardcoding the revision here meant every new migration broke the packaged
+    sidecar smoke on CI. Resolving the single unreferenced revision keeps the
+    assertion meaningful (the sidecar really ran `upgrade head`) without
+    freezing the migration chain.
+    """
+    versions = ROOT / "backend" / "migrations" / "versions"
+    revisions: set[str] = set()
+    referenced: set[str] = set()
+    for path in versions.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        revision = re.search(r"""^revision\s*=\s*["']([^"']+)["']""", text, re.M)
+        down = re.search(r"^down_revision\s*=\s*(.+)$", text, re.M)
+        if revision:
+            revisions.add(revision.group(1))
+        if down:
+            # Single string, tuple or list — collect every quoted revision id.
+            referenced.update(re.findall(r"""["']([^"']+)["']""", down.group(1)))
+    heads = revisions - referenced
+    if len(heads) != 1:
+        raise AssertionError(f"expected exactly one alembic head, found {sorted(heads)}")
+    return heads.pop()
+
+
 with socket.socket() as listener:
     listener.bind(("127.0.0.1", 0))
     PORT = listener.getsockname()[1]
@@ -140,7 +169,7 @@ def main() -> None:
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
         with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0017_automation_engine"
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == expected_alembic_head()
             assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 10
             assert {row[0] for row in connection.execute("SELECT entity_type FROM local_mutation_queue WHERE status='pending'")} >= {
                 "user.preferences", "dashboard.layout", "automation.definition"}
