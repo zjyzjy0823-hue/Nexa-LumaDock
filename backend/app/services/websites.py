@@ -2,7 +2,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from ..utils.time import iso_utc
@@ -12,6 +12,8 @@ from .ownership import owner_workspace
 
 
 class WebsiteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=120)
     url: str = Field(max_length=2048)
     icon: str | None = Field(default=None, max_length=500)
@@ -66,6 +68,8 @@ def website_json(item: Website) -> dict:
 
 
 class CategoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=80)
     order: int = 0
 
@@ -79,6 +83,8 @@ class CategoryInput(BaseModel):
 
 
 class CategoryPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=80)
     order: int | None = None
 

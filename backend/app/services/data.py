@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import uuid4
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..utils.time import iso_utc
@@ -11,6 +11,8 @@ from .ownership import owner_workspace
 
 
 class CollectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=500)
     icon: str = Field(default="custom", max_length=30)
@@ -26,6 +28,8 @@ class CollectionInput(BaseModel):
 
 
 class CollectionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=500)
     icon: str | None = Field(default=None, max_length=30)
@@ -33,6 +37,8 @@ class CollectionPatch(BaseModel):
 
 
 class RecordInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=160)
     status: str = Field(default="active", max_length=40)
     category: str = Field(default="", max_length=80)
@@ -48,6 +54,8 @@ class RecordInput(BaseModel):
 
 
 class RecordPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=160)
     status: str | None = Field(default=None, max_length=40)
     category: str | None = Field(default=None, max_length=80)

@@ -1,7 +1,7 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,8 @@ DEFAULT_NOTIFICATIONS = {"events": {"agentComplete": True, "deviceOffline": True
 
 
 class SettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     theme: Literal["light", "dark", "system"] | None = None
     language: str | None = Field(default=None, min_length=2, max_length=20)
     timezone: str | None = Field(default=None, min_length=1, max_length=80)
@@ -34,6 +36,8 @@ class SettingsPatch(BaseModel):
 
 
 class AccountPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     username: str | None = None
     avatar: str | None = Field(default=None, max_length=500)
 
@@ -49,6 +53,8 @@ class AccountPatch(BaseModel):
 
 
 class PasswordPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     current_password: str
     new_password: str = Field(min_length=8, max_length=256)
 

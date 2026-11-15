@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import uuid4
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..utils.time import assume_zone, aware_utc, iso_utc, month_key
@@ -16,6 +16,8 @@ Kind = Literal["income", "expense"]
 
 
 class CategoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=80)
     type: Kind
     icon: str = Field(default="shopping", max_length=30)
@@ -30,12 +32,16 @@ class CategoryInput(BaseModel):
 
 
 class CategoryPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=80)
     type: Kind | None = None
     icon: str | None = Field(default=None, max_length=30)
 
 
 class TransactionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     category_id: str | None = None
     type: Kind
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
@@ -60,6 +66,8 @@ class TransactionInput(BaseModel):
 
 
 class TransactionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     category_id: str | None = None
     type: Kind | None = None
     amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
