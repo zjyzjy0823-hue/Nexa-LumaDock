@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 3,
+  "changes": [
+    {
+      "revision": 44,
+      "entityType": "website",
+      "entityId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "operation": "delete",
+      "data": null
+    },
+    {
+      "revision": 43,
+      "entityType": "website",
+      "entityId": "9f8e7d6c-5b4a-4392-8170-1f2e3d4c5b6a",
+      "operation": "delete",
+      "data": null
+    }
+  ],
+  "cursor": 44,
+  "hasMore": false,
+  "workspaceRevision": 44
+}

@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zjyzjy0823-hue/Nexa-LumaDock/packages/contracts/schema/sync-v3.schema.json",
+  "title": "Nexa Sync Protocol v3",
+  "description": "Normative machine-readable contract. Only these JSON Schema keywords are used (validators implement exactly this subset): type, enum, const, required, properties, additionalProperties, items, minItems, maxItems, minimum, maximum, minLength, maxLength, pattern, oneOf, $ref (local #/$defs only).",
+
+  "$defs": {
+    "EntityType": {
+      "type": "string",
+      "enum": [
+        "ledger.category",
+        "ledger.transaction",
+        "website.category",
+        "website",
+        "data.collection",
+        "data.record",
+        "user.preferences",
+        "dashboard.layout",
+        "automation.definition"
+      ]
+    },
+    "Operation": { "type": "string", "enum": ["upsert", "delete"] },
+    "RejectionReason": {
+      "type": "string",
+      "enum": [
+        "invalid_id",
+        "invalid_fields",
+        "invalid_operation",
+        "invalid_base_revision",
+        "invalid_data",
+        "unknown_entity_type",
+        "entity_id_unavailable",
+        "category_not_found",
+        "category_type_mismatch",
+        "category_has_transactions",
+        "collection_not_found",
+        "collection_id_immutable",
+        "delete_unsupported"
+      ]
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "IsoUtc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+    },
+    "DecimalString": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d{0,11})(\\.\\d{1,2})?$",
+      "description": "金额必须是十进制字符串；最多 12 位整数 + 2 位小数（Numeric(14,2) 且 gt=0）"
+    },
+
+    "LedgerCategoryData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "icon": { "type": "string", "maxLength": 30 }
+      }
+    },
+    "LedgerTransactionData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "amount", "description", "occurredAt"],
+      "properties": {
+        "categoryId": { "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }] },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "amount": { "$ref": "#/$defs/DecimalString" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "merchant": { "type": "string", "maxLength": 120 },
+        "note": { "type": "string", "maxLength": 500 },
+        "occurredAt": { "$ref": "#/$defs/IsoUtc" }
+      }
+    },
+    "WebsiteCategoryData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "order": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "WebsiteData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "type": "string", "minLength": 8, "maxLength": 2048, "pattern": "^https?://[^\\s]+$" },
+        "icon": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "description": { "type": "string", "maxLength": 500 },
+        "categoryId": { "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }] },
+        "favorite": { "type": "boolean" },
+        "order": { "type": "integer", "minimum": 0 },
+        "lastVisitedAt": { "oneOf": [{ "$ref": "#/$defs/IsoUtc" }, { "type": "null" }] },
+        "createdAt": { "$ref": "#/$defs/IsoUtc" },
+        "updatedAt": { "$ref": "#/$defs/IsoUtc" }
+      }
+    },
+    "CollectionData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "icon": { "type": "string", "maxLength": 30 },
+        "tone": { "type": "string", "maxLength": 30 }
+      }
+    },
+    "RecordData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collectionId", "name"],
+      "properties": {
+        "collectionId": { "$ref": "#/$defs/Uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "status": { "type": "string", "maxLength": 40 },
+        "category": { "type": "string", "maxLength": 80 },
+        "dataJson": { "type": "object" }
+      }
+    },
+    "PersonalStateData": {
+      "type": "object",
+      "description": "user.preferences / dashboard.layout / automation.definition 共用宽松形状；字段级约束见 05-personal_state 实现。自由文本禁止包含凭据或本地绝对路径。",
+      "properties": {
+        "name": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "enabled": { "type": "boolean" },
+        "triggerType": { "type": "string", "maxLength": 30 },
+        "triggerConfigJson": { "type": "object" },
+        "workflowJson": { "type": "array" },
+        "theme": { "type": "string", "maxLength": 30 },
+        "language": { "type": "string", "maxLength": 30 },
+        "timezone": { "type": "string", "maxLength": 80 }
+      }
+    },
+
+    "Mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutationId", "entityType", "entityId", "operation", "baseRevision"],
+      "properties": {
+        "mutationId": { "$ref": "#/$defs/Uuid" },
+        "entityType": { "$ref": "#/$defs/EntityType" },
+        "entityId": { "$ref": "#/$defs/Uuid" },
+        "operation": { "$ref": "#/$defs/Operation" },
+        "baseRevision": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "data": { "type": "object" }
+      }
+    },
+    "MutationBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "mutations"],
+      "properties": {
+        "protocolVersion": { "const": 3 },
+        "mutations": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/Mutation" } }
+      }
+    },
+
+    "MutationResultApplied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutationId", "entityType", "entityId", "baseRevision", "status", "revision"],
+      "properties": {
+        "mutationId": { "$ref": "#/$defs/Uuid" },
+        "entityType": { "$ref": "#/$defs/EntityType" },
+        "entityId": { "$ref": "#/$defs/Uuid" },
+        "baseRevision": { "type": "integer", "minimum": 0 },
+        "status": { "const": "applied" },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "MutationResultConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutationId", "entityType", "entityId", "baseRevision", "status", "currentRevision", "current", "deleted"],
+      "properties": {
+        "mutationId": { "$ref": "#/$defs/Uuid" },
+        "entityType": { "$ref": "#/$defs/EntityType" },
+        "entityId": { "$ref": "#/$defs/Uuid" },
+        "baseRevision": { "type": "integer", "minimum": 0 },
+        "status": { "const": "conflict" },
+        "currentRevision": { "type": "integer", "minimum": 0 },
+        "current": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+        "deleted": { "type": "boolean" }
+      }
+    },
+    "MutationResultRejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutationId", "entityType", "entityId", "baseRevision", "status", "reason"],
+      "properties": {
+        "mutationId": { "$ref": "#/$defs/Uuid" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "baseRevision": { "type": "integer" },
+        "status": { "const": "rejected" },
+        "reason": { "$ref": "#/$defs/RejectionReason" }
+      }
+    },
+    "MutationResultRejectedEarly": {
+      "type": "object",
+      "description": "mutationId 不是 UUID 时的 early-return 形状：没有 entityType/entityId/baseRevision",
+      "additionalProperties": false,
+      "required": ["mutationId", "status", "reason"],
+      "properties": {
+        "mutationId": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "status": { "const": "rejected" },
+        "reason": { "const": "invalid_id" }
+      }
+    },
+    "MutationResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/MutationResultApplied" },
+        { "$ref": "#/$defs/MutationResultConflict" },
+        { "$ref": "#/$defs/MutationResultRejected" },
+        { "$ref": "#/$defs/MutationResultRejectedEarly" }
+      ]
+    },
+    "MutationsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "results"],
+      "properties": {
+        "protocolVersion": { "const": 3 },
+        "results": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/MutationResult" } }
+      }
+    },
+
+    "Change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "entityType", "entityId", "operation", "data"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "entityType": { "$ref": "#/$defs/EntityType" },
+        "entityId": { "$ref": "#/$defs/Uuid" },
+        "operation": { "$ref": "#/$defs/Operation" },
+        "data": { "oneOf": [{ "type": "object" }, { "type": "null" }] }
+      }
+    },
+    "ChangesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "changes", "cursor", "hasMore", "workspaceRevision"],
+      "properties": {
+        "protocolVersion": { "const": 3 },
+        "changes": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/Change" } },
+        "cursor": { "type": "integer", "minimum": 0 },
+        "hasMore": { "type": "boolean" },
+        "workspaceRevision": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "ConflictPresentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "entityType", "entityId", "local", "localDeleted", "remote", "remoteRevision", "remoteDeleted", "createdAt", "updatedAt", "hasPendingTail"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "entityType": { "$ref": "#/$defs/EntityType" },
+        "entityId": { "$ref": "#/$defs/Uuid" },
+        "local": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+        "localDeleted": { "type": "boolean" },
+        "remote": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+        "remoteRevision": { "type": "integer", "minimum": 0 },
+        "remoteDeleted": { "type": "boolean" },
+        "createdAt": { "$ref": "#/$defs/IsoUtc" },
+        "detectedAt": { "$ref": "#/$defs/IsoUtc" },
+        "updatedAt": { "$ref": "#/$defs/IsoUtc" },
+        "hasPendingTail": { "type": "boolean" }
+      }
+    },
+    "ConflictsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conflicts"],
+      "properties": {
+        "conflicts": { "type": "array", "items": { "$ref": "#/$defs/ConflictPresentation" } }
+      }
+    },
+    "ConflictResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "type": "string", "enum": ["local", "remote"] },
+        "expectedRemoteRevision": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+      }
+    },
+
+    "EnrollmentRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installationId", "name", "platform"],
+      "properties": {
+        "installationId": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "platform": { "type": "string", "enum": ["windows", "macos", "android", "linux"] },
+        "appVersion": { "type": "string", "maxLength": 40 }
+      }
+    },
+    "EnrollmentResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "credential", "tokenLast4", "tokenCreatedAt"],
+      "properties": {
+        "client": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "installationId", "workspaceId", "name", "platform", "appVersion"],
+          "properties": {
+            "id": { "$ref": "#/$defs/Uuid" },
+            "installationId": { "type": "string" },
+            "workspaceId": { "$ref": "#/$defs/Uuid" },
+            "name": { "type": "string" },
+            "platform": { "type": "string" },
+            "appVersion": { "type": "string" }
+          }
+        },
+        "credential": { "type": "string", "pattern": "^nc_live_[A-Za-z0-9_-]{40,}$" },
+        "tokenLast4": { "type": "string", "pattern": "^[A-Za-z0-9]{4}$" },
+        "tokenCreatedAt": { "$ref": "#/$defs/IsoUtc" }
+      }
+    },
+
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detail"],
+      "properties": { "detail": { "type": "string", "minLength": 1 } }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "nexa-contracts"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+publish = false
+description = "Nexa Sync Protocol v3 contract types: strict serde models for the frozen wire contract"
+license = "UNLICENSED"
+
+# Standalone crate on purpose: the repo has no Cargo workspace, and this crate
+# must stay usable by the desktop client (src-tauri), Android tooling and CI
+# validators without dragging in Tauri dependencies.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "nexa_contracts"
+path = "src/lib.rs"

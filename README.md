@@ -230,6 +230,10 @@ Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen af
 
 GitHub Actions 在 push 和 pull request 上运行 `frontend`、`backend`、`backend-postgres`、`device-client`、`openclaw-adapter` 和 `desktop-windows`。Windows desktop job 包含原生构建、packaged sidecar smoke、安装包校验和 CI artifact 上传；PostgreSQL job 包含真实同步、后台恢复、冲突、个人状态和自动化集成测试。macOS 原生构建及跨设备验收在实机执行，不由 Windows job 替代。
 
+契约变更由新增的 `contracts` job 把关：依次运行 `python3 scripts/check-contracts.py`、`node scripts/check-contracts.mjs` 和 `cargo test --manifest-path packages/contracts/rust/Cargo.toml`（契约校验三件套，共用 `packages/contracts/cases.json`，任一失败即拒绝合并）。
+
+本地复现：`bash scripts/ci-local.sh` 依次跑后端 pytest 快速子集与契约三件套；`--contracts-only` 只跑契约部分，`--with-frontend` 附带前端构建。
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

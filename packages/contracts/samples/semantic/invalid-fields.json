@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 3,
+  "mutations": [
+    {
+      "mutationId": "3f9d0d5e-1c4a-4f6e-9a1b-2c3d4e5f6a7b",
+      "entityType": "ledger.transaction",
+      "entityId": "7c1e5b60-2f4d-4a3e-8b9c-1d2e3f4a5b6c",
+      "operation": "upsert",
+      "baseRevision": 0,
+      "data": {
+        "categoryId": "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901",
+        "type": "expense",
+        "amount": "38.50",
+        "description": "咖啡",
+        "merchant": "Manner",
+        "note": "",
+        "occurredAt": "2026-11-15T02:30:00Z"
+      },
+      "note": "x"
+    }
+  ]
+}

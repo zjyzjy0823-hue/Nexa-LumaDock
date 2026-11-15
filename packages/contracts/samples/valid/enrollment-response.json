@@ -1,0 +1,13 @@
+{
+  "client": {
+    "id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "installationId": "9b2c7d1e-0f4a-4b3c-8d5e-6f7a8b9c0d1e",
+    "workspaceId": "6d5c4b3a-2918-4706-95e4-d3c2b1a0f9e8",
+    "name": "Pixel 9",
+    "platform": "android",
+    "appVersion": "0.7.0"
+  },
+  "credential": "nc_live_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+  "tokenLast4": "S9t0",
+  "tokenCreatedAt": "2026-11-15T08:00:00Z"
+}

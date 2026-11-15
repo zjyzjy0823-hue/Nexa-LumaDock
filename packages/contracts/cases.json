@@ -1,0 +1,278 @@
+{
+  "contractVersion": 3,
+  "schemaFile": "schema/sync-v3.schema.json",
+  "entityTypes": [
+    "ledger.category",
+    "ledger.transaction",
+    "website.category",
+    "website",
+    "data.collection",
+    "data.record",
+    "user.preferences",
+    "dashboard.layout",
+    "automation.definition"
+  ],
+  "rejectionReasons": [
+    "invalid_id",
+    "invalid_fields",
+    "invalid_operation",
+    "invalid_base_revision",
+    "invalid_data",
+    "unknown_entity_type",
+    "entity_id_unavailable",
+    "category_not_found",
+    "category_type_mismatch",
+    "category_has_transactions",
+    "collection_not_found",
+    "collection_id_immutable",
+    "delete_unsupported"
+  ],
+  "semanticRules": {
+    "SR-1": "protocolVersion != 3 ⇒ HTTP 409, detail = sync_protocol_mismatch",
+    "SR-2": "mutation.data 必须符合其 entityType 对应的实体 schema；违反 ⇒ result.status=rejected, reason=invalid_data",
+    "SR-3": "operation=delete 时不得携带 data；违反 ⇒ rejected/invalid_data",
+    "SR-4": "mutation 对象键必须 ⊆ {mutationId,entityType,entityId,operation,baseRevision,data}；违反 ⇒ rejected/invalid_fields",
+    "SR-5": "changes.cursor 必须 ≤ workspaceRevision；违反 ⇒ HTTP 400 Invalid sync cursor",
+    "SR-6": "changes 非空时 cursor 必须等于最后一条 change 的 revision；违反 ⇒ 契约破坏",
+    "SR-7": "changes 的 revision 必须严格递增；违反 ⇒ 契约破坏",
+    "SR-8": "operation=delete 的 change 必须 data=null；operation=upsert 必须 data 为对象；违反 ⇒ 契约破坏"
+  },
+  "entityDataSchemas": {
+    "ledger.category": "LedgerCategoryData",
+    "ledger.transaction": "LedgerTransactionData",
+    "website.category": "WebsiteCategoryData",
+    "website": "WebsiteData",
+    "data.collection": "CollectionData",
+    "data.record": "RecordData",
+    "user.preferences": "PersonalStateData",
+    "dashboard.layout": "PersonalStateData",
+    "automation.definition": "PersonalStateData"
+  },
+  "cases": [
+    {
+      "name": "mutations-batch",
+      "file": "samples/valid/mutations-batch.json",
+      "schema": "MutationBatch",
+      "kind": "valid"
+    },
+    {
+      "name": "mutations-applied",
+      "file": "samples/valid/mutations-applied.json",
+      "schema": "MutationsResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "mutations-mixed",
+      "file": "samples/valid/mutations-mixed.json",
+      "schema": "MutationsResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "changes-page",
+      "file": "samples/valid/changes-page.json",
+      "schema": "ChangesResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "changes-empty",
+      "file": "samples/valid/changes-empty.json",
+      "schema": "ChangesResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "conflicts-list",
+      "file": "samples/valid/conflicts-list.json",
+      "schema": "ConflictsResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "conflict-resolution",
+      "file": "samples/valid/conflict-resolution.json",
+      "schema": "ConflictResolution",
+      "kind": "valid"
+    },
+    {
+      "name": "enrollment-request",
+      "file": "samples/valid/enrollment-request.json",
+      "schema": "EnrollmentRequest",
+      "kind": "valid"
+    },
+    {
+      "name": "enrollment-response",
+      "file": "samples/valid/enrollment-response.json",
+      "schema": "EnrollmentResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "error-response",
+      "file": "samples/valid/error-response.json",
+      "schema": "ErrorResponse",
+      "kind": "valid"
+    },
+    {
+      "name": "batch-protocol-version-2",
+      "file": "samples/invalid/batch-protocol-version-2.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-unknown-entity-type",
+      "file": "samples/invalid/batch-unknown-entity-type.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-missing-mutation-id",
+      "file": "samples/invalid/batch-missing-mutation-id.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-extra-mutation-field",
+      "file": "samples/invalid/batch-extra-mutation-field.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-negative-base-revision",
+      "file": "samples/invalid/batch-negative-base-revision.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-float-base-revision",
+      "file": "samples/invalid/batch-float-base-revision.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-bad-operation",
+      "file": "samples/invalid/batch-bad-operation.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-uppercase-uuid",
+      "file": "samples/invalid/batch-uppercase-uuid.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "batch-empty-mutations",
+      "file": "samples/invalid/batch-empty-mutations.json",
+      "schema": "MutationBatch",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "changes-revision-zero",
+      "file": "samples/invalid/changes-revision-zero.json",
+      "schema": "ChangesResponse",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "conflict-resolution-bad-strategy",
+      "file": "samples/invalid/conflict-resolution-bad-strategy.json",
+      "schema": "ConflictResolution",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "enrollment-response-bad-credential",
+      "file": "samples/invalid/enrollment-response-bad-credential.json",
+      "schema": "EnrollmentResponse",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "error-response-empty-detail",
+      "file": "samples/invalid/error-response-empty-detail.json",
+      "schema": "ErrorResponse",
+      "kind": "schema-invalid"
+    },
+    {
+      "name": "semantic-batch-naive-timestamp",
+      "kind": "semantic",
+      "file": "samples/semantic/batch-naive-timestamp.json",
+      "rule": "SR-2",
+      "expect": {
+        "status": "rejected",
+        "reason": "invalid_data"
+      }
+    },
+    {
+      "name": "semantic-amount-as-number",
+      "kind": "semantic",
+      "file": "samples/semantic/amount-as-number.json",
+      "rule": "SR-2",
+      "expect": {
+        "status": "rejected",
+        "reason": "invalid_data"
+      }
+    },
+    {
+      "name": "semantic-delete-with-data",
+      "kind": "semantic",
+      "file": "samples/semantic/delete-with-data.json",
+      "rule": "SR-3",
+      "expect": {
+        "status": "rejected",
+        "reason": "invalid_data"
+      }
+    },
+    {
+      "name": "semantic-protocol-mismatch",
+      "kind": "semantic",
+      "file": "samples/semantic/protocol-version-mismatch.json",
+      "rule": "SR-1",
+      "expect": {
+        "httpStatus": 409,
+        "detail": "sync_protocol_mismatch"
+      }
+    },
+    {
+      "name": "semantic-invalid-fields",
+      "kind": "semantic",
+      "file": "samples/semantic/invalid-fields.json",
+      "rule": "SR-4",
+      "expect": {
+        "status": "rejected",
+        "reason": "invalid_fields"
+      }
+    },
+    {
+      "name": "semantic-cursor-beyond",
+      "kind": "semantic",
+      "file": "samples/semantic/changes-cursor-beyond.json",
+      "rule": "SR-5",
+      "expect": {
+        "httpStatus": 400,
+        "detail": "Invalid sync cursor"
+      }
+    },
+    {
+      "name": "semantic-cursor-not-last-revision",
+      "kind": "semantic",
+      "file": "samples/semantic/changes-cursor-not-last-revision.json",
+      "rule": "SR-6",
+      "expect": {
+        "invalid": true
+      }
+    },
+    {
+      "name": "semantic-revision-order",
+      "kind": "semantic",
+      "file": "samples/semantic/changes-revision-order.json",
+      "rule": "SR-7",
+      "expect": {
+        "invalid": true
+      }
+    },
+    {
+      "name": "semantic-upsert-null-data",
+      "kind": "semantic",
+      "file": "samples/semantic/changes-upsert-null-data.json",
+      "rule": "SR-8",
+      "expect": {
+        "invalid": true
+      }
+    }
+  ]
+}
