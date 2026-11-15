@@ -34,8 +34,7 @@ def create(local, entity_type, parent_id=None, name="First"):
         fields.update(description="Collection", icon="custom", tone="blue")
     else:
         fields.update(collection_id=parent_id, status="active", category="test", data_json={"value": 42})
-    if entity_type != "data.record":
-        fields.update(user_id=local.user_id, workspace_id=local.workspace_id)
+    fields.update(user_id=local.user_id, workspace_id=local.workspace_id)
     with local.factory() as db:
         item = adapter.model(id=item_id, **fields)
         db.add(item)

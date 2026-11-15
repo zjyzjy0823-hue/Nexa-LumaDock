@@ -290,6 +290,8 @@ class DataCollection(Base):
 class DataRecord(Base):
     __tablename__ = "data_records"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     collection_id: Mapped[str] = mapped_column(ForeignKey("data_collections.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(40), default="active")

@@ -69,14 +69,16 @@ def collection_or_404(db: Session, user: User, id: str) -> DataCollection:
 
 
 def record_or_404(db: Session, user: User, id: str) -> DataRecord:
+    workspace_id = owner_workspace(db, user)
     item = db.scalar(
         select(DataRecord)
         .join(DataCollection)
         .where(
             DataRecord.id == id,
             DataRecord.deleted_at.is_(None),
+            DataRecord.workspace_id == workspace_id,
             DataCollection.user_id == user.id,
-            DataCollection.workspace_id == owner_workspace(db, user),
+            DataCollection.workspace_id == workspace_id,
             DataCollection.deleted_at.is_(None),
         )
     )
@@ -196,8 +198,14 @@ def list_records(id: str, user: User = None, db: Session = None):
 
 def create_record(id: str, payload: RecordInput, user: User = None, db: Session = None):
     prepare_write(db, user)
-    collection_or_404(db, user, id)
-    item = DataRecord(id=str(uuid4()), collection_id=id, **payload.model_dump())
+    collection = collection_or_404(db, user, id)
+    item = DataRecord(
+        id=str(uuid4()),
+        collection_id=collection.id,
+        user_id=collection.user_id,
+        workspace_id=collection.workspace_id,
+        **payload.model_dump(),
+    )
     db.add(item)
     publish(db, item)
     return record_out(item)

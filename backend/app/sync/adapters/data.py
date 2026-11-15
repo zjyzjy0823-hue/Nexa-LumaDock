@@ -38,6 +38,7 @@ class RecordData(BaseModel):
 class DataCollectionAdapter(SyncAdapter):
     def prepare_delete(self, db, item, publish):
         for child in db.scalars(select(DataRecord).where(DataRecord.collection_id == item.id,
+                                                         DataRecord.workspace_id == item.workspace_id,
                                                          DataRecord.deleted_at.is_(None))).all():
             child.deleted_at = utcnow()
             publish(db, child, "delete")
@@ -49,7 +50,10 @@ class DataRecordAdapter(SyncAdapter):
         return parent.workspace_id if parent else None
 
     def create(self, db, entity_id, user_id, workspace_id, data):
-        return DataRecord(id=entity_id, collection_id=data.collectionId)
+        parent = db.get(DataCollection, data.collectionId)
+        return DataRecord(id=entity_id, collection_id=data.collectionId,
+                          user_id=parent.user_id if parent else user_id,
+                          workspace_id=parent.workspace_id if parent else workspace_id)
 
     def legacy_rows(self, db, workspace_id):
         return db.scalars(select(DataRecord).join(DataCollection).where(
