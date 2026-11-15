@@ -26,8 +26,9 @@ function updateChannel(id: NotificationChannel, enabled: boolean) {
     </div>
     <div class="settings-card">
       <div class="settings-card__heading">通知渠道</div>
+      <p class="notification-hint">通知投递尚未实现：渠道开关会保存偏好，但本版本不会真的发送通知。</p>
       <div class="notification-channels">
-        <div v-for="channel in notificationChannelOptions" :key="channel.id" class="notification-channel"><div class="settings-icon-tile"><component :is="icons[channel.id]" :size="17" /></div><span>{{ channel.label }}</span><Toggle :model-value="config.channels[channel.id]" :aria-label="`${channel.label} 通知`" @update:model-value="updateChannel(channel.id, $event)" /></div>
+        <div v-for="channel in notificationChannelOptions" :key="channel.id" class="notification-channel"><div class="settings-icon-tile"><component :is="icons[channel.id]" :size="17" /></div><span>{{ channel.label }}</span><Toggle :model-value="config.channels[channel.id]" disabled :aria-label="`${channel.label} 通知（未启用）`" /></div>
       </div>
     </div>
   </SettingsSection>
@@ -40,4 +41,5 @@ function updateChannel(id: NotificationChannel, enabled: boolean) {
 .notification-channel .settings-icon-tile { width: 31px; height: 31px; border-radius: 9px; }
 .notification-channel :deep(.glass-toggle) { margin-left: auto; }
 @media (max-width: 560px) { .notification-channels { grid-template-columns: 1fr; } }
+.notification-hint { margin: 0 0 8px; font-size: 11px; color: var(--text-muted); }
 </style>

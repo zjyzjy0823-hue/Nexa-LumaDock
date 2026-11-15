@@ -32,12 +32,12 @@ function onImport(event: Event) {
       </div>
     </div>
     <div class="settings-button-row storage-actions">
-      <ActionButton variant="secondary" @click="emit('clear')"><Trash2 :size="15" />清理缓存</ActionButton>
+      <ActionButton variant="secondary" disabled title="本版本不管理缓存"><Trash2 :size="15" />清理缓存（未启用）</ActionButton>
       <ActionButton variant="secondary" @click="emit('export')"><Download :size="15" />导出设置</ActionButton>
       <label class="storage-import-button"><Upload :size="15" />导入设置<input type="file" accept="application/json,.json" @change="onImport" /></label>
       <ActionButton @click="emit('backup')"><Archive :size="15" />备份设置</ActionButton>
     </div>
-    <p class="storage-help"><RotateCcw :size="12" />存储用量暂不可用；导入与备份仅包含账户设置。</p>
+    <p class="storage-help"><RotateCcw :size="12" />存储用量与缓存清理尚未实现；导入与备份仅包含账户设置。</p>
   </SettingsSection>
 </template>
 

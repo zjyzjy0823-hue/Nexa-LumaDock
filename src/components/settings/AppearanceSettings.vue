@@ -15,6 +15,7 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
 
 <template>
   <SettingsSection title="外观" description="调整 Nexa 的玻璃质感与环境光。">
+    <p class="appearance-note">外观设置会保存并同步到其他设备，但当前版本的界面还不会随它变化（主题与强调色改造已排期）。</p>
     <div class="appearance-layout">
       <div class="appearance-main">
         <div class="settings-card">
@@ -125,4 +126,5 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
 .appearance-preview-note { margin: 10px 2px 0; color: rgba(255,255,255,.7); font-size: 10px; line-height: 1.5; }
 @media (max-width: 1100px) { .appearance-layout { grid-template-columns: 1fr; } .appearance-preview { min-height: 240px; } }
 @media (max-width: 560px) { .theme-options { gap: 6px; } .theme-option { padding: 6px; } .theme-option__preview { height: 43px; } .theme-option strong { font-size: 10px; } .theme-option small { display: none; } .background-options { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+.appearance-note { margin: 0 0 10px; font-size: 11px; color: var(--text-muted); }
 </style>
