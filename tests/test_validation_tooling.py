@@ -119,7 +119,7 @@ class ImpactTests(unittest.TestCase):
 
     def test_ci_requires_exact_commit_and_all_jobs_success(self):
         run = {"headSha": "current", "workflowName": "CI", "status": "completed", "conclusion": "success", "url": "https://example.invalid",
-               "jobs": [{"name": name, "conclusion": "success"} for name in ("frontend", "backend", "backend-postgres", "device-client", "openclaw-adapter", "desktop-windows", "validation-impact")]}
+               "jobs": [{"name": name, "conclusion": "success"} for name in ("frontend", "backend", "backend-postgres", "device-client", "openclaw-adapter", "desktop-windows", "validation-impact", "contracts")]}
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "PASS")
             with self.assertRaises(ValueError):
