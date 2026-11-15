@@ -2,7 +2,12 @@ fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
 SQLAlchemy>=2.0,<3
 PyJWT>=2.10,<3
-pydantic>=2.12,<3
+# Exact pin: scripts/export-agent-tools.py serialises Pydantic-generated JSON
+# Schema into agent-adapters/openclaw/plugin/src/catalog.json and CI compares it
+# byte for byte. Pydantic 2.14 dropped the Decimal constraint `pattern`, which
+# turned that check red for every run. Bump this pin and regenerate the catalog
+# in the same commit, never one without the other.
+pydantic==2.13.5
 pytest>=8,<9
 httpx>=0.28,<1
 alembic>=1.13,<2
