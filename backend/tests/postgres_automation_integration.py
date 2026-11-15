@@ -29,6 +29,18 @@ def succeeded(replica, workflow_id):
     return next((row for row in response.json() if row["status"] == "succeeded"), None)
 
 
+def visible_records(server, collection):
+    """Records of a collection, or [] while the replica has not pulled it yet.
+
+    `checked()` asserts the status, so calling it inside `eventually` turns a
+    normal convergence window into an instant failure: replica B answers 404
+    "Collection not found" until its background cycle applies the collection.
+    The assertion here is about eventual convergence, not immediate visibility.
+    """
+    response = server.client.get(f"/api/v1/data/collections/{collection}/records")
+    return response.json() if response.status_code == 200 else []
+
+
 def create(replica, name, action, config, trigger="manual", trigger_config=None):
     return replica.request("POST", ROOT, expected=201, json={"name": name, "trigger_type": trigger,
         "trigger_config_json": trigger_config or {}, "workflow_json": [{"kind": "DO", "action": {"type": action, "config": config}}]})["id"]
@@ -69,7 +81,7 @@ def main():
             eventually(lambda: any(row["id"] == listener for row in core.request("GET", ROOT)), "definition sync")
             source = a.request("POST", f"/api/v1/data/collections/{collection}/records", expected=201, json={"name": "Local A write"})["id"]
             event_run = eventually(lambda: succeeded(a, listener), "Local A -> background sync -> Core event -> Ledger")
-            eventually(lambda: any(row["id"] == source for row in b.request("GET", f"/api/v1/data/collections/{collection}/records")), "Local B pulls source")
+            eventually(lambda: any(row["id"] == source for row in visible_records(b, collection)), "Local B pulls source")
             eventually(lambda: drained(a) and drained(b), "both replicas idle")
             history = a.request("GET", f"{ROOT}/{listener}/executions?runtime=true")
             assert len(history) == 1 and history[0]["id"] == event_run["id"]
