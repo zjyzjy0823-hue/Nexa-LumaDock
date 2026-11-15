@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
 import { version } from '../../../package.json'
 import ActionButton from '../ui/ActionButton.vue'
 import Input from '../ui/Input.vue'
 import SettingsSection from './SettingsSection.vue'
 import ConflictCenter from './ConflictCenter.vue'
+import { decideSyncRejected, getSyncRejected, type RejectedEntry } from '../../api/sync'
+import { conflictEntityLabel } from '../../services/conflictPresentation'
+import { useAuthStore } from '../../stores/auth'
 import { desktopPlatform } from '../../desktop/platform'
 import { useCoreSync } from '../../composables/useCoreSync'
 import { syncErrorMessage, syncStatusDisplay } from '../../services/coreSyncErrors'
@@ -25,6 +28,30 @@ const conflictsOpen = ref(false)
 const testStatus = computed(() => connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
 const statusLabels = { connected: '已连接', disconnected: '未连接', unauthorized: '凭证失效', unreachable: '无法访问 Core' }
 const syncDisplay = computed(() => syncStatus.value ? syncStatusDisplay(syncStatus.value) : null)
+const auth = useAuthStore()
+const rejectedEntries = ref<RejectedEntry[]>([])
+const rejectedBusy = ref<string | null>(null)
+
+async function loadRejected() {
+  if (!auth.token || !syncStatus.value?.rejected) { rejectedEntries.value = []; return }
+  try { rejectedEntries.value = await getSyncRejected(auth.token) } catch { rejectedEntries.value = [] }
+}
+
+async function decideRejected(entry: RejectedEntry, decision: 'dismiss' | 'retry') {
+  if (!auth.token || rejectedBusy.value) return
+  rejectedBusy.value = entry.id
+  try {
+    await decideSyncRejected(auth.token, entry.id, decision)
+    emit('action', decision === 'dismiss' ? '已放弃这条被拒绝的写入。' : '已按当前数据重新排队。')
+    await refresh(false)
+    await loadRejected()
+  } catch {
+    emit('action', '操作失败，请稍后重试。')
+  } finally { rejectedBusy.value = null }
+}
+
+watch(() => syncStatus.value?.rejected, () => { void loadRejected() })
+onMounted(() => { void loadRejected() })
 
 function formatTime(value: string | null) {
   if (!value) return '尚无成功同步'
@@ -131,6 +158,21 @@ onUnmounted(() => { password.value = '' })
         {{ syncResult.status === 'ok' ? '同步完成' : '同步未完成' }}：上传 {{ syncResult.pushed }} 项，接收 {{ syncResult.pulled }} 项。
         <span v-if="syncResult.status === 'error'">{{ syncErrorMessage(syncResult.lastError) }}</span>
       </p>
+
+    <div v-if="rejectedEntries.length" class="settings-card">
+      <div class="settings-card__heading"><span>被拒绝的写入</span><small>{{ rejectedEntries.length }} 条</small></div>
+      <p class="sync-rejected-hint">Core 拒绝了这些改动。可以放弃，或修正数据后按当前内容重新提交。</p>
+      <ul class="sync-rejected-list">
+        <li v-for="entry in rejectedEntries" :key="entry.id">
+          <div><strong>{{ conflictEntityLabel(entry.entityType) }}</strong><span>{{ entry.reason || '未知原因' }} · {{ entry.operation === 'delete' ? '删除' : '写入' }}</span></div>
+          <div class="settings-button-row">
+            <ActionButton variant="secondary" :disabled="!!rejectedBusy" @click="decideRejected(entry, 'dismiss')">放弃</ActionButton>
+            <ActionButton :disabled="!!rejectedBusy" @click="decideRejected(entry, 'retry')">重试</ActionButton>
+          </div>
+        </li>
+      </ul>
+    </div>
+
       <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
     </div>
   </SettingsSection>
@@ -174,4 +216,9 @@ onUnmounted(() => { password.value = '' })
 @keyframes sync-rotate { to { transform: rotate(360deg); } }
 @media (max-width: 560px) { .sync-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .connection-details { grid-template-columns: 80px minmax(0, 1fr); gap: 10px; } }
 @media (prefers-reduced-motion: reduce) { .sync-spin { animation: none; } }
+.sync-rejected-hint { margin: 0 0 8px; font-size: 11px; color: var(--text-muted); }
+.sync-rejected-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sync-rejected-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid rgba(150,174,218,.16); border-radius: 10px; font-size: 11px; }
+.sync-rejected-list li strong { display: block; font-size: 12px; }
+.sync-rejected-list li span { color: var(--text-muted); }
 </style>

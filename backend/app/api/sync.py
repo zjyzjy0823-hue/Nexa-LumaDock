@@ -17,6 +17,7 @@ from ..sync.adapters import seed_version
 from ..sync.local import seed_local_queue
 from ..sync.engine import run_resync, run_sync_cycle
 from ..sync.conflicts import get_conflict, list_conflicts, resolve_conflict
+from ..sync.rejected import dismiss_rejected, list_rejected, retry_rejected
 from ..sync.notifications import get_coordinator
 from ..sync.background import SAFE_SYNC_ERRORS
 from ..sync.remote import SyncRemoteError
@@ -74,6 +75,24 @@ def conflict_resolution(conflict_id: str, payload: ConflictResolution,
                         db: Session = Depends(get_db)):
     return resolve_conflict(db, user.id, get_personal_workspace(db, user).id,
                             conflict_id, payload.strategy, payload.expectedRemoteRevision)
+
+
+@router.get("/rejected")
+def rejected_entries(_local: None = Depends(require_local_mode),
+                     user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return list_rejected(db, get_personal_workspace(db, user).id)
+
+
+@router.post("/rejected/{entry_id}/dismiss")
+def rejected_dismiss(entry_id: str, _local: None = Depends(require_local_mode),
+                     user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return dismiss_rejected(db, get_personal_workspace(db, user).id, entry_id)
+
+
+@router.post("/rejected/{entry_id}/retry")
+def rejected_retry(entry_id: str, _local: None = Depends(require_local_mode),
+                   user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return retry_rejected(db, get_personal_workspace(db, user).id, entry_id)
 
 
 @router.post("/mutations")

@@ -58,3 +58,28 @@ export const getSyncConflicts = (token: string, signal?: AbortSignal) => apiRequ
 export const getSyncConflict = (token: string, id: string, signal?: AbortSignal) => apiRequest<SyncConflict>(`/api/v1/sync/conflicts/${encodeURIComponent(id)}`, { signal }, token)
 export const resolveSyncConflict = (token: string, id: string, strategy: ConflictStrategy, expectedRemoteRevision: number) =>
   apiRequest<ConflictResolution>(`/api/v1/sync/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ strategy, expectedRemoteRevision }) }, token)
+
+export interface RejectedEntry {
+  id: string
+  mutationId: string
+  entityType: SyncEntityType
+  entityId: string
+  operation: 'upsert' | 'delete'
+  baseRevision: number
+  reason: string | null
+  attempts: number
+  payload: Record<string, unknown> | null
+  updatedAt: string
+}
+export interface RejectedDecision {
+  id: string
+  decision: 'dismiss' | 'retry'
+  status: 'resolved'
+  mutationId: string | null
+  resolvedAt: string
+}
+
+export const getSyncRejected = (token: string, signal?: AbortSignal) =>
+  apiRequest<RejectedEntry[]>('/api/v1/sync/rejected', { signal }, token)
+export const decideSyncRejected = (token: string, id: string, decision: 'dismiss' | 'retry') =>
+  apiRequest<RejectedDecision>(`/api/v1/sync/rejected/${encodeURIComponent(id)}/${decision}`, { method: 'POST' }, token)
