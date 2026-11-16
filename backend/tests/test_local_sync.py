@@ -214,6 +214,38 @@ def test_synced_category_delete_preserves_reference_and_anomaly_rejected(client,
         iterator.close()
 
 
+def test_patch_keeps_deleted_category_unless_category_or_type_changes(client, users):
+    auth, _ = users
+    category_ids = [client.post(f"{LEDGER}/categories", headers=auth,
+                               json={"name": name, "type": "expense"}).json()["id"]
+                    for name in ("Historical", "Other historical")]
+    transaction_id = client.post(f"{LEDGER}/transactions", headers=auth,
+                                 json=transaction_data(category_ids[0])).json()["id"]
+    iterator, db = db_session()
+    try:
+        for revision, category_id in enumerate(category_ids, start=1):
+            db.get(LedgerCategory, category_id).sync_revision = revision
+            db.delete(db.scalar(select(LocalMutation).where(LocalMutation.entity_id == category_id)))
+        db.get(LedgerTransaction, transaction_id).sync_revision = 3
+        db.delete(db.scalar(select(LocalMutation).where(LocalMutation.entity_id == transaction_id)))
+        db.commit()
+    finally:
+        iterator.close()
+    for category_id in category_ids:
+        assert client.delete(f"{LEDGER}/categories/{category_id}", headers=auth).status_code == 204
+
+    response = client.patch(f"{LEDGER}/transactions/{transaction_id}", headers=auth,
+                            json={"category_id": category_ids[0], "type": "expense", "note": "Updated note"})
+    assert response.status_code == 200, response.text
+    assert response.json()["categoryId"] == category_ids[0]
+    assert response.json()["note"] == "Updated note"
+    for patch in ({"category_id": category_ids[1]}, {"type": "income"}):
+        response = client.patch(f"{LEDGER}/transactions/{transaction_id}", headers=auth, json=patch)
+        assert response.status_code == 404 and response.json()["detail"] == "Category not found"
+    saved = client.get(f"{LEDGER}/transactions/{transaction_id}", headers=auth).json()
+    assert saved["categoryId"] == category_ids[0] and saved["type"] == "expense"
+
+
 def test_queue_failure_rolls_back_business_and_status_isolated(client, users, monkeypatch):
     a, b = users
     def fail_queue(*_args):

@@ -271,7 +271,7 @@ def patch_transaction(
     category_id = values.get("category_id", item.category_id)
     if kind is None:
         raise HTTPException(422, "type cannot be null")
-    if "category_id" in values or kind != item.type:
+    if category_id != item.category_id or kind != item.type:
         check_category(db, user, category_id, kind)
     for key, value in values.items():
         if value is None and key != "category_id":
