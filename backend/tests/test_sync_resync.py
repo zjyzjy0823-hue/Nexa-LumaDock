@@ -22,7 +22,7 @@ from app.main import app
 from app.models import (Client, LedgerCategory, LedgerTransaction, LocalMutation,
                         LocalSyncState, SyncWorkspaceState, User)
 from app.sync import engine
-from app.sync.engine import _lock_for, run_resync, run_sync_cycle
+from app.sync.engine import _apply_change, _freeze, _lock_for, run_resync, run_sync_cycle
 from app.sync.remote import SyncRemoteClient, SyncRemoteError
 from app.sync.service import ensure_core_sync_initialized
 from app.sync.snapshot import (SnapshotCursorInvalid, SnapshotExpired, build_snapshot,
@@ -118,6 +118,104 @@ def network(tmp_path):
 def revision_of(network):
     with network.core.factory() as db:
         return db.get(SyncWorkspaceState, network.core.workspace_id).current_revision
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_changes_replay_preserves_newer_revision_and_pending_edit(network, pending):
+    n = network
+    item_id = create_transaction(n.a)
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["status"] == "ok"
+    with n.b.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        item.description = "Newer local value"
+        item.sync_revision = 10
+        db.get(LocalSyncState, n.b.workspace_id).cursor = 0
+        db.commit()
+    if pending:
+        edit(n.b, item_id, "Pending local value")
+    before = queue(n.b, item_id)
+
+    _apply_change(n.b.factory, n.b.user_id, n.b.workspace_id, n.tb.get_changes(0, 1)["changes"][0])
+
+    with n.b.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        assert item.description == ("Pending local value" if pending else "Newer local value")
+        assert item.sync_revision == 10
+        assert db.get(LocalSyncState, n.b.workspace_id).cursor == 1
+    assert queue(n.b, item_id) == before
+
+
+def test_resync_snapshot_replaces_different_data_at_same_revision(network):
+    n = network
+    item_id = create_transaction(n.a, description="Snapshot value")
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["status"] == "ok"
+    with n.b.factory() as db:
+        db.get(LedgerTransaction, item_id).description = "Divergent local value"
+        db.commit()
+
+    result = n.resync(n.b, n.tb)
+
+    assert result["applied"] == 1
+    with n.b.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        assert item.description == "Snapshot value" and item.sync_revision == 1
+
+
+@pytest.mark.parametrize("pending", ["none", "edit", "tail", "conflict_tail"])
+def test_resync_snapshot_overrides_rolled_back_revision_without_losing_edits(network, pending):
+    n = network
+    item_id = create_transaction(n.a)
+    assert n.sync(n.a, n.ta)["status"] == "ok"
+    for description in ("Core second", "Restored snapshot"):
+        edit(n.a, item_id, description)
+        assert n.sync(n.a, n.ta)["status"] == "ok"
+    assert n.sync(n.b, n.tb)["status"] == "ok"
+    assert revision_of(n) == 3
+    with n.b.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        item.description = "Local revision ten"
+        item.sync_revision = 10
+        db.get(LocalSyncState, n.b.workspace_id).cursor = 10
+        db.commit()
+    if pending != "none":
+        edit(n.b, item_id, "Local pending")
+    if pending in ("tail", "conflict_tail"):
+        mutation_id = queue(n.b, item_id)[0][0]
+        _freeze(n.b.factory, n.b.workspace_id, mutation_id)
+        if pending == "conflict_tail":
+            with n.b.factory() as db:
+                entry = db.scalar(select(LocalMutation).where(LocalMutation.mutation_id == mutation_id))
+                entry.status = "conflict"
+                entry.result_revision = 12
+                entry.conflict_json = {"currentRevision": 12, "current": {}, "deleted": False}
+                db.commit()
+        edit(n.b, item_id, "Local editable tail")
+    before = queue(n.b, item_id)
+
+    result = n.resync(n.b, n.tb)
+
+    assert result["cursor"] == 3
+    with n.b.factory() as db:
+        item = db.get(LedgerTransaction, item_id)
+        if pending == "none":
+            assert item.description == "Restored snapshot" and item.sync_revision == 3
+            assert result["applied"] == 1
+        else:
+            assert result["conflicts"] == 1
+            assert item.description == ("Local pending" if pending == "edit" else "Local editable tail")
+            assert item.sync_revision == 10
+            entries = db.scalars(select(LocalMutation).where(LocalMutation.entity_id == item_id)).all()
+            owner = next(entry for entry in entries if entry.depends_on_mutation_id is None)
+            assert owner.status == "conflict" and owner.result_revision == 3
+            assert owner.conflict_json["current"]["description"] == "Restored snapshot"
+            assert owner.conflict_json["currentRevision"] == 3
+            assert [(entry[0], entry[2:]) for entry in queue(n.b, item_id)] == [
+                (entry[0], entry[2:]) for entry in before]
+            if pending in ("tail", "conflict_tail"):
+                tail = next(entry for entry in entries if entry.depends_on_mutation_id is not None)
+                assert tail.status == "pending" and tail.depends_on_mutation_id == owner.mutation_id
 
 
 def test_recovery_error_bodies_map_to_safe_codes(monkeypatch):

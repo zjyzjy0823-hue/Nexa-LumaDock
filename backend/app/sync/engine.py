@@ -178,12 +178,13 @@ def _send(factory, workspace_id: str, remote, mutation_id: str, cancel_event=Non
 
 
 def _apply_entity(db, user_id: int, workspace_id: str, entity_type: str, entity_id: str,
-                  operation: str, revision: int, data) -> str:
+                  operation: str, revision: int, data, *, from_snapshot: bool = False) -> str:
     """Apply one remote entity state at ``revision``; the caller owns the transaction.
 
     Shared by the `/changes` replay (`_apply_change`) and snapshot recovery
-    (`_apply_snapshot`) so both keep exactly one ownership/conflict semantic. It
-    never touches the cursor: each caller decides what advancing it means.
+    (`_apply_snapshot`) so both keep the same ownership and pending-edit protection.
+    Only a snapshot may replace a newer local revision after Core restores a backup.
+    It never touches the cursor: each caller decides what advancing it means.
 
     Returns ``applied``, ``deleted``, ``conflict``, ``echo`` (Core echoed a revision
     this replica already holds, so the local pending tail wins) or ``absent`` (a
@@ -194,9 +195,15 @@ def _apply_entity(db, user_id: int, workspace_id: str, entity_type: str, entity_
     item = adapter.find(db, entity_id, workspace_id)
     if item is not None and adapter.workspace_id(db, item) != workspace_id:
         raise SyncRemoteError("ownership_conflict")
-    if item is not None and revision <= item.sync_revision:
+    if item is not None and revision <= item.sync_revision and not from_snapshot:
         return "echo"
     entries = _entries(db, workspace_id, entity_type, entity_id)
+    if from_snapshot and item is not None and revision == item.sync_revision:
+        # An acknowledged revision still protects its pending local tail. Without
+        # local edits, skip only an identical snapshot, never different Core data.
+        if entries or (operation == "delete" and item.deleted_at is not None) or (
+                operation == "upsert" and item.deleted_at is None and adapter.serialize(item) == data):
+            return "echo"
     if entries:
         conflict = {"currentRevision": revision,
                     "current": data if operation == "upsert" else None,
@@ -206,14 +213,15 @@ def _apply_entity(db, user_id: int, workspace_id: str, entity_type: str, entity_
                 # The predecessor owns the unresolved conflict. Keep its
                 # editable tail blocked and avoid a second frozen row.
                 continue
-            if entry.status == "conflict" and revision <= max(
+            if not from_snapshot and entry.status == "conflict" and revision <= max(
                     entry.result_revision or 0,
                     (entry.conflict_json or {}).get("currentRevision", 0)):
                 # A push response can already know a revision beyond the
                 # pull cursor. Older history must not regress that snapshot.
                 continue
             if entry.status == "conflict" or (
-                    entry.status in ("pending", "in_flight") and entry.base_revision < revision):
+                    entry.status in ("pending", "in_flight") and (
+                        entry.base_revision < revision or (from_snapshot and entry.base_revision != revision))):
                 # Keep the conflict owner's remote snapshot current without
                 # changing the local edit, its base, or its blocked tail.
                 detected_at = (entry.conflict_json or {}).get("detectedAt") or (
@@ -414,7 +422,7 @@ def _apply_snapshot(factory, user_id: int, workspace_id: str, revision: int, row
         for entity_type, entity_id, operation, entity_revision, data in order:
             try:
                 outcome = _apply_entity(db, user_id, workspace_id, entity_type, entity_id,
-                                        operation, entity_revision, data)
+                                        operation, entity_revision, data, from_snapshot=True)
             except SyncRemoteError as error:
                 if error.code not in RESYNC_SKIPPED:
                     raise
@@ -439,8 +447,8 @@ def run_resync(factory, user_id: int, workspace_id: str, metadata=None, credenti
     """Rebuild this Local replica from a Core snapshot (protocol v3 §11).
 
     Holds the workspace lock for the whole recovery, so a background cycle can never
-    interleave with it. The outbox is read but never modified: local edits keep their
-    `base_revision` and become conflicts on the next push instead of being dropped.
+    interleave with it. Local edits keep their payload and `base_revision`; divergent
+    snapshot revisions turn them into conflicts instead of overwriting them.
     """
     page_limit = page_limit or RESYNC_PAGE_LIMIT
     with factory() as db:
