@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from ...database import get_db
 from ...models import User
@@ -19,19 +19,34 @@ def legacy_data(
 
 
 @v1_router.get("/collections")
-def list_collections(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    result = service.list_collections(user=user, db=db)
+def list_collections(
+    include_records: bool = True,
+    q: str = "",
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    result = service.list_collections(user=user, db=db, include_records=include_records, q=q)
     return result
+
+
+@v1_router.get("/overview")
+def overview(
+    recent_limit: int = Query(default=4, ge=1, le=20),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    return service.overview(user=user, db=db, recent_limit=recent_limit)
 
 
 @v1_router.post("/collections", status_code=201)
 def create_collection(
     payload: CollectionInput,
+    include_records: bool = True,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        result = service.create_collection(payload=payload, user=user, db=db)
+        result = service.create_collection(payload=payload, user=user, db=db, include_records=include_records)
         db.commit()
     except Exception:
         db.rollback()
@@ -41,9 +56,10 @@ def create_collection(
 
 @v1_router.get("/collections/{id}")
 def get_collection(
-    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+    id: str, include_records: bool = True,
+    user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
-    result = service.get_collection(id=id, user=user, db=db)
+    result = service.get_collection(id=id, user=user, db=db, include_records=include_records)
     return result
 
 
@@ -51,11 +67,12 @@ def get_collection(
 def patch_collection(
     id: str,
     payload: CollectionPatch,
+    include_records: bool = True,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        result = service.patch_collection(id=id, payload=payload, user=user, db=db)
+        result = service.patch_collection(id=id, payload=payload, user=user, db=db, include_records=include_records)
         db.commit()
     except Exception:
         db.rollback()
@@ -78,10 +95,22 @@ def delete_collection(
 
 @v1_router.get("/collections/{id}/records")
 def list_records(
-    id: str, user: User = Depends(current_user), db: Session = Depends(get_db)
+    id: str,
+    request: Request,
+    page: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+    q: str = "",
+    include_data_json: bool = False,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
-    result = service.list_records(id=id, user=user, db=db)
-    return result
+    if not page:
+        if {"limit", "cursor", "q", "include_data_json"}.intersection(request.query_params):
+            raise HTTPException(422, "limit/cursor/q/include_data_json require page=true")
+        return service.list_records(id=id, user=user, db=db)
+    return service.page_records(id=id, user=user, db=db, limit=limit, cursor=cursor,
+                                q=q, include_data_json=include_data_json)
 
 
 @v1_router.post("/collections/{id}/records", status_code=201)
