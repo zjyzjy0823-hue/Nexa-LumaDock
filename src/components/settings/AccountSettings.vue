@@ -2,7 +2,7 @@
 import { Camera, KeyRound, UserRound } from 'lucide-vue-next'
 import ActionButton from '../ui/ActionButton.vue'
 import SettingsSection from './SettingsSection.vue'
-import { languageOptions, timezoneOptions } from '../../mock/settings'
+import { languageOptions } from '../../mock/settings'
 import type { UserProfile } from '../../types/settings'
 
 const props = defineProps<{ profile: UserProfile; avatarUrl?: string }>()
@@ -34,7 +34,7 @@ function onAvatar(event: Event) { emit('avatar', (event.target as HTMLInputEleme
       </div>
       <div class="settings-field-grid profile-fields">
         <label class="settings-field"><span>用户名</span><input :value="profile.username" maxlength="80" aria-label="用户名" @change="update('username', ($event.target as HTMLInputElement).value)" /></label>
-        <label class="settings-field"><span>时区</span><select :value="profile.timezone" @change="update('timezone', ($event.target as HTMLSelectElement).value)"><option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</option></select></label>
+        <label class="settings-field"><span>部署时区</span><input :value="profile.timezone" readonly aria-label="部署时区" aria-describedby="deployment-timezone-description" /><small id="deployment-timezone-description">部署时区由服务端 APP_TIMEZONE 决定，此处不可修改</small></label>
         <label class="settings-field"><span>语言</span><select :value="profile.language" @change="update('language', ($event.target as HTMLSelectElement).value)"><option v-for="language in languageOptions" :key="language" :value="language">{{ language }}</option></select></label>
       </div>
     </div>

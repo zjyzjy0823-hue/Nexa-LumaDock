@@ -30,7 +30,7 @@ const activeSection = ref<SettingsSectionId>('account')
 const searchQuery = ref('')
 const auth = useAuthStore()
 const store = useSettingsStore()
-const profile = computed<UserProfile>(() => ({ username: auth.user?.username ?? '', email: '', timezone: store.settings.timezone, language: store.settings.language }))
+const profile = computed<UserProfile>(() => ({ username: auth.user?.username ?? '', email: '', timezone: store.settings.deploymentTimezone ?? '未知', language: store.settings.language }))
 const appearance = computed<AppearanceConfig>(() => ({ ...defaultSettings.appearance, ...store.settings.appearance } as AppearanceConfig))
 const security = computed<SecurityConfig>(() => ({ ...defaultSettings.security, ...store.settings.security } as SecurityConfig))
 const notifications = computed<NotificationConfig>(() => store.settings.notifications)
@@ -51,7 +51,7 @@ async function updateProfile(value: UserProfile) {
   if (!auth.token) return
   try {
     if (value.username !== profile.value.username) auth.user = await settingsService.account(auth.token, { username: value.username })
-    return await saveSettings({ timezone: value.timezone, language: value.language })
+    return await saveSettings({ language: value.language })
   } catch (error) { emit('action', error instanceof Error ? error.message : '账户保存失败'); return false }
 }
 async function updateAvatar(url: string) {
@@ -68,7 +68,10 @@ function selectFirstSearchResult() {
   const match = settingsNavigation.find(item => item.label.includes(searchQuery.value.trim()))
   if (match) selectSection(match.id)
 }
-function resetSettings() { saveSettings(structuredClone(defaultSettings)) }
+function resetSettings() {
+  const { timezone: _timezone, deploymentTimezone: _deploymentTimezone, ...editable } = structuredClone(defaultSettings)
+  saveSettings(editable)
+}
 async function updatePassword() {
   if (!passwordDraft.value.current || passwordDraft.value.next.length < 8 || passwordDraft.value.next !== passwordDraft.value.confirm) {
     emit('action', '请输入原密码，并确认至少 8 位的新密码。')

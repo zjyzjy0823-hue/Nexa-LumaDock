@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, runtime_config
 from ..models import User, UserPreference
 from ..security import current_user, hash_password, verify_password
 from ..schemas import UserPublic
@@ -78,6 +78,7 @@ def public_settings(item: UserPreference) -> dict:
         "timezone": item.timezone, "appearance": extra.get("appearance", {}),
         "notifications": extra.get("notifications", {})})
     values.pop("schemaVersion")
+    values["deploymentTimezone"] = runtime_config.app_timezone
     values.update(sync={key: value for key, value in (extra.get("sync") or {}).items()
                        if key in {"mode", "serverUrl", "automatic", "cellular", "lastSynced"}},
                   security={key: value for key, value in (extra.get("security") or {}).items()

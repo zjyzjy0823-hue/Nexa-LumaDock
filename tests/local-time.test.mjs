@@ -133,3 +133,66 @@ process.stdout.write(localMonthKey('not-a-date'))`
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, 'not-a-d')
 })
+
+const settingsBundle = path.join(dir, 'deploymentTimezone.mjs')
+await build({
+  stdin: { contents: `
+    import AccountSettings from './src/components/settings/AccountSettings.vue'
+    import SettingsPage from './src/pages/SettingsPage.vue'
+    import { useSettingsStore } from './src/stores/settings.ts'
+    import { useAuthStore } from './src/stores/auth.ts'
+    import { createPinia } from 'pinia'
+    import { createSSRApp, createRenderer } from 'vue'
+    import { renderToString } from 'vue/server-renderer'
+    export async function renderAccount(timezone) {
+      return renderToString(createSSRApp(AccountSettings, { profile: { username: 'owner', language: 'zh-CN', timezone } }))
+    }
+    export async function inspectPage() {
+      globalThis.localStorage = { getItem: () => null, removeItem() {} }
+      const pinia = createPinia(), store = useSettingsStore(pinia), auth = useAuthStore(pinia)
+      store.settings.timezone = 'UTC'
+      store.settings.deploymentTimezone = 'Pacific/Auckland'
+      auth.token = 'FAKE_ONLY'
+      const writes = []
+      store.update = async (_token, payload) => writes.push(payload)
+      let state
+      const renderer = createRenderer({ createComment: () => ({}), insert() {}, remove() {}, parentNode() {}, nextSibling() {} })
+      const app = renderer.createApp({ setup() {
+        state = SettingsPage.setup({}, { expose() {}, emit() {} })
+        return () => null
+      } })
+      app.use(pinia).mount({})
+      const timezone = state.profile.value.timezone
+      await state.updateProfile({ ...state.profile.value, language: 'en-US' })
+      state.resetSettings()
+      app.unmount()
+      return { timezone, writes }
+    }
+  `, resolveDir: process.cwd(), loader: 'ts' },
+  bundle: true, format: 'esm', platform: 'node', outfile: settingsBundle,
+  define: { 'import.meta.env.VITE_API_BASE_URL': '""' }, logLevel: 'silent',
+  plugins: [{ name: 'settings-vue', setup(builder) {
+    builder.onLoad({ filter: /\.vue$/ }, ({ path: filename }) => {
+      const { descriptor } = parse(readFileSync(filename, 'utf8'), { filename })
+      return { contents: compileScript(descriptor, { id: filename, inlineTemplate: !filename.endsWith('SettingsPage.vue') }).content, loader: 'ts' }
+    })
+    builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }))
+  } }],
+})
+const deploymentTimezone = await import(settingsBundle)
+test('account renders the deployment timezone read-only with its explanation', async () => {
+  const html = await deploymentTimezone.renderAccount('Pacific/Auckland')
+  assert.match(html, /<input[^>]*value="Pacific\/Auckland"[^>]*readonly/)
+  assert.match(html, /部署时区由服务端 APP_TIMEZONE 决定，此处不可修改/)
+  assert.doesNotMatch(html, /<select[^>]*>[\s\S]*?<option[^>]*>Pacific\/Auckland/)
+})
+test('settings displays the server deployment timezone and never edits timezone on profile save or reset', async () => {
+  const result = await deploymentTimezone.inspectPage()
+  assert.equal(result.timezone, 'Pacific/Auckland')
+  assert.equal(result.writes[0].language, 'en-US')
+  assert.equal(result.writes.length, 2)
+  for (const payload of result.writes) {
+    assert.equal('timezone' in payload, false)
+    assert.equal('deploymentTimezone' in payload, false)
+  }
+})

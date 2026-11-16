@@ -63,6 +63,7 @@ export interface AboutInfo {
 }
 
 export interface SettingsPayload {
+  readonly deploymentTimezone?: string
   theme: 'light' | 'dark' | 'system'
   language: string
   timezone: string
