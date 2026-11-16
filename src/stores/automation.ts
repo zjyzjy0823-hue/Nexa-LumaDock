@@ -14,12 +14,14 @@ export const useAutomationStore = defineStore('automation', () => {
       const results = await Promise.allSettled(definitions.map(async item => ({ id: item.id,
         history: await automationService.executions(token, item.id), runtime: await automationService.runtime(token, item.id) })))
       if (current !== sequence) return
-      const histories: Execution[] = [], states: Record<string, AutomationRuntime> = {}; let unavailable = false
+      // Core history excludes simulations; keep test-run results visible across polling.
+      const histories = executions.value.filter(item => item.triggerType === 'simulation' && definitions.some(definition => definition.id === item.workflowId))
+      const states: Record<string, AutomationRuntime> = {}; let unavailable = false
       for (const result of results) {
         if (result.status === 'fulfilled') { histories.push(...result.value.history); states[result.value.id] = result.value.runtime }
         else unavailable = true
       }
-      executions.value = histories.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); runtimes.value = states
+      executions.value = [...new Map(histories.map(item => [item.id, item])).values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)); runtimes.value = states
       runtimeError.value = unavailable ? 'Core 当前不可用，执行记录无法刷新。自动化定义仍可在本地编辑；连接恢复后可刷新。' : ''
     } finally { if (current === sequence) refreshing.value = false }
   }
