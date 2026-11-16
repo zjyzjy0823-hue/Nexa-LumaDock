@@ -3,18 +3,23 @@ import { FileText, Layers3 } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
 import ActionButton from '../ui/ActionButton.vue'
 import StatusBadge from '../ui/StatusBadge.vue'
-import type { CollectionRecord, DataCollection } from '../../types/data'
+import type { RecordSummary, CollectionSummary } from '../../types/data'
 
 defineProps<{
-  collection: DataCollection | null
-  records: CollectionRecord[]
+  collection: CollectionSummary | null
+  records: RecordSummary[]
+  total: number
+  matchedCount: number
+  hasMore: boolean
+  loading: boolean
+  error: string
 }>()
-const emit = defineEmits<{ edit: [record: CollectionRecord]; remove: [record: CollectionRecord] }>()
+const emit = defineEmits<{ edit: [record: RecordSummary]; remove: [record: RecordSummary]; loadMore: []; retry: [] }>()
 </script>
 
 <template>
   <GlassCard class="data-table" :title="collection ? `${collection.name} Collection` : '数据库视图'">
-    <template #action><span class="data-table__count">{{ collection?.recordCount ?? 0 }} 条记录</span></template>
+    <template #action><span class="data-table__count">{{ total }} 条记录</span></template>
     <div class="data-table__intro"><span class="data-table__live" /><span>{{ collection?.description ?? '选择一个集合，查看其中的记录' }}</span><span class="data-table__view">表格视图</span></div>
     <div class="data-table__scroll">
       <table>
@@ -31,7 +36,13 @@ const emit = defineEmits<{ edit: [record: CollectionRecord]; remove: [record: Co
       </table>
       <div v-if="!records.length" class="data-table__empty"><Layers3 :size="24" /><strong>{{ collection?.recordCount === 0 ? '集合还是空的' : '暂无匹配记录' }}</strong><span>{{ !collection ? '创建或选择一个集合开始管理数据。' : collection.recordCount === 0 ? '新集合已创建，可用于整理下一批数据。' : '换个关键词试试，或选择其他集合。' }}</span></div>
     </div>
-    <div class="data-table__footer"><span>显示 {{ records.length }} / {{ collection?.recordCount ?? 0 }} 条记录</span><span>最近更新优先</span></div>
+    <p v-if="loading" role="status">正在加载记录…</p>
+    <p v-if="error" role="alert">{{ error }} <ActionButton variant="secondary" size="sm" @click="emit('retry')">重试</ActionButton></p>
+    <div class="data-table__footer">
+      <span>显示 {{ records.length }} / {{ total }} 条记录<span v-if="matchedCount !== total"> · 匹配 {{ matchedCount }} 条</span></span>
+      <ActionButton v-if="hasMore" variant="secondary" size="sm" :disabled="loading" @click="emit('loadMore')">加载更多</ActionButton>
+      <span>最近更新优先</span>
+    </div>
   </GlassCard>
 </template>
 

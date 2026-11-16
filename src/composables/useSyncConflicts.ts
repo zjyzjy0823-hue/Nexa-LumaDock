@@ -77,7 +77,7 @@ export function useSyncConflicts(open: Ref<boolean>, notify: (message: string) =
       const parents = await Promise.allSettled([
         types.has('ledger.transaction') ? ledgerService.categories(value.token) : Promise.resolve([]),
         types.has('website') ? websiteService.categories(value.token) : Promise.resolve([]),
-        types.has('data.record') ? dataService.list(value.token) : Promise.resolve([]),
+        types.has('data.record') ? dataService.list(value.token, { includeRecords: false }) : Promise.resolve([]),
       ])
       if (!current(value)) return
       // Parent lookup failure should not prevent viewing/handling the conflict.

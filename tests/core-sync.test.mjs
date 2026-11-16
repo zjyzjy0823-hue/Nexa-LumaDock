@@ -1,3 +1,4 @@
+import './data-bounded-reads.test.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
@@ -611,9 +612,9 @@ test('Conflict Center loads website and collection parent names for the current 
   const ctx = await mount((path, options) => {
     if (path === '/api/v1/sync/conflicts') return reply({ conflicts: [websiteConflict, recordConflict] })
     if (path === '/api/v1/website-categories') return reply([{ id: 'web-category', name: firstSession ? '旧用户开发分类' : '开发' }])
-    if (path === '/api/v1/data/collections') {
+    if (path === '/api/v1/data/collections?include_records=false') {
       if (firstSession) return new Promise(resolve => { finishParents = resolve })
-      return reply([{ id: 'collection-1', name: 'Tasks', records: [] }])
+      return reply([{ id: 'collection-1', name: 'Tasks', recordCount: 12 }])
     }
     if (path === '/api/v1/sync/conflicts/website-conflict') return reply(websiteConflict)
     if (path === '/api/v1/sync/conflicts/record-conflict') return reply(recordConflict)
@@ -624,7 +625,7 @@ test('Conflict Center loads website and collection parent names for the current 
     ctx.auth.token = 'local-test-token-next'
     await settle()
     assert.deepEqual(ctx.state.references.value, { 'web-category': '开发', 'collection-1': 'Tasks' })
-    finishParents(reply([{ id: 'collection-1', name: '旧用户集合', records: [] }]))
+    finishParents(reply([{ id: 'collection-1', name: '旧用户集合', recordCount: 12 }]))
     await settle()
     assert.deepEqual(ctx.state.references.value, { 'web-category': '开发', 'collection-1': 'Tasks' })
     await ctx.state.select('record-conflict')

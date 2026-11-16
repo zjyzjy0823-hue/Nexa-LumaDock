@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Bell, Plus, Search, X } from 'lucide-vue-next'
 import CollectionCard from '../components/data/CollectionCard.vue'
 import DataStats from '../components/data/DataStats.vue'
@@ -9,8 +9,9 @@ import ActionButton from '../components/ui/ActionButton.vue'
 import GlassCard from '../components/ui/GlassCard.vue'
 import { useDataStore } from '../stores/data'
 import { useAuthStore } from '../stores/auth'
+import { dataService } from '../services/data'
 import { parseRecordJson } from '../utils/recordJson'
-import type { DataCollection, CollectionRecord, DataOverview } from '../types/data'
+import type { CollectionSummary, CollectionRecord, RecordSummary, DataOverview } from '../types/data'
 
 const emit = defineEmits<{ action: [message: string] }>()
 
@@ -26,38 +27,64 @@ const draftDescription = ref('')
 const draftStatus = ref('active')
 const draftCategory = ref('')
 const draftJson = ref('{}')
-const editingCollection = ref<DataCollection | null>(null)
+const editingCollection = ref<CollectionSummary | null>(null)
 const editingRecord = ref<CollectionRecord | null>(null)
 const dialogKind = ref<'collection' | 'record'>('collection')
 const formError = ref('')
 const nameInput = ref<HTMLInputElement | null>(null)
 
-const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase())
-const visibleCollections = computed(() => collections.value.filter(collection => {
-  const search = normalizedQuery.value
-  return !search || `${collection.name} ${collection.description}`.toLocaleLowerCase().includes(search)
-    || collection.records.some(record => `${record.name} ${record.status} ${record.category}`.toLocaleLowerCase().includes(search))
-}))
-const selectedCollection = computed<DataCollection | null>(() =>
+const debouncedQuery = ref('')
+const visibleCollections = computed(() => collections.value)
+const selectedCollection = computed<CollectionSummary | null>(() =>
   visibleCollections.value.find(collection => collection.id === selectedId.value) ?? visibleCollections.value[0] ?? null)
-const visibleRecords = computed(() => {
-  const collection = selectedCollection.value
-  if (!collection) return []
-  const search = normalizedQuery.value
-  if (!search || `${collection.name} ${collection.description}`.toLocaleLowerCase().includes(search)) return collection.records
-  return collection.records.filter(record => `${record.name} ${record.status} ${record.category}`.toLocaleLowerCase().includes(search))
-})
-const totalRecords = computed(() => collections.value.reduce((sum, collection) => sum + collection.recordCount, 0))
+const selectedPage = computed(() => selectedCollection.value ? store.pages[selectedCollection.value.id] : undefined)
+const visibleRecords = computed(() => selectedPage.value?.items ?? [])
+const totalRecords = computed(() => store.overview?.totalRecords ?? 0)
 const dataOverview = computed<DataOverview>(() => {
-  const records = collections.value.flatMap(collection => collection.records)
-  const recent = records.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 3)
-  return { active: records.filter(record => !['done', 'completed', '完成'].includes(record.status)).length,
-    completed: records.filter(record => ['done', 'completed', '完成'].includes(record.status)).length,
+  const overview = store.overview
+  const recent = overview?.recentRecords ?? []
+  return { active: overview?.active ?? 0, completed: overview?.completed ?? 0,
     recentActivity: recent.length, trend: [], trendLabels: [], activities: recent.map(record => ({ id: record.id, title: record.name, detail: record.status, time: record.updatedAt.slice(0, 10), tone: 'blue' })) }
 })
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+let recordSequence = 0
+watch(query, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => { debouncedQuery.value = query.value.trim() }, 250)
+})
+watch([debouncedQuery, () => auth.token], ([q, token]) => {
+  if (token) void store.load(token, true, q).catch(() => {})
+})
+// A keyword that matches the collection itself should not also hide its records:
+// previously the table kept every record in that case.
+const recordQuery = computed(() => {
+  const q = debouncedQuery.value
+  const collection = selectedCollection.value
+  if (!q || !collection) return q
+  return `${collection.name} ${collection.description}`.toLocaleLowerCase().includes(q.toLocaleLowerCase()) ? '' : q
+})
+watch([() => selectedCollection.value?.id, recordQuery, () => auth.token], ([id, q, token]) => {
+  ++recordSequence
+  if (token && id) void store.loadRecords(token, id, { reset: true, q }).catch(() => {})
+}, { immediate: true })
+function retryLoad() {
+  if (auth.token) {
+    void store.load(auth.token, true, debouncedQuery.value).catch(() => {})
+    void store.loadOverview(auth.token, true).catch(() => {})
+  }
+}
+function loadMoreRecords() {
+  if (auth.token && selectedCollection.value) void store.loadMoreRecords(auth.token, selectedCollection.value.id).catch(() => {})
+}
+function retryRecords() {
+  if (!auth.token || !selectedCollection.value) return
+  if (selectedPage.value?.items.length) loadMoreRecords()
+  else void store.loadRecords(auth.token, selectedCollection.value.id, { reset: true, q: recordQuery.value }).catch(() => {})
+}
 
 async function openCreate() {
-  dialogKind.value = 'collection'; editingCollection.value = null; draftName.value = ''; draftDescription.value = ''
+  ++recordSequence
+  dialogKind.value = 'collection'; editingCollection.value = null; editingRecord.value = null; draftName.value = ''; draftDescription.value = ''
   notificationsOpen.value = false
   formError.value = ''
   createOpen.value = true
@@ -67,6 +94,7 @@ async function openCreate() {
 defineExpose({ openCreate })
 
 function closeCreate() {
+  ++recordSequence
   createOpen.value = false
   formError.value = ''
 }
@@ -89,19 +117,26 @@ async function createCollection() {
     closeCreate(); emit('action', '已保存。')
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
-function openEditCollection(item: DataCollection) { dialogKind.value = 'collection'; editingCollection.value = item; draftName.value = item.name; draftDescription.value = item.description; createOpen.value = true }
-async function openRecord(item?: CollectionRecord) {
-  dialogKind.value = 'record'; editingRecord.value = item ?? null; draftName.value = item?.name ?? ''
-  draftStatus.value = item?.status ?? 'active'; draftCategory.value = item?.category ?? ''
-  draftJson.value = JSON.stringify(item?.dataJson ?? {}, null, 2)
-  formError.value = ''; createOpen.value = true
-  await nextTick()
-  nameInput.value?.focus()
+function openEditCollection(item: CollectionSummary) { ++recordSequence; editingRecord.value = null; formError.value = ''; dialogKind.value = 'collection'; editingCollection.value = item; draftName.value = item.name; draftDescription.value = item.description; createOpen.value = true }
+async function openRecord(item?: RecordSummary) {
+  const current = ++recordSequence
+  const token = auth.token
+  try {
+    const record = item && token ? await dataService.getRecord(token, item.id) : undefined
+    if (current !== recordSequence || token !== auth.token) return
+    if (item && !record) return
+    dialogKind.value = 'record'; editingCollection.value = null; editingRecord.value = record ?? null; draftName.value = record?.name ?? ''
+    draftStatus.value = record?.status ?? 'active'; draftCategory.value = record?.category ?? ''
+    draftJson.value = JSON.stringify(record?.dataJson ?? {}, null, 2)
+    formError.value = ''; createOpen.value = true
+    await nextTick()
+    nameInput.value?.focus()
+  } catch (error) { if (current === recordSequence && token === auth.token) emit('action', error instanceof Error ? error.message : '记录加载失败') }
 }
-async function removeCollection(item: DataCollection) { if (!auth.token || !(await confirmAction(`删除集合「${item.name}」及其记录？`))) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
-async function removeRecord(item: CollectionRecord) { if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return; try { await store.removeRecord(auth.token, item.id); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeCollection(item: CollectionSummary) { if (!auth.token || !(await confirmAction(`删除集合「${item.name}」及其记录？`))) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeRecord(item: RecordSummary) { if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return; try { await store.removeRecord(auth.token, item.id, item.collectionId); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
 
-async function copyCollectionName(collection: DataCollection) {
+async function copyCollectionName(collection: CollectionSummary) {
   try {
     await navigator.clipboard.writeText(collection.name)
     emit('action', `已复制「${collection.name}」的名称。`)
@@ -120,11 +155,16 @@ function onDocumentKeydown(event: KeyboardEvent) {
   }
 }
 onMounted(() => {
-  if (auth.token) store.load(auth.token).catch(() => {})
+  if (auth.token) {
+    void store.load(auth.token, false, debouncedQuery.value).catch(() => {})
+    void store.loadOverview(auth.token).catch(() => {})
+  }
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDocumentKeydown)
 })
 onUnmounted(() => {
+  clearTimeout(searchTimer)
+  ++recordSequence
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   document.removeEventListener('keydown', onDocumentKeydown)
 })
@@ -146,7 +186,9 @@ onUnmounted(() => {
       <ActionButton v-if="selectedCollection" size="md" @click="openRecord()"><Plus :size="16" />新增记录</ActionButton>
     </div>
     <p v-if="store.loading" role="status">正在加载数据…</p>
-    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="retryLoad">重试</button></p>
+
+    <p v-if="store.overviewError" role="alert">{{ store.overviewError }} <button type="button" @click="retryLoad">重试</button></p>
 
     <section v-if="store.loaded" class="data-page__collections" aria-labelledby="data-collections-heading">
       <div class="data-page__section-heading"><div><span>COLLECTION OVERVIEW</span><h2 id="data-collections-heading">集合概览</h2></div><p>{{ visibleCollections.length }} 个集合 <span>·</span> {{ totalRecords }} 条记录</p></div>
@@ -157,7 +199,7 @@ onUnmounted(() => {
     </section>
 
     <section v-if="store.loaded" class="data-page__details" aria-label="数据库与统计">
-      <DataTable :collection="selectedCollection" :records="visibleRecords" @edit="openRecord" @remove="removeRecord" />
+      <DataTable :collection="selectedCollection" :records="visibleRecords" :total="selectedPage?.total ?? selectedCollection?.recordCount ?? 0" :matched-count="selectedPage?.matchedCount ?? 0" :has-more="selectedPage?.hasMore ?? false" :loading="selectedPage?.loading ?? false" :error="selectedPage?.error ?? ''" @load-more="loadMoreRecords" @retry="retryRecords" @edit="openRecord" @remove="removeRecord" />
       <DataStats :total-records="totalRecords" :overview="dataOverview" />
     </section>
 

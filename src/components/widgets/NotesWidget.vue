@@ -7,18 +7,18 @@ import { useDataStore } from '../../stores/data'
 
 const auth = useAuthStore()
 const store = useDataStore()
-const records = computed(() => store.items.flatMap(collection => collection.records.map(record => ({
-  id: record.id, title: record.name, collection: collection.name, updatedAt: record.updatedAt,
-}))).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 4))
-onMounted(() => { if (auth.token) void store.load(auth.token).catch(() => {}) })
+const records = computed(() => (store.overview?.recentRecords ?? []).map(record => ({
+  id: record.id, title: record.name, collection: record.collectionName, updatedAt: record.updatedAt,
+})))
+onMounted(() => { if (auth.token) void store.loadOverview(auth.token).catch(() => {}) })
 </script>
 
 <template>
   <GlassCard title="最近记录" class="notes-card">
     <template #action><ChevronRight class="notes-action-arrow" :size="20" aria-hidden="true" /></template>
     <div class="notes-list">
-      <p v-if="store.error" class="records-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
-      <p v-else-if="!store.loaded" class="records-state">正在加载记录…</p>
+      <p v-if="store.overviewError" class="records-state" role="alert">数据加载失败 <button type="button" @click="auth.token && store.loadOverview(auth.token, true).catch(() => {})">重试</button></p>
+      <p v-else-if="!store.overview" class="records-state">正在加载记录…</p>
       <p v-else-if="!records.length" class="records-state">暂无最近记录</p>
       <article v-for="record in records" :key="record.id" class="note-row" :title="record.collection">
         <FileText class="note-icon" :size="16" :stroke-width="1.9" />

@@ -3,9 +3,9 @@ import { ref } from 'vue'
 import type { Component } from 'vue'
 import { AppWindow, ArrowUpRight, Copy, FolderKanban, Globe2, HardDrive, Layers3, MoreHorizontal, Repeat2, Server } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
-import type { CollectionIcon, DataCollection } from '../../types/data'
+import type { CollectionIcon, CollectionSummary } from '../../types/data'
 
-defineProps<{ collection: DataCollection; selected: boolean }>()
+defineProps<{ collection: CollectionSummary; selected: boolean }>()
 const emit = defineEmits<{ select: []; copy: []; edit: []; remove: [] }>()
 const menuOpen = ref(false)
 
