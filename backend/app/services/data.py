@@ -1,3 +1,4 @@
+import json
 from typing import Any
 from uuid import uuid4
 from fastapi import HTTPException
@@ -8,6 +9,12 @@ from ..utils.time import iso_utc
 from ..models import DataCollection, DataRecord, User
 from ..sync.publisher import prepare_write, publish, delete_entity
 from .ownership import owner_workspace
+
+
+def bounded_data_json(value):
+    if value is not None and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 65536:
+        raise ValueError("data_json must not exceed 65536 UTF-8 bytes (64KB)")
+    return value
 
 
 class CollectionInput(BaseModel):
@@ -43,6 +50,7 @@ class RecordInput(BaseModel):
     status: str = Field(default="active", max_length=40)
     category: str = Field(default="", max_length=80)
     data_json: dict[str, Any] = Field(default_factory=dict)
+    _bounded_data = field_validator("data_json")(bounded_data_json)
 
     @field_validator("name")
     @classmethod
@@ -60,6 +68,7 @@ class RecordPatch(BaseModel):
     status: str | None = Field(default=None, max_length=40)
     category: str | None = Field(default=None, max_length=80)
     data_json: dict[str, Any] | None = None
+    _bounded_data = field_validator("data_json")(bounded_data_json)
 
 
 def collection_or_404(db: Session, user: User, id: str) -> DataCollection:
