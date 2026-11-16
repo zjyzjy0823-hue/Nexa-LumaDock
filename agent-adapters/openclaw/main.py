@@ -15,7 +15,35 @@ def process_task(api: NexaClient, config: dict, task: dict, executor=execute_tas
     if api.claim(task_id) is None:
         return False
     log.info("task claimed %s", task_id)
-    api.heartbeat("running", config["runtimeInstance"], task_id)
+
+    def report_terminal(method, *args, retry_fatal=False, max_attempts=3):
+        # A fatal error normally ends the adapter, but while releasing a claimed
+        # task we retry a few times first: an unreported task stays ``running``
+        # forever. Bounded, so a permanently broken credential cannot spin here.
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return method(*args)
+            except Exception as error:
+                if isinstance(error, FatalApiError) and not retry_fatal:
+                    raise
+                log.warning("terminal result delivery failed for %s: %s", task_id, error)
+                if retry_fatal and attempt >= max_attempts:
+                    log.error("giving up on %s for task %s after %s attempts",
+                              getattr(method, "__name__", "terminal"), task_id, attempt)
+                    return None
+                time.sleep(5)
+
+    try:
+        api.heartbeat("running", config["runtimeInstance"], task_id)
+    except Exception as error:
+        message = str(error)[:500] or type(error).__name__
+        # Claim already moved the task to running. Finish reporting failure before
+        # returning to idle, even if terminal delivery needs another attempt.
+        report_terminal(api.fail, task_id, message, retry_fatal=True)
+        log.error("initial heartbeat failed for task %s: %s", task_id, message)
+        return False
     try:
         api.event(task_id, "task.log", "OpenClaw execution started")
     except Exception:
@@ -32,16 +60,6 @@ def process_task(api: NexaClient, config: dict, task: dict, executor=execute_tas
 
     thread = threading.Thread(target=keep_alive, daemon=True)
     thread.start()
-
-    def report_terminal(method, *args):
-        while True:
-            try:
-                return method(*args)
-            except FatalApiError:
-                raise
-            except Exception as error:
-                log.warning("terminal result delivery failed for %s: %s", task_id, error)
-                time.sleep(5)
 
     try:
         result = executor(task["title"], task["description"], config["executionTimeoutSeconds"])

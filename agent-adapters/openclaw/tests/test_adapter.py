@@ -62,6 +62,33 @@ def test_executor_error_reports_failed_task():
     assert ("event", "task.log", "error") in api.calls
 
 
+@pytest.mark.parametrize("heartbeat_error", [ConnectionError, FatalApiError])
+def test_claimed_task_is_failed_when_initial_running_heartbeat_fails(monkeypatch, heartbeat_error):
+    api = FakeApi()
+    sleeps = []
+    monkeypatch.setattr("main.time.sleep", sleeps.append)
+
+    def heartbeat(*_args):
+        raise heartbeat_error("running heartbeat unavailable")
+
+    attempts = []
+
+    def fail(task_id, message):
+        attempts.append((task_id, message))
+        if len(attempts) == 1:
+            raise ConnectionError("temporary failure delivering terminal result")
+        api.calls.append(("fail", task_id, message))
+
+    def unexpected_execution(*_args):
+        pytest.fail("A failed initial heartbeat must prevent execution")
+
+    monkeypatch.setattr(api, "heartbeat", heartbeat)
+    monkeypatch.setattr(api, "fail", fail)
+    assert process_task(api, config(), api.queue[0], unexpected_execution) is False
+    assert len(attempts) == 2 and sleeps == [5]
+    assert api.calls[-1] == ("fail", "task-1", "running heartbeat unavailable")
+
+
 @pytest.mark.parametrize("code", [401, 422])
 def test_rejected_credentials_and_payload_fail_fast(code):
     requests = []
@@ -140,3 +167,24 @@ def test_config_https_policy_and_secret_validation(tmp_path):
     path.write_text(json.dumps(settings), encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(path)
+
+
+def test_failing_heartbeat_with_permanent_fatal_error_is_bounded(monkeypatch):
+    """An unreachable/unauthorised API must not spin forever while releasing a task."""
+    api = FakeApi()
+    sleeps = []
+    monkeypatch.setattr("main.time.sleep", sleeps.append)
+    monkeypatch.setattr(api, "heartbeat", lambda *_args: (_ for _ in ()).throw(RuntimeError("running heartbeat unavailable")))
+
+    attempts = []
+
+    def failing_fail(task_id, message):
+        attempts.append(task_id)
+        raise FatalApiError("unauthorised")
+
+    monkeypatch.setattr(api, "fail", failing_fail)
+    task = {"id": "task-bounded", "title": "t", "description": "", "status": "queued"}
+
+    assert process_task(api, config(), task) is False
+    assert len(attempts) == 3, attempts
+    assert sleeps == [5, 5], sleeps
