@@ -60,7 +60,7 @@ function openTransaction(id?: string) {
 async function saveTransaction() {
   if (!auth.token) return
   try {
-    const payload = { ...draft.value, category_id: draft.value.category_id || null, occurred_at: `${draft.value.occurred_at}T12:00:00` }
+    const payload = { ...draft.value, category_id: draft.value.category_id || null, occurred_at: new Date(`${draft.value.occurred_at}T12:00:00`).toISOString() }
     if (editingTransaction.value) await store.updateTransaction(auth.token, editingTransaction.value.id, payload)
     else await store.createTransaction(auth.token, payload)
     transactionOpen.value = false; emit('action', '交易已保存。')
