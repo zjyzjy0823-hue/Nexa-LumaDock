@@ -1,5 +1,5 @@
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
 import { automationService } from '../services/automation'
 import type { Workflow, WorkflowInput, Execution, AutomationRuntime } from '../types/automation'
 export const useAutomationStore = defineStore('automation', () => {
@@ -49,7 +49,10 @@ export const useAutomationStore = defineStore('automation', () => {
     if (current === sequence) { requestIds.delete(id); executions.value = [item, ...executions.value.filter(old => old.id !== item.id)] }
     return item
   }) }
+  // Simulations are a UI-side convenience (see testRun). Real automation runtime
+  // counts must not include them.
+  const runtimeExecutions = computed(() => executions.value.filter(item => item.triggerType !== 'simulation'))
   function reset() { ++sequence; items.value = []; executions.value = []; loading.value = false; loaded.value = false; loadedAt.value = 0; error.value = ''; runtimeError.value = ''; runtimes.value = {}; refreshing.value = false; requestIds.clear() }
   function invalidate() { loaded.value = false; loadedAt.value = 0 }
-  return { items, executions, loading, loaded, error, load, create, update, remove, testRun, run, reset, invalidate, runtimeError, runtimes, refreshRuntime, refreshing }
+  return { items, executions, runtimeExecutions, loading, loaded, error, load, create, update, remove, testRun, run, reset, invalidate, runtimeError, runtimes, refreshRuntime, refreshing }
 })
