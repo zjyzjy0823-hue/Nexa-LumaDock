@@ -58,6 +58,10 @@ if [[ "$CONTRACTS_ONLY" -eq 0 ]]; then
   if [[ "$WITH_FRONTEND" -eq 1 ]]; then
     step "frontend: npm run build"
     npm run build
+    for suite in test:local-time test:automation test:core-sync test:data-bounded-reads; do
+      step "frontend: npm run $suite"
+      npm run "$suite"
+    done
   else
     echo "skip: frontend build（默认略过；加 --with-frontend 运行）"
   fi

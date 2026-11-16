@@ -32,6 +32,7 @@ jobs:
       - run: npm run test:core-sync
       - run: npm run test:automation
       - run: npm run test:local-time
+      - run: npm run test:data-bounded-reads
       - run: node --test tests/diagnostics.test.mjs
   contracts:
     runs-on: ubuntu-latest

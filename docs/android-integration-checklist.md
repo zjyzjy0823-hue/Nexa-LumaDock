@@ -110,3 +110,24 @@
 - 9 种实体全量同步、墓碑、分页（`limit=1` 13 页一致）、冲突双方解决、resync 恢复：已实测通过。
 - 500 实体：快照 546 条 / 3 页 / 0.31s；resync 1.08s（目标 < 5s）。
 - 租户隔离：REST / API Key / Agent Token 三条路径跨账号访问均为 404。
+- 5 万条记录：集合摘要 238B / 174ms；记录分页 12KB / 324ms（第 50 页 338ms）；概览 289ms；旧全量接口对照 166MB / 5.1s。
+
+## 11. 数据读取（有界，Android 必须用这套）
+
+集合列表默认会把每个集合的全部记录内嵌返回，5 万条时是 166MB —— 移动端必须显式要走有界读取。
+
+| 用途 | 请求 | 返回 |
+| --- | --- | --- |
+| 集合摘要 | `GET /api/v1/data/collections?include_records=false&q=` | 元数据 + `recordCount`，**无 `records`** |
+| 记录分页 | `GET /api/v1/data/collections/{id}/records?page=true&limit=50&cursor=&q=&include_data_json=false` | `{items,total,matchedCount,nextCursor,hasMore}` |
+| 概览 | `GET /api/v1/data/overview?recent_limit=4` | 总数 / 完成数 / 最近记录（含 `collectionName`） |
+| 单条详情 | `GET /api/v1/data/records/{id}` | 完整记录（含 `dataJson`） |
+
+规则：
+
+- `nextCursor` 必须原样回传；它用服务端密钥签名并绑定用户、工作区、集合、`q` 与排序，跨集合或改关键词后使用会 **422**。
+- 排序固定 `updatedAt DESC, id DESC`，同毫秒也不会重漏。
+- `page=false`（默认）仍是旧的裸数组契约；此时若显式传 `limit/cursor/q/include_data_json` 会 **422**，不会静默忽略。
+- `include_data_json=false` 时列表不含 `dataJson`，编辑前用单条详情接口取完整内容。
+- 摘要里的 `recordCount` 由 SQL 聚合得出，可直接用于角标，不需要再拉记录。
+

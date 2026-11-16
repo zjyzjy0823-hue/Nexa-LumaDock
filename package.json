@@ -19,7 +19,8 @@
     "desktop:prepare:windows": "node scripts/desktop.mjs prepare --target x86_64-pc-windows-msvc",
     "desktop:prepare:macos": "node scripts/desktop.mjs prepare --target x86_64-apple-darwin",
     "desktop:build:windows": "node scripts/desktop.mjs build --target x86_64-pc-windows-msvc",
-    "desktop:build:macos": "node scripts/desktop.mjs build --target x86_64-apple-darwin"
+    "desktop:build:macos": "node scripts/desktop.mjs build --target x86_64-apple-darwin",
+    "test:data-bounded-reads": "node --test tests/data-bounded-reads.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",
