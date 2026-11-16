@@ -4,8 +4,10 @@ A rejected push used to be terminal: the row kept status ``rejected``, the froze
 unique index blocked any new mutation for the same entity and dependent tails
 waited forever. These two decisions give the user a way out:
 
-* ``dismiss`` — give up on the write; dependent tails are marked ``skipped`` so
-  they stop waiting.
+* ``dismiss`` — give up on the write; dependent tails are deleted. Marking them
+  with a new status is not enough: every live-outbox query only excludes
+  ``resolved``, so a left-behind tail would still act as a predecessor and block
+  (or suppress) the next edit.
 * ``retry`` — rebuild one pending mutation from the *current* business row (so
   the user's fix is included) with a fresh ``mutation_id``; dependent tails are
   repointed to the new mutation.
@@ -86,11 +88,11 @@ def dismiss_rejected(db, workspace_id, entry_id):
             return receipt
         if entry.status != "rejected":
             raise HTTPException(404, "rejected_not_found")
+        # Delete, do not park: ``queued_entries`` and ``push_ready`` treat every
+        # status other than ``resolved`` as live, so a leftover tail would keep
+        # blocking subsequent edits for this entity.
         for tail in _tails(db, workspace_id, entry):
-            tail.status = "skipped"
-            tail.depends_on_mutation_id = None
-            tail.payload_json = None
-            tail.updated_at = utcnow()
+            db.delete(tail)
         receipt = _receipt(entry, "dismiss", None)
         entry.status = "resolved"
         entry.payload_json = None

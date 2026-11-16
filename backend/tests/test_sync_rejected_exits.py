@@ -60,7 +60,7 @@ def rows(client, workspace_id):
             select(LocalMutation).where(LocalMutation.workspace_id == workspace_id)).all()}
 
 
-def test_dismiss_resolves_entry_and_skips_tails(client, users):
+def test_dismiss_resolves_entry_and_drops_tails(client, users):
     owner, _ = users
     entry_id, mutation_id, tail_id, _, workspace_id = seed_rejected(client, owner)
     response = client.post(f"{SYNC}/rejected/{entry_id}/dismiss", headers=owner)
@@ -72,8 +72,7 @@ def test_dismiss_resolves_entry_and_skips_tails(client, users):
     state = rows(client, workspace_id)
     assert state[entry_id].status == "resolved"
     assert state[entry_id].payload_json is None
-    assert state[tail_id].status == "skipped"
-    assert state[tail_id].depends_on_mutation_id is None
+    assert tail_id not in state, "dismissed tails must leave the live outbox"
 
 
 def test_dismiss_is_idempotent_and_rejects_a_second_decision(client, users):
@@ -198,3 +197,23 @@ def test_list_is_empty_after_a_decision(client, users):
     entry_id, _, _, _, _ = seed_rejected(client, owner)
     client.post(f"{SYNC}/rejected/{entry_id}/dismiss", headers=owner)
     assert client.get(f"{SYNC}/rejected", headers=owner).json() == []
+
+
+def test_dismissed_chain_never_blocks_a_later_edit(client, users):
+    """After dismissing, a new edit must be immediately uploadable.
+
+    Leaving the tails as ``skipped`` kept them inside ``queued_entries`` (which
+    only excludes ``resolved``), so the next ordinary write parked behind a
+    predecessor that is never pushed.
+    """
+    owner, _ = users
+    entry_id, _, _, website_id, workspace_id = seed_rejected(client, owner)
+    assert client.post(f"{SYNC}/rejected/{entry_id}/dismiss", headers=owner).status_code == 200
+
+    patched = client.patch(f"/api/v1/websites/{website_id}", headers=owner, json={"name": "after dismiss"})
+    assert patched.status_code == 200
+    state = rows(client, workspace_id)
+    pending = [item for item in state.values() if item.status == "pending"]
+    assert len(pending) == 1, [(item.status, item.depends_on_mutation_id) for item in state.values()]
+    assert pending[0].depends_on_mutation_id is None
+    assert pending[0].payload_json["name"] == "after dismiss"
