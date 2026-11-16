@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { localDateKey, localDayKey, localMonthKey } from '../services/localTime'
 import { confirmAction } from '../composables/useConfirm'
 import Modal from '../components/ui/Modal.vue'
 import ActionButton from '../components/ui/ActionButton.vue'
@@ -26,17 +27,17 @@ const ledgerStats = computed<LedgerStat[]>(() => [
   { id: 'income', label: 'Monthly Income', value: money(store.summary?.income ?? 0), detail: '本月总收入', tone: 'mint' },
   { id: 'expense', label: 'Monthly Expense', value: money(store.summary?.expense ?? 0), detail: '本月总支出', tone: 'blue' },
   { id: 'balance', label: 'Balance', value: money(store.summary?.balance ?? 0), detail: '本月收支结余', tone: 'violet' },
-  { id: 'budget', label: 'Transactions', value: String(store.items.filter(item => item.occurredAt.slice(0, 7) === store.month).length), detail: '本月交易笔数', tone: 'amber' },
+  { id: 'budget', label: 'Transactions', value: String(store.items.filter(item => localMonthKey(item.occurredAt) === store.month).length), detail: '本月交易笔数', tone: 'amber' },
 ])
-const currentTransactions = computed(() => store.items.filter(item => item.occurredAt.slice(0, 7) === store.month))
+const currentTransactions = computed(() => store.items.filter(item => localMonthKey(item.occurredAt) === store.month))
 const transactions = computed<Transaction[]>(() => currentTransactions.value.map(item => ({ id: item.id, description: item.description,
-  detail: item.note || item.merchant, category: item.categoryName ?? '未分类', date: item.occurredAt.slice(0, 10),
+  detail: item.note || item.merchant, category: item.categoryName ?? '未分类', date: localDateKey(item.occurredAt),
   amount: Number(item.amount) * (item.type === 'expense' ? -1 : 1), icon: item.type === 'income' ? 'income' : 'shopping' })))
 const spendingCategories = computed<SpendingCategory[]>(() => (store.summary?.categories ?? []).map((entry, index) => ({ ...entry, amount: Number(entry.amount), color: ['#728df1', '#9a82e7', '#70c5d8', '#eda6b7', '#f2c47c', '#9eb2cb'][index % 6]! })))
 const expenseTrends = computed<ExpenseTrend[]>(() => {
   const monthly = (store.summary?.monthlyTrend ?? []).filter(item => item.month <= store.month)
   const daily = new Map<string, number>()
-  for (const item of currentTransactions.value) if (item.type === 'expense') { const day = item.occurredAt.slice(8, 10); daily.set(day, (daily.get(day) ?? 0) + Number(item.amount)) }
+  for (const item of currentTransactions.value) if (item.type === 'expense') { const day = localDayKey(item.occurredAt); daily.set(day, (daily.get(day) ?? 0) + Number(item.amount)) }
   return [
     { id: '30d', label: '30天', caption: '本月每日支出', labels: [...daily.keys()].sort().map(day => `${day}日`), values: [...daily.keys()].sort().map(day => daily.get(day) ?? 0) },
     { id: '6m', label: '6个月', caption: '近 6 个月每月支出', labels: monthly.slice(-6).map(item => item.month), values: monthly.slice(-6).map(item => Number(item.expense)) },
@@ -53,7 +54,7 @@ function openTransaction(id?: string) {
   editingTransaction.value = store.items.find(item => item.id === id) ?? null
   const item = editingTransaction.value
   draft.value = { type: item?.type ?? 'expense', amount: item?.amount ?? '', category_id: item?.categoryId ?? '', description: item?.description ?? '',
-    occurred_at: item?.occurredAt.slice(0, 10) ?? localDate(), merchant: item?.merchant ?? '', note: item?.note ?? '' }
+    occurred_at: item ? localDateKey(item.occurredAt) : localDate(), merchant: item?.merchant ?? '', note: item?.note ?? '' }
   formError.value = ''; transactionOpen.value = true
 }
 async function saveTransaction() {

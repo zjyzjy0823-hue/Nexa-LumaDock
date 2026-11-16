@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { localMonthKey } from '../../services/localTime'
 import { computed, onMounted } from 'vue'
 import { ArrowDown, ArrowUp } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
@@ -21,7 +22,7 @@ function money(value: string | undefined) {
   const [whole, decimal = ''] = value.replace('-', '').split('.')
   return `${negative ? '-' : ''}¥${Number(whole).toLocaleString('zh-CN')}.${decimal.padEnd(2, '0').slice(0, 2)}`
 }
-const recentTransaction = computed(() => store.items.find(item => item.occurredAt.slice(0, 7) === currentMonth()))
+const recentTransaction = computed(() => store.items.find(item => localMonthKey(item.occurredAt) === currentMonth()))
 const largestCategory = computed(() => [...(store.summary?.categories ?? [])].sort((a, b) => Number(b.amount) - Number(a.amount))[0])
 const trend = computed(() => {
   const values = store.summary?.monthlyTrend.slice(-7).map(item => Number(item.expense)) ?? []
