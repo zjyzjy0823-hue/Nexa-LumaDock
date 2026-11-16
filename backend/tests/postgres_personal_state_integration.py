@@ -56,7 +56,7 @@ def main():
     assert database_url.startswith("postgresql+psycopg://")
     engine = create_engine(database_url)
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0018_data_record_tenancy"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
     password, jwt = secrets.token_urlsafe(24), secrets.token_hex(32)
     credentials = [password, jwt]
     with TemporaryDirectory(prefix="nexa-personal-state-") as temporary:

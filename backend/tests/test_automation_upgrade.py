@@ -29,6 +29,6 @@ def test_upgrade_simulation_history_and_execution_constraint(tmp_path):
         assert row["id"] == execution and row["status"] == "success" and row["workspace_id"] == workspace
         assert row["trigger_type"] == "simulation" and row["trigger_instance_id"] is None and row["attempt"] == 0
         assert db.scalar(text("SELECT sync_revision FROM automation_workflows")) == 7
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0018_data_record_tenancy"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
         assert any(set(value["column_names"]) == {"workspace_id", "workflow_id", "trigger_instance_id"} for value in inspect(db).get_unique_constraints("automation_executions"))
     engine.dispose()

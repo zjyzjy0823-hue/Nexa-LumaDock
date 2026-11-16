@@ -477,6 +477,23 @@ class LocalSyncState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class LocalAutomationEvent(Base):
+    __tablename__ = "local_automation_events"
+    __table_args__ = (Index("ix_local_automation_events_pending", "workspace_id", "delivered_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    event_id: Mapped[str] = mapped_column(String(160), unique=True)
+    type: Mapped[str] = mapped_column(String(40))
+    agent_id: Mapped[str] = mapped_column(String(36))
+    task_id: Mapped[str] = mapped_column(String(36))
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
 class LocalMutation(Base):
     __tablename__ = "local_mutation_queue"
     __table_args__ = (

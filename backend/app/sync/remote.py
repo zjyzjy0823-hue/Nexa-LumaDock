@@ -69,7 +69,7 @@ class SyncRemoteClient:
     def __exit__(self, *_args):
         self.client.close()
 
-    def _request(self, method: str, endpoint: str, **kwargs) -> dict:
+    def _request(self, method: str, endpoint: str, *, protocol: bool = True, **kwargs) -> dict:
         try:
             response = self.client.request(method, self.core_url + endpoint,
                                            headers={"Authorization": "Bearer " + self.credential}, **kwargs)
@@ -84,9 +84,15 @@ class SyncRemoteClient:
             raise SyncRemoteError("invalid_response") from None
         if not isinstance(body, dict):
             raise SyncRemoteError("invalid_response")
-        if body.get("protocolVersion") != SYNC_PROTOCOL_VERSION:
+        if protocol and body.get("protocolVersion") != SYNC_PROTOCOL_VERSION:
             raise SyncRemoteError("protocol_mismatch")
         return body
+
+    def report_event(self, event: dict) -> dict:
+        response = self._request("POST", "/api/v1/automation/events", protocol=False, json=event)
+        if response.get("ok") is not True or type(response.get("duplicated")) is not bool:
+            raise SyncRemoteError("invalid_response")
+        return response
 
     def push_mutation(self, mutation: dict) -> dict:
         response = self._request("POST", "/api/v1/sync/mutations",

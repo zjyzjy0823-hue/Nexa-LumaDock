@@ -20,7 +20,7 @@ from app.sync.service import apply_mutation
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0018_data_record_tenancy"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))

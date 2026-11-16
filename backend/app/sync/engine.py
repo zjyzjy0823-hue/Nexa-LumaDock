@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from ..models import (LocalMutation,
+from ..models import (LocalMutation, LocalAutomationEvent,
                       LocalSyncState, utcnow)
 from ..utils.time import iso_utc
 from .adapters import get_adapter
@@ -494,6 +494,41 @@ def run_resync(factory, user_id: int, workspace_id: str, metadata=None, credenti
         lock.release()
 
 
+EVENT_BATCH_LIMIT = 100
+EVENT_MAX_ATTEMPTS = 10
+
+
+def flush_events(factory, workspace_id, transport, cancel_event=None):
+    """Bounded, best-effort delivery after sync; retained failures never log raw errors."""
+    with factory() as db:
+        rows = db.scalars(select(LocalAutomationEvent).where(
+            LocalAutomationEvent.workspace_id == workspace_id,
+            LocalAutomationEvent.delivered_at.is_(None),
+            LocalAutomationEvent.attempts < EVENT_MAX_ATTEMPTS)
+            .order_by(LocalAutomationEvent.created_at, LocalAutomationEvent.id).limit(EVENT_BATCH_LIMIT)).all()
+        pending = [(row.id, {"type": row.type, "eventId": row.event_id,
+                            "agentId": row.agent_id, "taskId": row.task_id}) for row in rows]
+    for row_id, payload in pending:
+        _check_cancelled(cancel_event)
+        error_code = None
+        try:
+            transport.report_event(payload)  # No SQLite transaction is held during HTTP.
+        except SyncRemoteError as error:
+            error_code = error.code if error.code in {
+                "unauthorized", "timeout", "unreachable", "invalid_response", "protocol_mismatch"
+            } else "invalid_response"
+        _check_cancelled(cancel_event)
+        with factory() as db:
+            row = db.get(LocalAutomationEvent, row_id)
+            if error_code:
+                row.attempts += 1
+                row.last_error = error_code
+            else:
+                row.delivered_at = utcnow()
+                row.last_error = None
+            db.commit()
+
+
 def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credential: str,
                    remote=None, *, cancel_event=None) -> dict:
     """Synchronize one Local Personal Workspace. A caller may inject a test transport."""
@@ -543,6 +578,7 @@ def run_sync_cycle(factory, user_id: int, workspace_id: str, metadata, credentia
                 pushed += outcome == "applied"
             count, workspace_revision = _pull(factory, transport, user_id, workspace_id, cancel_event)
             pulled += count
+            flush_events(factory, workspace_id, transport, cancel_event)
         _check_cancelled(cancel_event)
         with factory() as db:
             state = get_local_sync_state(db, workspace_id)

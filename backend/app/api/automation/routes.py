@@ -1,12 +1,13 @@
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ...utils.time import iso_utc
 from ...database import get_db
-from ...models import AutomationWorkflow, AutomationExecution, AutomationScheduleState, Client, User, utcnow
+from ...models import AutomationWorkflow, AutomationExecution, AutomationScheduleState, AutomationEvent, Client, User, utcnow
+from ...runtime_mode import require_core_mode
 from ...database import runtime_config
 from ...security import current_user, read_user_for, client_from_token
 from ...automation import connection
@@ -21,7 +22,48 @@ from ..personal_route import SafePersonalRoute
 router = APIRouter(prefix="/api/automation", tags=["automation"], route_class=SafePersonalRoute)
 v1_router = APIRouter(prefix="/api/v1/automations", tags=["automation"], route_class=SafePersonalRoute)
 client_router = APIRouter(prefix="/api/v1/client/automations", tags=["automation-runtime"], route_class=SafePersonalRoute)
+event_router = APIRouter(prefix="/api/v1/automation/events", tags=["automation-events"],
+                         dependencies=[Depends(require_core_mode)])
 Trigger = Literal["manual", "schedule", "data_changed", "agent_completed", "device_status", "agent_event", "webhook"]
+
+
+class CompletionEventInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["agent_completed"]
+    eventId: str = Field(max_length=160)
+    agentId: UUID
+    taskId: UUID
+
+    @model_validator(mode="after")
+    def stable_identity(self):
+        if self.eventId != f"task:{self.taskId}:completed":
+            raise ValueError("eventId must be task:<taskId>:completed")
+        return self
+
+
+@event_router.post("")
+def report_event(payload: CompletionEventInput, client: Client = Depends(client_from_token),
+                 db: Session = Depends(get_db)):
+    # The unique event ID also serializes concurrent retries on Core.
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    # RETURNING is dialect-portable and, unlike rowcount, reports the conflict
+    # skip on PostgreSQL too (psycopg returns 1 for a no-op insert).
+    result = db.execute(insert(AutomationEvent).values(
+        id=payload.eventId, workspace_id=client.workspace_id, type="agent_completed",
+        entity_type="agent.task", entity_id=str(payload.taskId), operation="completed", origin="agent",
+        payload={"agent_id": str(payload.agentId)}).on_conflict_do_nothing(
+        index_elements=["id"]).returning(AutomationEvent.id))
+    duplicated = result.first() is None
+    if duplicated:
+        existing = db.get(AutomationEvent, payload.eventId)
+        if existing is None or existing.workspace_id != client.workspace_id:
+            raise HTTPException(409, "Event identity is unavailable")
+    db.commit()
+    return {"ok": True, "duplicated": duplicated}
 
 
 class WorkflowInput(BaseModel):

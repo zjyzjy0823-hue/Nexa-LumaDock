@@ -228,7 +228,7 @@ def main(skip_agent_tools=False):
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0018_data_record_tenancy"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
     with TemporaryDirectory(prefix="nexa-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)

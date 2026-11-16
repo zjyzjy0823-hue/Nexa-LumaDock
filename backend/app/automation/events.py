@@ -1,6 +1,7 @@
 from sqlalchemy import select
+from uuid import uuid4
 from ..database import runtime_config
-from ..models import AutomationEvent, AutomationExecution, AutomationActionReceipt
+from ..models import AutomationEvent, AutomationExecution, AutomationActionReceipt, LocalAutomationEvent
 
 BUSINESS_ENTITIES = {"ledger.transaction", "data.record", "website"}
 
@@ -17,6 +18,15 @@ def business_change(db, workspace_id, revision, entity_type, entity_id, operatio
 
 def task_completed(db, agent, task):
     if runtime_config.mode != "core":
+        # Enqueue in the task's transaction; completion never depends on Core/network.
+        if db.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        db.execute(insert(LocalAutomationEvent).values(
+            id=str(uuid4()), workspace_id=agent.workspace_id, event_id=f"task:{task.id}:completed",
+            type="agent_completed", agent_id=agent.id, task_id=task.id,
+            payload_json={"agent_id": agent.id}).on_conflict_do_nothing(index_elements=["event_id"]))
         return
     # Agent tasks are runtime entities; ancestry comes from the durable dispatch receipt.
     receipt = db.scalar(select(AutomationActionReceipt).where(

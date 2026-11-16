@@ -152,7 +152,7 @@ def test_upgrade_0017_to_0018_backfills_record_tenancy(tmp_path):
 
     engine = create_engine(f"sqlite:///{database}")
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0018_data_record_tenancy"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
         rows = conn.execute(text("SELECT r.id, r.user_id, r.workspace_id, c.user_id, c.workspace_id "
                                  "FROM data_records r JOIN data_collections c ON c.id = r.collection_id "
                                  "ORDER BY r.id")).all()

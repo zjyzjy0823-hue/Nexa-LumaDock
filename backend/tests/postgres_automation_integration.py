@@ -118,6 +118,19 @@ def main():
             completed = eventually(lambda: succeeded(a, completion), "Adapter completion event -> Data update")
             assert core.request("GET", f"/api/v1/data/records/{source}")["status"] == "complete"
             assert core.request("GET", f"/api/v1/agents/{agent}")["tasks"][0]["status"] == "completed"
+
+            # Client-credential event replay must be flagged on PostgreSQL too:
+            # `rowcount` reports 1 for a skipped ON CONFLICT insert there.
+            client_credential = next((a.directory / "core-connections").glob("*/credential")).read_text().strip()
+            replay_task = str(uuid4())
+            replay_body = {"type": "agent_completed", "eventId": f"task:{replay_task}:completed",
+                           "agentId": str(uuid4()), "taskId": replay_task}
+            headers = {"Authorization": f"Bearer {client_credential}"}
+            first = core.client.post(f"{core.origin}/api/v1/automation/events", headers=headers, json=replay_body)
+            replay = core.client.post(f"{core.origin}/api/v1/automation/events", headers=headers, json=replay_body)
+            assert first.status_code == 200 and first.json() == {"ok": True, "duplicated": False}, first.text
+            assert replay.status_code == 200 and replay.json() == {"ok": True, "duplicated": True}, replay.text
+            print("Client credential event replay flagged as duplicate: PASS", flush=True)
             print("Manual, Data create/update, Agent -> real Adapter -> completion event: PASS", flush=True)
 
             # Hold an execution row lock so the Core worker cannot claim it.
