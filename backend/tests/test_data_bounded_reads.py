@@ -162,10 +162,12 @@ def test_record_page_search_and_optional_json(client, seeded):
 
 
 @pytest.mark.parametrize("params", [
-    {"limit": 50}, {"cursor": ""}, {"q": ""}, {"include_data_json": "false"},
+    {"limit": 50}, {"q": ""}, {"include_data_json": "false"},
     {"page": "false", "limit": 50}, {"page": "false", "q": "needle"},
     {"page": "true", "limit": 0}, {"page": "true", "limit": 201},
-    {"page": "true", "cursor": ""}, {"page": "true", "cursor": "invalid"},
+    # An empty `cursor=` means "first page" on purpose: many HTTP clients
+    # serialize an absent optional parameter as an empty string.
+    {"page": "true", "cursor": "invalid"},
 ])
 def test_record_page_invalid_parameters(client, users, params):
     a, _ = users
@@ -226,3 +228,15 @@ def test_empty_overview(client, users):
     assert response.status_code == 200
     assert response.json() == {"totalCollections": 0, "totalRecords": 0, "active": 0,
                                "completed": 0, "recentRecords": []}
+
+
+def test_empty_cursor_is_treated_as_the_first_page(client, users):
+    """A client that sends `cursor=` (empty) must not be rejected."""
+    headers = users[0]
+    collection = client.post(f"{ROOT}/collections", headers=headers, json={"name": "Empty cursor"}).json()
+    for index in range(3):
+        client.post(f"{ROOT}/collections/{collection['id']}/records", headers=headers,
+                    json={"name": f"R{index}", "data_json": {"i": index}})
+    page = client.get(f"{ROOT}/collections/{collection['id']}/records?page=true&cursor=", headers=headers)
+    assert page.status_code == 200, page.text
+    assert len(page.json()["items"]) == 3

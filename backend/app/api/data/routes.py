@@ -109,7 +109,8 @@ def list_records(
         if {"limit", "cursor", "q", "include_data_json"}.intersection(request.query_params):
             raise HTTPException(422, "limit/cursor/q/include_data_json require page=true")
         return service.list_records(id=id, user=user, db=db)
-    return service.page_records(id=id, user=user, db=db, limit=limit, cursor=cursor,
+    # Clients that omit an optional query parameter often send an empty string.
+    return service.page_records(id=id, user=user, db=db, limit=limit, cursor=(cursor or "").strip() or None,
                                 q=q, include_data_json=include_data_json)
 
 
