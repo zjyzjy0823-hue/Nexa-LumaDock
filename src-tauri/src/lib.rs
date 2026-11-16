@@ -82,6 +82,7 @@ fn set_status(app: &tauri::AppHandle, value: &str) {
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        #[cfg(desktop)]
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
@@ -238,6 +239,7 @@ fn start_backend(app: tauri::AppHandle) {
     });
 }
 
+#[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::{menu::{Menu, MenuItem}, tray::TrayIconBuilder};
     let open = MenuItem::with_id(app, "open", "打开 Nexa", true, None::<&str>)?;
@@ -287,13 +289,17 @@ fn setup_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if app.state::<DesktopState>().status.lock().unwrap().as_str() != "starting" {
                 show_main(app);
             }
-        }))
+        }));
+    let app = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(DesktopState::default())
@@ -301,8 +307,13 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             setup_macos_menu(app)?;
+            #[cfg(desktop)]
             setup_tray(app)?;
+            // Android has no Python sidecar; §070-02 replaces it with a native layer.
+            #[cfg(desktop)]
             start_backend(app.handle().clone());
+            #[cfg(mobile)]
+            set_status(app.handle(), "ready");
             Ok(())
         })
         .on_window_event(|window, event| {
