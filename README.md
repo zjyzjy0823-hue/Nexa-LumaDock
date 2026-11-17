@@ -279,5 +279,5 @@ v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data t
 
 ## 后续路线图（v0.6.2–v1.0.0）
 
-- [开发路线图（v0.6.2–v1.0.0）](docs/Studiolo_Development_Roadmap_v0.6.2-v1.0.md)：Android Local-first MVP、Theme Engine 与可选 Liquid Glass、Shared Space 按次密码端到端加密共享、Mac Core 常驻 + 多设备 Agent Fleet Chat（Hermes / Codex / OpenCode / DeepSeek Harness `dsh` / Google Antigravity / OpenClaw）以及统一定时任务管理。
+- [开发路线图（v0.6.2–v1.0.0）](docs/Studiolo_Development_Roadmap_v0.6.2-v1.0.md)：以**核心能力先行**顺序推进——先上线 **Mac Core 常驻 + 多设备 Agent Fleet Chat（`/chat`：Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw）** 与 **Shared Space（`/space`）按次密码端到端加密共享 / Theme Engine**，随后落地 **统一 Cron 管理** 与 **Android 原生 Rust/SQLite 离线同步闭环**。
 - [架构审计与目标设计](docs/architecture-plan-v0.6.2.md)：安全信任边界、七端拓扑（Mac Core + Windows + 双手机 + OCI / 腾讯云节点）、迁移兼容与 TBD 决策矩阵。

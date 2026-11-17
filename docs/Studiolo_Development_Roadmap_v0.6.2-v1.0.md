@@ -1,107 +1,89 @@
 # Studiolo 开发路线图 · v0.6.2–v1.0.0
 
-- **更新日期** 2026-11-16
-- **仓库基线** `main @ 3537e1f`
+- **更新日期** 2026-11-17（已按「核心能力先行」重排阶段顺序）
+- **仓库基线** `main @ 7e0a138`（已完成 Studiolo 更名、SVG 图标重构、纯白默认主题、工作台认证及规划冻结）
 - **关联文档** [当前架构审计、详细设计、迁移与 TBD](architecture-plan-v0.6.2.md)
 
 ## 产品方向与分期
 
-Studiolo 保留 Local-first 及多端同步。Shared Space 添加小型文件、文本、配置和 Key 的跨设备共享，每次内容读取都需要重新输入密码，覆盖 UI、API 和离线场景。Liquid Glass 成为 Theme Engine 的可选主题。Agent Chat 优先接入 OpenClaw 和 Hermes，由 Agent 提供历史，Studiolo 不持久化正文或构建跨端聊天缓存。Studiolo 原生任务与 Agent 原生 Cron 在同一界面管理，每个任务由一个所有者调度。TBD 依赖产品确认后才能开放相应能力。
+Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设备 Agent Fleet Chat（`/chat`）与 Shared Space（`/space`）在桌面端与手机 Web 端跑通并上线可用**，再补全 Android 原生 Rust `sqlx` 离线数据层与同步闭环，降低先重造第二套本地持久化的前序等待成本。Shared Space 坚持每读必重输密码，Agent Chat 坚持零聊天正文持久化，Cron 管理坚持单所有者语义。TBD 依赖产品确认后开放对应入口。
 
 | 版本 | 主要交付 | 依赖与主要风险 | 建议工作量 |
 | --- | --- | --- | --- |
-| v0.6.2 | 既有架构巩固收尾，本次审计与更新规划 | v3、`0019`、历史验收记录；确认发布状态与构建版本 | 本次收尾 1–3 人日 |
-| v0.7.0 | Android Local-first MVP，Websites 先跑通 | v0.6.2 契约、APK 构建基线、SQLite/Keystore；Rust 本地写入与恢复是主路径 | 12–20 人日 |
-| v0.7.1 | Android 核心业务、同步与冲突处理 | v0.7.0 的本地与认证基础；语义一致性、父子依赖与离线重放 | 12–20 人日 |
-| v0.7.2 | Theme Engine、可选 Liquid Glass、Android 分享、macOS 回归；Shared Space 安全原型 | v0.7.1 的三端业务验收入口；密码边界、低端机与旧主题兼容 | 13–22 人日 |
-| v0.8.0 | Shared Space 首版、多设备 Agent Fleet Chat（Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw） | Shared Space 原型和 TBD 门槛；多节点协议、远程审批安全边界和零持久化验收 | 22–36 人日 |
-| v0.8.1 | Studiolo／OpenClaw／Hermes 统一 Job 管理 | v0.8.0 的连接能力层和各 Agent 的原生 Cron 接口；重复执行、历史查询与权限 | 12–20 人日 |
-| v0.9.0 | 功能冻结，安全、后台同步、迁移恢复与签名发布 | 前阶段功能验收；跨版本库与密文恢复、三端候选包 | 12–22 人日 |
-| v1.0.0 | 三端正式发布 | v0.9.0 候选验收和支持矩阵；最终包的一致性、升级和回退 | 5–9 人日 |
+| **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
+| **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw 与远程审批 | 非回环 HTTPS/WSS 证书、`Node Token`、不可越权 `allowedRoots`、零正文落盘验收 | 14–22 人日 |
+| **v0.7.1** | **Shared Space（`/space`）加密共享首版 & Theme Engine 标准化**：Argon2id/AEAD 密文、每读重输密码与 Epoch 轮换、Mac/桌面/手机 Web 可用；共用 Theme Registry 与可选 Liquid Glass | TBD-01–04/08/09 参数冻结、密码学跨语言向量、旧 v3 外观严格字段兼容 | 15–24 人日 |
+| **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 12–20 人日 |
+| **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 12–20 人日 |
+| **v0.8.1** | **Android 全业务与移动完整体验闭环**：Ledger / Data / Conflict Center、Automation、Share to Studiolo、Android 本地密文块缓存与无障碍/低端机优化 | 跨端金额/时区语义、父子依赖同步、TalkBack 与 48dp 触控规范、Android 密文块接入 | 14–24 人日 |
+| **v0.9.0** | **功能冻结、安全加固与发布工程**：长离线与密文恢复、桌面旧凭据安全存储迁移、Android WorkManager 后台同步、三端签名/公证候选包 | 跨版本升级与库/blob 一致性恢复、桌面凭据无损迁移、真机持久运行诊断 | 12–22 人日 |
+| **v1.0.0** | **三端正式发布**：Windows / macOS / Android 全量核心业务、Shared Space、Agent Fleet Chat、单所有者 Cron 与支持矩阵通过 | v0.9.0 候选验收、兼容矩阵、升级与故障回退演练 | 5–9 人日 |
 
-人日为建议范围，含实现、联调和回归，假设可使用测试 Core、两类 Agent 服务和三端测试设备。采购、签名账号、上游变更和 TBD 等待时间单列。v0.8.0 的共享与聊天可以在彼此独立的实现轨道上推进，两项均需验收。v0.8.1 将远程 Cron 与聊天拆开，先验证连接身份与实例绑定，再对远端开放有副作用的写入。Android 数据层和同步先按原顺序完成，Shared Space 原型在 v0.7.2 单独验证密码和密文，降低在两套持久化实现上返工的成本。
+人日为建议范围，含实现、联调和回归；采购、签名账号、上游 CLI 协议变更和 TBD 等待时间单列。`/chat` 的 Node 适配与 `/space` 的密文服务可各自独立测试并按开关灰度开放。
 
-## v0.6.2 · 兼容基线与决策收尾
+## v0.6.2 · 兼容基线与决策收尾（✅ 主体完成）
 
-- **062-01–05** 保留已记录的架构、v3 契约、模型、迁移和安全边界验收。此前状态盘点覆盖 CI、v0.6.1 数据库升级、快照与 rejected 恢复；以该文档为既有取证索引。
-- **062-06** 以 `3537e1f` 记载 Android 构建提交，识别旧审计和路线图中的漂移。Android APK 能构建并安装来自提交记录，移动业务和同步仍按 v0.7.0 立项。
-- **062-07** 记录 Shared Space、Agent Chat、统一 Scheduler、Theme Engine 的边界、迁移方案和 TBD。当前基线的 API、npm 和 Tauri 版本仍为 0.6.1，当前本地 Git 无 v0.6.2 tag；版本基线和发布状态需核实并记入后续发布记录。
+- **062-01–05** 已在 [状态盘点](v0.6.2-status-2026-11-16.md) 全部验收通过（1828 行架构审计、Sync v3 契约与三语言校验、`0018`/`0019` 迁移与 `5` 万条压测、三路越权 404 测试及 `docs/android-auth.md`）。
+- **062-06** `3537e1f` 已完成 Android 纯代码工程壳补齐并在真机启动安装（`#9`）。
+- **062-07** 已完成全仓更名 **Studiolo**、几何 **S** 矢量图标重绘、纯白默认桌面/移动 UI 收敛及 Mac Core + 7 设备 Agent Fleet 方案冻结（`7e0a138`）；后续仅按需补充 `v0.6.2` Git tag 与发行元数据。
 
-**独立验收** 以[状态盘点](v0.6.2-status-2026-11-16.md)为既有回归证据，能追溯 v3 契约样例、v0.6.1 至 `0019` 的升级记录，以及 Windows/Core 同步和恢复记录。新增静态审计标出参考代码、上游来源、产品约束与阻塞决策。若单独发布 v0.6.2，必须另有版本元数据与正式构建证据。
+## v0.7.0 · Mac Core 与多设备 Agent Fleet Chat（`/chat`）
 
-## v0.7.0 · Android Local-first MVP
+- **070-01 Mac Core 常驻与 `/chat` 控制台**：在 macOS 主机部署常驻 Studiolo Core（PostgreSQL + `launchd` 防休眠 + 定期异地备份），通过腾讯云/OCI VPS TLS 反向隧道或 Tailscale 私网向手机与 Windows 开放入口；将 [OpusModulePage.vue](file:///d:/xiangmu/LumaDock/src/pages/OpusModulePage.vue) `/chat` 占位升级为三栏与移动端 Agent Fleet 控制台，支持设备在网感知、并发对话、同仓 `git worktree` 隔离、结构化工具审批卡、Fan-out 广播与 `@Handoff` 转交。
+- **070-02 统一 `AgentAdapter` 与多设备 Node 接入**：实现标准化事件总线（`Accepted`、`ThoughtDelta`、`TextDelta`、`ToolCall`、`PermissionRequest`、`Snapshot`、`Completed`、`Failed`、`ConnectionState`）与轻量 Device Agent Node（桌面 Sidecar / Mac 独立边界节点 / Windows 与 Linux VPS 常驻节点），首批支持 **Hermes（`hermes acp` / `hermes serve`）、Codex（`codex app-server`）、OpenCode（`opencode serve` / SDK）、dsh（受控 CLI/网关）、Google Antigravity（`agy` / Python SDK）** 与 **OpenClaw Gateway**。
+- **070-03 远程执行安全边界与零正文持久化验收**：强制非回环 HTTPS/WSS 证书校验与每节点可吊销 `Node Token`、不可远端覆盖的 `allowedRoots` 目录白名单、高危命令默认人工审批；复用并修复 `agent.run` 与 Data Actions scope 校验；全端库/日志/缓存哨兵扫描确认聊天正文零落盘。
+- **070-04 多节点兼容列表与开关发布**：固化 7 台设备（Mac + Windows + 双手机 Web/壳 + OCI×2 + 腾讯云）与各 Agent CLI 锁定版本（TBD-05/07），支持功能开关独立启停与回滚。
 
-- **070-01** 以已有 Android 配置验证干净环境构建、工具链锁定、CI APK 产物和真机启动。补移动壳的返回、键盘、旋转和基本状态恢复。
-- **070-02** 建 Rust Commands、受限 Repository 与 Android SQLite 迁移。Websites 增删改查及 Outbox 同事务，UI 支持离线读写与重启。
-- **070-03** 接入 Core 登录、Personal Workspace 确认、注册、Keystore、重新授权、安装与数据分区绑定。非回环连接验证 HTTPS 和证书，遥测令牌按独立身份接入。 [Android 凭据决策](android-auth.md)
-- **070-04** 实现 v3 前台推拉、持久化游标、分页、部分失败与重放、冲突登记与快照恢复。提供手动同步、队列和连接状态。前台触发去重。
-- **070-05** 联调 Windows、测试 Core 和 Android。保存构建版本、设备、网络条件和情景输出。
+**独立验收** 在真实 Mac Core + Windows + 手机 + OCI/腾讯云节点环境下完成 6 类 Harness 建连、历史上游拉取、并发流式输出、远程工具批准、节点休眠离线与断网重连；数据库、日志、Outbox 与诊断导出均无任何聊天正文与模型订阅密钥；既有 Local / Sync v3 / Data Actions 零回归。
 
-**独立验收** 干净环境构建 APK 并在至少一台目标 Android 真机安装。Windows 新建网站后 Android 可见；Android 断网编辑并重启后保留同一 UUID 与待同步项，联网后 Windows 收敛。返回 401 时停止发送并保留队列。Core 已提交但响应丢失时重复提交仅产生一次业务写入；快照恢复保全未同步编辑，工作区切换维持分区隔离。
+## v0.7.1 · Shared Space（`/space`）与 Theme Engine
 
-## v0.7.1 · 移动核心业务与同步闭环
+- **071-01 安全原型与 TBD 冻结**：验证 `Argon2id` + AEAD（`XChaCha20-Poly1305` / `AES-GCM`）密文格式与跨语言测试向量，冻结 TBD-01–04/09 及文件/空间限额。
+- **071-02 密文同步 API 与仓储**：Core 落地隔离 `Space`、`DeviceGrant`、`KeyEnvelope(epoch)`、`EntryRevision`、`CipherBlob`、`Change` 与 `MutationReceipt` 模型和配额/分块游标；桌面 Sidecar 落地本地密文块仓储与 Outbox。
+- **071-03 按次密码解密与轮换**：将 `/space` 占位页（及手机浏览器 WebCrypto / 受控 CLI）实现为完整的 Shared Space UI：每次读取重输密码、离页即清空内存、常规改密（CAS 重包封套）与泄露撤销 `epoch` 轮换。
+- **071-04 Theme Engine 与可选 Liquid Glass**：在共用 Vue 层固化 Design Tokens、Theme Registry（衔接当前 `纯白（默认）`、`纸墨`、`Liquid Glass`）、浅/深与无模糊降级适配，冻结 TBD-08（不污染旧 v3 外观严格字段）。
 
-- **071-01** 完成移动 Dashboard、快捷新增、Devices/Settings 与连接状态，覆盖首次、空状态、离线及异常。
-- **071-02–04** 完成 Ledger、Websites、Data 的日常读写、摘要和筛选。Ledger 按现有金额与时区契约处理，Data 复用有界读取语义；精确兼容字段见 v3。
-- **071-05** 提供现有 Studiolo Automation 的在线查看、获授权的手动触发和运行反馈。
-- **071-06–07** 手机可查询队列、rejected 和冲突，支持人工裁决、按依赖重试及删除收敛；复用后端既有规则与状态。
-- **071-08** 完善移动常用表单、无障碍基础、错误状态和诊断脱敏。
+**独立验收** 四类共享对象（小型文件、文本、配置、Key）在 Mac/Windows/手机端同步可读；错密码、无密码、单独令牌、篡改块、旧 epoch 写入、切页/重开/搜索均无法绕过当次密码门禁；三套主题与降级状态对比度 ≥ 4.5:1 且切换无损失。
 
-**独立验收** Windows 和 Android 对 Ledger、Websites、Data 完成支持范围内的双向创建、修改、删除。回归金额精度、跨月时间、记录父子关系、重复请求、空游标与边界翻页。两端离线并发编辑，恢复后能查看、人工解决并收敛；删除与离线编辑同时出现时保留可追溯结果。有效授权可手动运行原生任务并查看结果，离线与无权限有独立提示。
+## v0.7.2 · 统一定时任务（Cron）与 macOS 回归
 
-## v0.7.2 · Theme Engine 与 Shared Space 原型
+- **072-01 统一 Job/Run 视图与单所有者集成**：在既有 Automation 页面按 `JobRef` 展示 Studiolo Core、OpenClaw、Hermes 三类所有者任务、原生时区、下次运行及有界执行历史；保留引擎单所有者语义，不向远端伪造重复调度。
+- **072-02 OpenClaw & Hermes Cron 适配**：实现 `CronPort` 在线 CRUD、暂停/恢复、手动触发与运行账本查询，离线禁用写入并返回清晰能力边界。
+- **072-03 通知脱敏与 TBD-06 确认边界**：落地无聊天正文/无凭据的任务通知，高影响 Data Actions 显式二次确认，受 Shared Space 密码保护的自动化任务停在待人工接续状态。
+- **072-04 macOS 桌面端回归与兼容验证**：验证 macOS 桌面包构建、启动、在位升级、Core 同步及跨端恢复。
 
-- **072-01/02** 在共用 Vue 层建立 Design Tokens、Theme Registry 和材质适配。接线旧外观偏好，提供可选 Liquid Glass、浅暗系统模式与低性能降级。不把新字段直接写入旧 v3 载荷。
-- **072-03/04** Android 接收系统网站链接，支持冷／热启动、预填、取消、重复检查及离线保存。复核 macOS 构建、启动、升级和 Core 同步。
-- **072-05** 对实际设备记录主题对比、滚动、切页、无模糊和减少动态效果表现；样例覆盖核心业务和可及性。
-- **072-06** 在隔离环境用合成数据验证 Shared Space 密文格式和跨语种测试向量、密码每读、真机 KDF、独立同步流、目录及分块存储方案。冻结 v0.8.0 首版涉及的 TBD-01–04/09 和性能限额。
+**独立验收** 三类 owner 各自独立维护周期、权限与运行历史；关闭 Mac Core 时远端 Hermes/OpenClaw Cron 按自身规则续跑，断网时 Studiolo 不误接管；通知与日志无正文和密钥泄漏；macOS 桌面端核心同步回归通过。
 
-**独立验收** 桌面和移动从同一 Registry 载入主题，选择 Liquid Glass 后可回到已批准的常规主题，亮／暗与无模糊模式完成记账、保存网站、查看同步。验证对比度、键盘、TalkBack、系统返回和动态字体。Android 从浏览器分享 URL，断网保存且重启可查，联网两类桌面端均可见。Shared Space 原型的正确密码、错误密码、无密码、令牌单独访问、篡改密文及离线读取均有验证记录；旧 v3 样本对新密文能力保持可用。
+## v0.8.0 · Android Local-first MVP（原生离线切片）
 
-## v0.8.0 · Shared Space 与多设备 Agent Fleet Chat
+- **080-01b** 补齐干净环境 Android SDK/NDK/JDK21 工具链锁定与 GitHub CI APK 产出。
+- **080-02** 落地 Rust Commands、`sqlx` SQLite 迁移、受限 Repository 与 Websites/Outbox 同事务写入。
+- **080-03** 接入 Core HTTPS 登录、Personal Workspace 确认、Android Keystore 凭据存储与重新授权。
+- **080-04** 实现 Sync v3 前台推拉、游标分页、部分失败重放、冲突登记与快照恢复。
+- **080-05** 在真机上联调 Windows / macOS / Mac Core / Android Websites 端到端离线与重启收敛。
 
-- **080-01–03 Shared Space** 交付独立密文 API、Core blob 与配额、三端本地密文副本、文件／文本／配置／Key、按次密码解密 UI/CLI 或 SDK、离线和复制状态、改密轮换、冲突及备份恢复。按已批准的共享范围、文件额度及导入出口开放。
-- **080-04–05 多设备 Agent Fleet Chat**
-  1. 建统一 `AgentAdapter` 与标准化流事件总线，首批覆盖 **Hermes（ACP / Gateway）、Codex（`codex app-server`）、OpenCode（`opencode serve` / `@opencode-ai/sdk`）、DeepSeek Harness（`dsh`）、Google Antigravity（`agy` / Python SDK）及 OpenClaw Gateway**。
-  2. 新增轻量 **Device Agent Node**（桌面内置进 Sidecar；macOS Core 同机挂载独立 Node 边界；Windows / OCI / 腾讯云节点后台常驻），经反向认证 TLS WSS 注册到 **macOS Core 中继**（外网通过公网 VPS 反向 TLS 入口或私网隧道可达），支撑手机与桌面跨设备发现、并发流式对话、中断与结构化工具审批卡。
-  3. 升级 `/chat` 三栏与手机端视图，支持按设备分组 Fleet 列表、Fan-out 广播对比、同仓并发的轻量 `git worktree` 目录隔离及协作 `@Handoff` 转交（详见 [多设备舰队协同设计](architecture-plan-v0.6.2.md)）。
-- **080-06** 复用现有 Data Actions，并保留 Agent Task 及 Automation 既有行为。建立三端受保护读取、零聊天正文落地、节点工作区目录白名单（`allowedRoots`）与高危指令人工审批测试。高影响 Data Actions 的新确认 UX 按本阶段已批准范围或 v0.8.1 单独实施。
-- **080-07** 为两条功能交付轨道分别记录开关、依赖版本、各设备 Node 兼容列表、错误与回滚路径，联调整体发布包。
+**独立验收** 干净环境 CI 与真机可装可用；Windows/macOS 建站后 Android 可拉取；Android 断网编辑、强杀重启并联网后，UUID 与最终数据在 Core 及桌面端完整收敛。
 
-**独立验收**
+## v0.8.1 · Android 全业务与移动离线完整闭环
 
-- Shared Space 在两台设备间同步四类测试内容，三端验证每次读取重新输入密码；离线已下载项仍需密码。前次成功、普通令牌、Agent、Automation、页面重开、搜索、导出和错密码均不能绕过。实测断点上传、过期游标、两端冲突、损坏块、配额、设备吊销、改密以及旧 epoch 写入；检查数据库、blob、日志、备份均无本次共享明文。
-- 在已验证的多设备拓扑（Windows/macOS 桌面、OCI/腾讯云 VPS 与手机端）上对 Hermes、Codex、OpenCode、dsh、Antigravity 与 OpenClaw 完成认证接入、跨设备在线/离线状态感知、会话与历史拉取、流式响应、结构化工具审批、断网重连及权限目录隔离校验。哨兵扫描覆盖 Core/Local/Android 数据库、缓存、日志、诊断、通知、任务表与 Outbox。测试认证失败、工作区越权、休眠离线及不同 profile 隔离。
-- 旧桌面 Local、Sync v3、Agent adapter、Data Actions、新客户端连接旧 Core 的原有业务场景均通过回归。
+- **081-01–08** 补齐 Android 离线 Dashboard、Ledger（严格遵循金额与 `Asia/Shanghai` 部署时区）、Websites 搜索标签、Data 有界读取、Automation 手动触发、Conflict Center 人工裁决、Devices/Settings 真实能力清理，以及底部「＋」快捷录入。
+- **081-09** 实现 **Share to Studiolo**（冷/热启动接收系统浏览器分享 URL 离线入库）。
+- **081-10–11** 接入 Android 本地 Shared Space 密文块缓存（复用桌面同套密码学与每次输密规则），并在真机完成安全区、≥48dp 触控、Android 返回栈、TalkBack、放大字体及低端机无模糊性能预算验收。
 
-## v0.8.1 · 统一定时任务管理
+**独立验收** 手机端所有核心业务与 Shared Space 在完全离线状态下均可读写并在联网后正确解决冲突或收敛；可及性与低端机降级符合支持门槛。
 
-- **081-01** 在既有 Automation 管理面添加 Job 与 Run 统一视图，显示 owner、实例、profile、原生时区、下次运行、能力和历史。
-- **081-02/03** 打通 OpenClaw 与 Hermes 的在线 CRUD、暂停／恢复和手动触发，保留原生非等价字段，按 provider 能力显示分页历史。锁定 Hermes 支持版本、授权路径及可读取历史的契约。
-- **081-04** 为原生、OpenClaw、Hermes 建执行归属、并发、丢确认、进程重启和未知状态的集成测试。仅在上游支持和回执验证通过时重试远端写操作。
-- **081-05** 保留原生触发、白名单 Data Actions、可追溯版本与执行记录。按产品批准范围完善高影响动作确认，以及完成、失败、待确认状态提示。任何通知均去除聊天内容和凭据。人工接续受密码保护的读取依赖 TBD-06。
+## v0.9.0 · 功能冻结、安全加固与发布工程
 
-**独立验收** 三类 owner 各有可管理的任务，实例和 profile 可区分。逐一验证新增、查看、修改、删除、暂停、恢复、手动运行与执行历史；能力不全或不兼容的部署需显示受限状态，并排除在完整支持矩阵之外。关闭 Studiolo Core 时远端原生 Cron 按自己的规则继续运行，断开上游时 Studiolo 不接管。并发操作或响应丢失不生成额外任务或重复调度，无法查证时显示结果未知。过期授权、跨工作区和未通过确认的动作被拒绝；原生任务仍由既有引擎执行。
-
-## v0.9.0 · 功能冻结、安全与发布工程
-
-- **090-01/02** 演练长时间离线、Core 回退、Cursor 失效、分页中断、待同步积压及三端兼容升级。用隔离的旧版本库与密文 blob 验证引用、对账及加密恢复点。
-- **090-03** 验证所有身份的轮换、吊销、重新授权、TLS、租户隔离及诊断脱敏。实施并验证桌面旧凭据安全存储迁移和回退时重新授权。
-- **090-04** 收尾 Android 前后台同步共享状态、互斥和退避；用真机验证 WorkManager 的省电、网络恢复和重启行为。按批准的性能预算测试低端机、密文同步及主题降级。Windows/macOS 与 Android 验证长期稳定和诊断。
-- **090-05/06** 生成签名候选包、校验和与版本信息，发布支持矩阵、安装与回退文档。目标含 Windows 安装包、macOS 签名／公证包及 Android 签名 APK，AAB 按选定渠道取证。
-
-**独立验收** 三端候选包均有全新安装、在位升级与有待同步项的恢复记录；SQLite、PostgreSQL 和密文备份恢复后逐项核对。复演签名验证、旧 Core／旧客户端混用、密钥轮换、离线吊销边界及远程断线，检查聊天测试正文未落地。WorkManager 在重启与省电限制下保持队列正确。发布阻断须关闭，性能限制写入支持范围。
+- **090-01/02** 演练长离线、Core 回退、Cursor 失效、分页中断与密文 blob 同点备份恢复验证。
+- **090-03** 完成桌面旧明文 `FileCredentialStore` 向系统安全存储平滑迁移、令牌轮换吊销传播、非回环 TLS 门禁与统一日志脱敏验证。
+- **090-04** 完成 Android WorkManager 前后台同步、省电与重启恢复压测，汇总 Windows / macOS / Android 长期稳定性基线。
+- **090-05/06** 产出 Windows 安装包、macOS 签名/公证包及 Android 签名 APK/AAB 候选件、校验和、兼容矩阵与回退指南。
 
 ## v1.0.0 · 三端正式发布
 
-- **100-01** 在最终签名包上回归三端业务同步、冲突、Shared Space 密码与离线、Agent Chat、单所有者 Job 和主题。
-- **100-02** 按支持矩阵固化 Core、桌面、Android 与 Agent 兼容范围，提供安装、配对、升级、迁移、恢复、密码与吊销限制、回退和故障诊断指南。
-- **100-03** 固化构建、版本、签名校验、CI 与真机证据，演练发布后诊断和回退。
+- **100-01–06** 在最终三端签名候选包上完成全新安装、旧版升级、全业务跨端同步与冲突解决、Shared Space 按次输密与轮换、Mac Core 多设备 Agent Fleet Chat（零正文落盘）、单所有者 Cron、多主题降级、支持矩阵及故障恢复回退全套验收。
 
-**独立验收** 从全新安装和至少一个受支持发布版本升级，最终签名包在 Windows、macOS、Android 均完成配对、业务读写、断线恢复、共享内容每次密码读取、实时聊天与上游历史、三类 owner 任务管理及主题切换。发布矩阵中的 Agent 组合实测，诊断和备份内容符合脱敏范围，按用户文档完成一次恢复与故障回退演练。
+## 发布顺序与证据规则
 
-## 发布顺序与证据
-
-- 每个版本记录候选提交、包版本、Core schema、客户端与 Agent 版本、设备、测试数据、结果和未覆盖项。来自代码、历史报告与本次实测的结论分别标记。
-- 新 Core 与旧客户端、新客户端与旧 Core、桌面与 Android 同时在线的组合从 v0.7.0 起加入回归。v0.8.0 使用独立功能开关；关停时保留密文、业务表及待同步队列。
-- 高风险阻断包括数据丢失、租户越权、共享密码绕过、聊天内容落地、任务重复调度及发布包无法升级。涉及 TBD 的入口保持关闭，直到确认并达到其验收条件。
+- 每个版本记录候选提交、包版本、Core schema、各端与 Agent CLI 锁定版本、真机结果与未覆盖项。
+- 涉及 TBD 的入口在决策确认与测试矩阵通过前维持关闭或只读开关保护；高风险阻断项包括数据丢失、租户越权、Shared Space 密码绕过、聊天正文落盘、Cron 重复调度及升级失败。

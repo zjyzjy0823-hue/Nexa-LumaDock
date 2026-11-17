@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Core | FastAPI 与 Local 共用应用、SQLAlchemy 模型和 Alembic 链，Core 要求 PostgreSQL。启动执行迁移，且只有 Core 启动 Automation Engine。现有通用 `/ws` 仅处理 ping/pong，连接入口没有业务认证。[应用入口](../backend/app/main.py) · [运行配置](../backend/app/config.py) | 沿用工作区归属、路由模式和数据库。Shared Space 使用独立路由、数据表和权限。Agent 如需经 Core 中转，提供独立有鉴权的传输入口。 |
 | Desktop Local | Tauri 管理 Python sidecar 启停，FastAPI 绑定回环地址，SQLite 数据在应用目录。Local 生命周期驱动后台同步。Vue 通过现有 HTTP API 使用业务功能。[桌面入口](../backend/desktop_entry.py) · [Tauri 启动](../src-tauri/src/lib.rs) · [前端 API](../src/api/client.ts) | 保留启动、数据库与现有业务接口。新增窄的密文仓储、解密命令或服务边界，按能力接入现有壳。 |
-| Android | `3537e1f` 增加 Android 配置、构建入口及平台门控，移动分支跳过桌面 sidecar。提交记录报告真机可安装，当前追踪源码只有壳、三项通用命令及同步契约样例。仓库 CI 仍缺 Android 构建与真机业务验证。[运行入口](../src-tauri/src/lib.rs) · [Android 配置](../src-tauri/tauri.android.conf.json) · [CI](../.github/workflows/ci.yml) | 沿用 Vue 和 Rust 契约样例，按业务逐步补 Rust Commands、Repository、SQLite、Keystore、Outbox 与恢复；v0.7.0 先做 Websites 垂直切片。 |
+| Android | `3537e1f` 增加 Android 配置、构建入口及平台门控，移动分支跳过桌面 sidecar。提交记录报告真机可安装，当前追踪源码只有壳、三项通用命令及同步契约样例。仓库 CI 仍缺 Android 构建与真机业务验证。[运行入口](../src-tauri/src/lib.rs) · [Android 配置](../src-tauri/tauri.android.conf.json) · [CI](../.github/workflows/ci.yml) | 沿用 Vue 和 Rust 契约样例；按「核心能力先行」顺序先以移动浏览器/薄壳接入 Mac Core `/chat` 与 `/space`，随后在 v0.8.0–v0.8.1 补齐 Rust Commands、Repository、SQLite、Keystore、Outbox 与移动完整离线同步。 |
 | Sync | v3 注册 Ledger、Websites、Data、个人设置、Dashboard 与 Automation 定义等实体。包含修订、Outbox、幂等回执、分页拉取、快照重同步、Conflict Center 和 rejected 重试／忽略。未知实体在旧契约下不兼容；业务变更发布也可触发 Automation 事件。[契约](../packages/contracts/sync-protocol-v3.md) · [注册表](../backend/app/sync/adapters/registry.py) · [发布与租户锁](../backend/app/sync/service.py) · [同步路由](../backend/app/api/sync.py) | 复用绑定、事务、分页、退避与恢复模式。Shared Space 独立能力、游标和密文变更流，避免把条目放进 v3 adapter、快照、业务事件或原有冲突详情。 |
 | Client Identity | 账号 JWT 管理 Personal Workspace 与 Client；`nc_live_` 用于同步和部分 Client Runtime；`nd_live_` 是设备遥测，`na_live_` 为 Agent，另有传统只读 API Key。Client 支持 enroll、rotate、revoke，安装实例在工作区内唯一。桌面 `FileCredentialStore` 以文件权限保护 ASCII 凭据，文件落盘仍为明文。Desktop Core URL 校验目前接受非回环 HTTP，不能作为新受保护接口的传输策略。Android 已有 Keystore 方案文档，尚需代码与真机验证。[认证](../backend/app/security.py) · [Clients](../backend/app/api/clients.py) · [凭据存储](../backend/app/credential_store.py) · [Core 地址验证](../backend/app/core_connection.py) · [Android 决策](android-auth.md) | 身份负责绑定、作用域和吊销；内容读取还需密码。复用凭据存储接口与原子写入思路。新增凭据进入平台安全存储，旧桌面凭据按 §迁移方案升级。 |
 | Automation Engine | Core 既有扫描和执行循环，支持 schedule、manual、data_changed、agent_completed。Local 可上报完成事件，正常业务同步与事件同步各有路径。任务定义可通过 v3 同步，执行历史、计划状态、动作回执留在 Core。触发唯一键、行锁、租约、尝试 fencing、内部动作回执和 ancestry guard 已存在。[引擎](../backend/app/automation/engine.py) · [动作](../backend/app/automation/actions.py) · [API](../backend/app/api/automation/routes.py) · [个人状态 adapter](../backend/app/sync/adapters/personal_state.py) | 沿用唯一 Studiolo 调度器、执行表与历史接口。统一管理层聚合远程 Cron；Studiolo 的 `agent.run` 是一次性的旧任务派发。通用 API、webhook 和 Agent 入口需要验证均无法代读 Shared Space。 |
@@ -148,7 +148,7 @@
 | 离线密文副本可被猜密码，遗失设备无法即时收回 | 高 | 端到端封套、强密码与实机 KDF 基准；验证撤销在线访问、旧 epoch 冲突，文档明确离线边界 | Shared Space，TBD-01/02/04 |
 | 读取门禁被搜索、预览、历史、导出或代理路径绕过 | 高 | 同一按次门禁，构建 UI/API/离线/自动化负向矩阵，逐处扫描哨兵内容 | Shared Space，TBD-03/06/09 |
 | 新实体阻塞 v3，密文块与数据库提交出现悬挂 | 高 | 隔离游标与版本；模拟断电、重复上传、缺块、Core 恢复及并行写入 | Sync 与 Shared Space |
-| Android 壳工程误算为业务 MVP；桌面发布回归不足 | 高 | 固定工具链，先完成站点垂直切片；按既有版本和候选安装包保存三端真机/实机记录 | v0.7.x / v0.9.0 |
+| Android 壳工程误算为业务 MVP；桌面发布回归不足 | 高 | 固定工具链，v0.8.0 先完成 Websites 原生垂直切片；按既有版本和候选安装包保存三端真机/实机记录 | v0.8.x / v0.9.0 |
 | 多端 Agent 协议漂移或远程 Shell/工作区越权执行 | 高 | 按版本锁定契约样例，强制 TLS WSS + 独立节点凭证、`allowedRoots` 目录白名单及默认人工审批 | Agent，TBD-05/06 |
 | 流式内容误入日志、存储、Job 或通知 | 高 | 正文哨兵检测、空磁盘恢复验证、禁原始事件持久化及默认错误回流 | Chat，TBD-07 |
 | 远端重试或错误投影触发重复执行 | 高 | 单 owner、原生回执、未知状态不自动重试；并发、丢确认、重启与恢复测试 | Scheduler，TBD-10 |
@@ -157,13 +157,13 @@
 
 | TBD | 待决定项 | 最晚决策点与影响 |
 | --- | --- | --- |
-| TBD-01 | 共享范围是否从个人多设备扩至多用户，读写角色、设备缓存与撤销策略 | v0.7.2 安全设计冻结；影响封套、ACL 与离线撤销文案 |
-| TBD-02 | 密码强度规则、KDF/AEAD 选型、低端机预算、单文件／空间限额、后端 blob 选型、可见元数据和保留期 | v0.7.2 原型前确认，通过跨语言、配额和负载验证 |
-| TBD-03 | 每次读取的列表页/文件流边界、API 是否要求真人在场、是否开放直接联网的内容 API | v0.7.2 对外契约冻结前确认；每次重新输入密码是既定约束 |
-| TBD-04 | 忘记密码后的恢复／无恢复提示、旧备份处理、密码变更与泄露时轮换的历史范围 | v0.7.2 可用性设计前确认；不可自行增加恢复密钥或托管 |
-| TBD-05 | Windows / Mac / OCI / 腾讯云等设备节点拓扑、各 Harness 锁定版本（Hermes ACP/Gateway、Codex app-server、OpenCode serve、dsh、Antigravity/agy）与重连边界 | v0.8.0 联调前固化；影响节点注册表、凭据和状态实现 |
-| TBD-06 | Agent 连接凭据是否允许特例，由谁保管、Scheduler 是否允许无人值守用独立授权，Shared Space 读取任务如何人工接续 | v0.8.0/0.8.1 各相关功能开启前审批；任何设计仍受内容按次密码约束 |
-| TBD-07 | `/chat` 多 Agent 协同（Fan-out 并发、git worktree 自动隔离、@Handoff 转交）、工具审批卡、Diff 预览与附件首发范围 | v0.8.0 仅提出候选范围，待决部分按能力关闭 |
-| TBD-08 | 默认主题、用户选中主题是否跨端同步、兼容映射细则、低端机和视觉预算 | v0.7.2 主题验收前冻结；影响兼容和性能门槛 |
-| TBD-09 | 现存文本/配置/Key 的显式导入范围、外部明文导出、剪贴板与原件清理方案 | v0.7.2 导入／导出入口开启前确认 |
-| TBD-10 | 远程所有者转移、需要支持的精准执行历史、Hermes 版本/接口差异、兼容版本窗口 | v0.8.1 管理能力验收前确认；可独立决定转移功能是否排期 |
+| TBD-01 | 共享范围是否从个人多设备扩至多用户，读写角色、设备缓存与撤销策略 | v0.7.1 Shared Space 原型前冻结；影响封套、ACL 与离线撤销文案 |
+| TBD-02 | 密码强度规则、KDF/AEAD 选型、低端机预算、单文件／空间限额、后端 blob 选型、可见元数据和保留期 | v0.7.1 Shared Space 原型前确认，通过跨语言、配额和负载验证 |
+| TBD-03 | 每次读取的列表页/文件流边界、API 是否要求真人在场、是否开放直接联网的内容 API | v0.7.1 对外契约冻结前确认；每次重新输入密码是既定约束 |
+| TBD-04 | 忘记密码后的恢复／无恢复提示、旧备份处理、密码变更与泄露时轮换的历史范围 | v0.7.1 可用性设计前确认；不可自行增加恢复密钥或托管 |
+| TBD-05 | Windows / Mac / OCI / 腾讯云等设备节点拓扑、各 Harness 锁定版本（Hermes ACP/Gateway、Codex app-server、OpenCode serve、dsh、Antigravity/agy）与重连边界 | v0.7.0 Mac Core & Fleet 联调前固化；影响节点注册表、凭据和状态实现 |
+| TBD-06 | Agent 连接凭据是否允许特例，由谁保管、Scheduler 是否允许无人值守用独立授权，Shared Space 读取任务如何人工接续 | v0.7.0/v0.7.2 各相关功能开启前审批；任何设计仍受内容按次密码约束 |
+| TBD-07 | `/chat` 多 Agent 协同（Fan-out 并发、git worktree 自动隔离、@Handoff 转交）、工具审批卡、Diff 预览与附件首发范围 | v0.7.0 提出候选范围，待决部分按能力开关控制 |
+| TBD-08 | 默认主题、用户选中主题是否跨端同步、兼容映射细则、低端机和视觉预算 | v0.7.1 主题验收前冻结；影响兼容和性能门槛 |
+| TBD-09 | 现存文本/配置/Key 的显式导入范围、外部明文导出、剪贴板与原件清理方案 | v0.7.1 导入／导出入口开启前确认 |
+| TBD-10 | 远程所有者转移、需要支持的精准执行历史、Hermes 版本/接口差异、兼容版本窗口 | v0.7.2 统一调度验收前确认；可独立决定转移功能是否排期 |
