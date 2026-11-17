@@ -23,7 +23,7 @@ def main():
     with SessionLocal() as db:
         if db.scalar(select(User).where(func.lower(User.username) == username.lower())):
             raise SystemExit("Username already exists")
-        user = User(username=username, email=f"{uuid4().hex}@nexa.local", password_hash=hash_password(password))
+        user = User(username=username, email=f"{uuid4().hex}@studiolo.local", password_hash=hash_password(password))
         db.add(user)
         db.flush()
         ensure_personal_workspace(db, user)

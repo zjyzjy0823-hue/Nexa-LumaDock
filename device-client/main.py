@@ -44,7 +44,7 @@ def run(once: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Nexa Windows Device Client")
+    parser = argparse.ArgumentParser(description="Studiolo Windows Device Client")
     parser.add_argument("--once", action="store_true", help="Send one heartbeat and exit")
     try:
         raise SystemExit(run(parser.parse_args().once))

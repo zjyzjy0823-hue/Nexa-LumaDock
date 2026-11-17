@@ -146,27 +146,27 @@ fn start_backend(app: tauri::AppHandle) {
         let data_dir = match app.path().app_data_dir() {
             Ok(path) => path,
             Err(_) => {
-                set_status(&app, "无法定位 Nexa 用户数据目录。");
+                set_status(&app, "无法定位 Studiolo 用户数据目录。");
                 show_main(&app);
                 return;
             }
         };
         if std::fs::create_dir_all(data_dir.join("logs")).is_err() {
-            set_status(&app, "无法创建 Nexa 用户数据目录。");
+            set_status(&app, "无法创建 Studiolo 用户数据目录。");
             show_main(&app);
             return;
         }
         if port_occupied() {
             log_desktop(&data_dir, "Port 17800 is already in use");
-            set_status(&app, "端口 17800 已被占用。请关闭占用该端口的程序后重启 Nexa。");
+            set_status(&app, "端口 17800 已被占用。请关闭占用该端口的程序后重启 Studiolo。");
             show_main(&app);
             return;
         }
-        let command = match app.shell().sidecar("nexa-backend") {
+        let command = match app.shell().sidecar("studiolo-backend") {
             Ok(command) => command,
             Err(error) => {
                 log_desktop(&data_dir, &format!("Sidecar lookup failed: {error}"));
-                set_status(&app, "Nexa Backend 文件缺失。请重新安装 Nexa。");
+                set_status(&app, "Studiolo Backend 文件缺失。请重新安装 Studiolo。");
                 show_main(&app);
                 return;
             }
@@ -181,7 +181,7 @@ fn start_backend(app: tauri::AppHandle) {
             Ok(result) => result,
             Err(error) => {
                 log_desktop(&data_dir, &format!("Sidecar spawn failed: {error}"));
-                set_status(&app, "Nexa Backend 启动失败。请查看 logs/backend.log。");
+                set_status(&app, "Studiolo Backend 启动失败。请查看 logs/backend.log。");
                 show_main(&app);
                 return;
             }
@@ -206,7 +206,7 @@ fn start_backend(app: tauri::AppHandle) {
                     let state = monitor_app.state::<DesktopState>();
                     state.child.lock().unwrap().take();
                     if !state.quitting.load(Ordering::SeqCst) {
-                        set_status(&monitor_app, "Nexa Backend 已停止。请退出并重新启动 Nexa，详情见 logs/backend.log。");
+                        set_status(&monitor_app, "Studiolo Backend 已停止。请退出并重新启动 Studiolo，详情见 logs/backend.log。");
                         show_main(&monitor_app);
                     }
                     break;
@@ -234,7 +234,7 @@ fn start_backend(app: tauri::AppHandle) {
         }
         log_desktop(&data_dir, &format!("Backend readiness timed out after {:.1}s", started.elapsed().as_secs_f64()));
         stop_backend(&app);
-        set_status(&app, "Nexa Backend 启动超时。请查看 logs/backend.log；数据库迁移失败时请先备份 nexa.db。");
+        set_status(&app, "Studiolo Backend 启动超时。请查看 logs/backend.log；数据库迁移失败时请先备份 studiolo.db。");
         show_main(&app);
     });
 }
@@ -242,12 +242,12 @@ fn start_backend(app: tauri::AppHandle) {
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::{menu::{Menu, MenuItem}, tray::TrayIconBuilder};
-    let open = MenuItem::with_id(app, "open", "打开 Nexa", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Nexa", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "打开 Studiolo", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Studiolo", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("Nexa")
+        .tooltip("Studiolo")
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
@@ -269,19 +269,19 @@ fn setup_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
     let menu = Menu::default(app.handle())?;
     // The default uses Cargo's package name; native menus should use the product name.
-    let app_menu = Submenu::with_items(app, "Nexa", true, &[
-        &PredefinedMenuItem::about(app, Some("About Nexa"), Some(AboutMetadata {
-            name: Some("Nexa".into()),
+    let app_menu = Submenu::with_items(app, "Studiolo", true, &[
+        &PredefinedMenuItem::about(app, Some("About Studiolo"), Some(AboutMetadata {
+            name: Some("Studiolo".into()),
             version: Some(app.package_info().version.to_string()),
             ..Default::default()
         }))?,
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::services(app, None)?,
         &PredefinedMenuItem::separator(app)?,
-        &PredefinedMenuItem::hide(app, Some("Hide Nexa"))?,
+        &PredefinedMenuItem::hide(app, Some("Hide Studiolo"))?,
         &PredefinedMenuItem::hide_others(app, None)?,
         &PredefinedMenuItem::separator(app)?,
-        &PredefinedMenuItem::quit(app, Some("Quit Nexa"))?,
+        &PredefinedMenuItem::quit(app, Some("Quit Studiolo"))?,
     ])?;
     menu.remove_at(0)?;
     menu.prepend(&app_menu)?;
@@ -325,7 +325,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("failed to build Nexa Desktop");
+        .expect("failed to build Studiolo Desktop");
     app.run(|app, event| {
         match event {
             #[cfg(target_os = "macos")]

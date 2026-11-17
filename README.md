@@ -1,15 +1,17 @@
-# Nexa Desktop — Nexa-LumaDock
+# Studiolo
 
-最新正式发布：**[v0.6.0 — Real Automation Engine](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/tag/v0.6.0)**。
+> 原仓库名 `Nexa-LumaDock` 已更名为 **`Studiolo`**；[v0.6.0](https://github.com/zjyzjy0823-hue/Studiolo/releases/tag/v0.6.0) 及更早版本的历史安装包保留原文件名，GitHub 链接已同步至本仓库。
 
-Nexa 是面向 **Windows 10/11 x64 和 macOS Intel x86_64** 的桌面个人控制中心。应用启动时自动启动 FastAPI Backend 和本地 SQLite，普通用户无需安装 Python、Node.js 或 Rust。支持 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 和 Ledger；连接独立的 PostgreSQL Nexa Core 后，可使用跨设备同步和真实自动化执行。
+最新正式发布：**[v0.6.0 — Real Automation Engine](https://github.com/zjyzjy0823-hue/Studiolo/releases/tag/v0.6.0)**。
+
+Studiolo 是面向 **Windows 10/11 x64 和 macOS Intel x86_64** 的桌面个人控制中心。应用启动时自动启动 FastAPI Backend 和本地 SQLite，普通用户无需安装 Python、Node.js 或 Rust。支持 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 和 Ledger；连接独立的 PostgreSQL Studiolo Core 后，可使用跨设备同步和真实自动化执行。
 
 ## 下载与安装
 
 | 平台 | v0.6.0 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [Nexa_0.6.0_x64-setup.exe](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/download/v0.6.0/Nexa_0.6.0_x64-setup.exe) |
-| macOS Intel x86_64 | [Nexa_0.6.0_x64.dmg](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/releases/download/v0.6.0/Nexa_0.6.0_x64.dmg) |
+| Windows 10/11 x64 | [Nexa_0.6.0_x64-setup.exe](https://github.com/zjyzjy0823-hue/Studiolo/releases/download/v0.6.0/Nexa_0.6.0_x64-setup.exe) |
+| macOS Intel x86_64 | [Nexa_0.6.0_x64.dmg](https://github.com/zjyzjy0823-hue/Studiolo/releases/download/v0.6.0/Nexa_0.6.0_x64.dmg) |
 
 安装包 SHA-256：
 
@@ -34,15 +36,15 @@ macOS 安装包目前**未签名、未经过 Apple 公证**，首次打开可能
 
 当前版本使用 **Sync Protocol 3**、personal-state **generation 3**，Alembic head 为 **`0018_data_record_tenancy`**。请同时升级 Core 和所有桌面客户端。同步边界见 [数据归属与同步边界](docs/sync-scopes.md)，实现细节见 [开发阶段实现与验证记录](docs/automation-engine-2026-10-03.md)。
 
-Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Nexa-LumaDock/actions/runs/37304312269) 八项 required jobs（validation-impact、frontend、contracts、backend、backend-postgres、device-client、openclaw-adapter、desktop-windows）全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
+Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Studiolo/actions/runs/37304312269) 八项 required jobs（validation-impact、frontend、contracts、backend、backend-postgres、device-client、openclaw-adapter、desktop-windows）全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
 
 ## 版本演进
 
-v0.5.2 Phase 1 提供独立的 PostgreSQL Nexa Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。v0.5.5 新增 Local-only Agent Data Actions、显式 dataScopes、原子审计/幂等 receipt 和 OpenClaw 原生 typed Tool Plugin；已有 Agent 默认无数据权限，write 不包含 delete。详见 [Agent Data Actions](docs/agent-data-actions.md)。
+v0.5.2 Phase 1 提供独立的 PostgreSQL Studiolo Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。v0.5.5 新增 Local-only Agent Data Actions、显式 dataScopes、原子审计/幂等 receipt 和 OpenClaw 原生 typed Tool Plugin；已有 Agent 默认无数据权限，write 不包含 delete。详见 [Agent Data Actions](docs/agent-data-actions.md)。
 
-## Nexa Desktop
+## Studiolo Desktop
 
-个人用户可直接安装上方对应平台的安装包。首次启动会在用户数据目录中创建数据库和密钥，随后显示登录/注册页。Windows 点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Nexa”恢复，选择“退出 Nexa”会同时停止 Backend。macOS 关闭窗口后 Backend 保持运行，使用 Cmd+Q 完整退出。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步业务数据及安全个人状态；Settings → Sync 提供同步状态、立即同步和 Conflict Center。
+个人用户可直接安装上方对应平台的安装包。首次启动会在用户数据目录中创建数据库和密钥，随后显示登录/注册页。Windows 点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Studiolo”恢复，选择“退出 Studiolo”会同时停止 Backend。macOS 关闭窗口后 Backend 保持运行，使用 Cmd+Q 完整退出。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步业务数据及安全个人状态；Settings → Sync 提供同步状态、立即同步和 Conflict Center。
 
 开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
 
@@ -79,19 +81,19 @@ npm run dev
 
 打开 `http://127.0.0.1:5173/`。首次进入会显示登录与注册页，只需设置用户名和密码。登录后可从侧边栏头像菜单退出；首页问候语使用当前用户名。网站、设备、智能体、设置、数据集合、工作流和账本的更改在刷新浏览器后仍会保留。前端将 `/api` 代理到本地后端。接口文档位于 `http://127.0.0.1:8000/docs`。
 
-### 连接 Nexa Core（Web 模式必读）
+### 连接 Studiolo Core（Web 模式必读）
 
 Web 开发模式要连 Core，必须先给后端两个环境变量；缺任一个，`POST /api/v1/core/connect` 会返回 409：
 
 | 变量 | 作用 | 缺省后果 |
 | --- | --- | --- |
-| `NEXA_INSTALLATION_ID` | 本机安装身份（UUID） | `409 Local installation ID is not configured` |
-| `NEXA_DATA_DIR` | 存放 Client 凭证的目录 | `409 Local data directory is not configured` |
+| `STUDIOLO_INSTALLATION_ID` | 本机安装身份（UUID） | `409 Local installation ID is not configured` |
+| `STUDIOLO_DATA_DIR` | 存放 Client 凭证的目录 | `409 Local data directory is not configured` |
 
 ```bash
-export NEXA_INSTALLATION_ID="11111111-2222-4333-8444-555555555555"
-export NEXA_DATA_DIR="$HOME/.nexa-data"
-mkdir -p "$NEXA_DATA_DIR"
+export STUDIOLO_INSTALLATION_ID="11111111-2222-4333-8444-555555555555"
+export STUDIOLO_DATA_DIR="$HOME/.studiolo-data"
+mkdir -p "$STUDIOLO_DATA_DIR"
 ```
 
 Desktop 安装包由 sidecar 自动注入这两个变量（`backend/desktop_entry.py`），无需手工设置。
@@ -99,7 +101,7 @@ Desktop 安装包由 sidecar 自动注入这两个变量（`backend/desktop_entr
 ## 项目结构
 
 ```text
-Nexa/
+Studiolo/
 ├─ src/
 │  ├─ pages/           各业务页面
 │  ├─ components/      通用 UI、布局和首页组件
@@ -126,7 +128,7 @@ Nexa/
 
 ## 数据与认证
 
-Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/nexa.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。Desktop 模式使用 Tauri AppData 中的绝对路径 SQLite 数据库。`NEXA_MODE=local` 使用 SQLite；独立的 `NEXA_MODE=core` 使用 PostgreSQL，额外安装 `requirements-postgres.txt`，并要求 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
+Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/studiolo.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。Desktop 模式使用 Tauri AppData 中的绝对路径 SQLite 数据库。`STUDIOLO_MODE=local` 使用 SQLite；独立的 `STUDIOLO_MODE=core` 使用 PostgreSQL，额外安装 `requirements-postgres.txt`，并要求 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
 
 `.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，业务资源按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
 
@@ -151,10 +153,10 @@ Settings 中的安全个人偏好（theme、language、timezone、appearance、n
 ## Agent Runtime
 
 ```text
-Nexa → Agent Task → Agent Runtime API → OpenClaw Adapter → OpenClaw → result/events → Nexa
+Studiolo → Agent Task → Agent Runtime API → OpenClaw Adapter → OpenClaw → result/events → Studiolo
 ```
 
-OpenClaw is the first adapter. Nexa Agent Runtime protocol is adapter-independent. 创建 Agent 后在 Agents 页面生成 `na_live_` Token，复制到 `agent-adapters/openclaw/config.json`。参考 [Adapter 配置和启动说明](agent-adapters/openclaw/README.md)。Adapter 每次只处理一个 queued 任务：先 claim 为 running，调用 OpenClaw 后写入结果和 completed，或写入错误和 failed；任务日志写入现有 AgentEvent。心跳每 10–30 秒发送，超过 120 秒未收到时 Agents 页面派生 offline 状态。页面每 20 秒刷新，无 WebSocket 依赖。
+OpenClaw is the first adapter. Studiolo Agent Runtime protocol is adapter-independent. 创建 Agent 后在 Agents 页面生成 `na_live_` Token，复制到 `agent-adapters/openclaw/config.json`。参考 [Adapter 配置和启动说明](agent-adapters/openclaw/README.md)。Adapter 每次只处理一个 queued 任务：先 claim 为 running，调用 OpenClaw 后写入结果和 completed，或写入错误和 failed；任务日志写入现有 AgentEvent。心跳每 10–30 秒发送，超过 120 秒未收到时 Agents 页面派生 offline 状态。页面每 20 秒刷新，无 WebSocket 依赖。
 
 Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 SHA-256 hash 和末四位。重新生成或撤销后旧 Token 立即失效，删除 Agent 时凭证随之失效。请安全保存 Token，远程部署使用 HTTPS，不要提交 `config.json`。Agent Token 仅能控制其对应 Agent 的 Runtime 资源，不能作为用户 JWT 使用。
 
@@ -223,7 +225,7 @@ API Key 在 API 页面创建；请求体为 `{"name":"Production App","scopes":[
 
 ## Device Runtime
 
-Nexa-LumaDock can receive runtime metrics from the Windows Device Client. 数据链路：`Windows Client → Device Token → POST /api/device/heartbeat → FastAPI → Device DB → Devices Store / Dashboard`。客户端默认每 30 秒上报 CPU、内存、系统盘、可选电量、主机名、Windows 版本、架构、CPU 名称、开机时长和局域网 IP。服务器按最近一次心跳动态计算在线状态，超过 120 秒变为离线。页面和 Dashboard 约每 30 秒刷新，无 WebSocket 实时推送。
+Studiolo can receive runtime metrics from the Windows Device Client. 数据链路：`Windows Client → Device Token → POST /api/device/heartbeat → FastAPI → Device DB → Devices Store / Dashboard`。客户端默认每 30 秒上报 CPU、内存、系统盘、可选电量、主机名、Windows 版本、架构、CPU 名称、开机时长和局域网 IP。服务器按最近一次心跳动态计算在线状态，超过 120 秒变为离线。页面和 Dashboard 约每 30 秒刷新，无 WebSocket 实时推送。
 
 1. 在 Devices 页面添加设备。
 2. 在设备详情生成 Device Token，立即复制；明文仅显示一次。重新生成会立即使旧 Token 失效。
@@ -267,10 +269,15 @@ python -m pytest -q
 
 ## 历史版本：v0.5.5 Agent Data Actions
 
-v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data tools plus `nexa_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Nexa Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. That release used Alembic head `0015_agent_data_actions` and Sync Protocol v2. Settings and other management resources are excluded from Agent Data Actions. See [architecture and installation](docs/agent-data-actions.md).
+v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data tools plus `studiolo_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Studiolo Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. That release used Alembic head `0015_agent_data_actions` and Sync Protocol v2. Settings and other management resources are excluded from Agent Data Actions. See [architecture and installation](docs/agent-data-actions.md).
 
 ## v0.6.1 工程验证（开发分支）
 
 本地针对性验证、v0.6.0 实机验收继承及报告命令见
-[Validation workflow](docs/validation-workflow.md)。设置 → 关于增加 Nexa Diagnostics
+[Validation workflow](docs/validation-workflow.md)。设置 → 关于增加 Studiolo Diagnostics
 与安全复制功能。0.6.1 已打 tag（`v0.6.1`）并包含本页 CI 段所述的契约与 PostgreSQL 门禁；后续补丁仍按 Release Validation 流程验证。
+
+## 后续路线图（v0.6.2–v1.0.0）
+
+- [开发路线图（v0.6.2–v1.0.0）](docs/Studiolo_Development_Roadmap_v0.6.2-v1.0.md)：Android Local-first MVP、Theme Engine 与可选 Liquid Glass、Shared Space 按次密码端到端加密共享、Mac Core 常驻 + 多设备 Agent Fleet Chat（Hermes / Codex / OpenCode / DeepSeek Harness `dsh` / Google Antigravity / OpenClaw）以及统一定时任务管理。
+- [架构审计与目标设计](docs/architecture-plan-v0.6.2.md)：安全信任边界、七端拓扑（Mac Core + Windows + 双手机 + OCI / 腾讯云节点）、迁移兼容与 TBD 决策矩阵。

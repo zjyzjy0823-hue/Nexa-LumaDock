@@ -113,7 +113,7 @@ def main():
     ready = all(value == "PASS" for value in local.values()) and ci["status"] == "PASS" and clean
     result.update(version=json.loads((ROOT / "package.json").read_text())["version"], localValidation=local, ci=ci,
                   worktreeClean=clean, releaseReady=ready)
-    print(json.dumps(result, indent=2) if args.json else human(result, "NEXA_VALIDATION_REPORT") +
+    print(json.dumps(result, indent=2) if args.json else human(result, "STUDIOLO_VALIDATION_REPORT") +
           f'\nVERSION={result["version"]}\n' + "\n".join(f"{name.upper().replace('-', '_')}={status}" for name, status in local.items()) +
           f'\nCI={ci["status"]}\nWORKTREE_CLEAN={"YES" if clean else "NO"}\nRELEASE_READY={"YES" if ready else "NO"}')
     return 1 if "FAIL" in local.values() or ci["status"] == "FAIL" else 0

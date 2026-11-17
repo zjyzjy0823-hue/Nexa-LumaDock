@@ -182,7 +182,7 @@ def test_upgrade_0008_backfills_workspace_ownership_without_data_loss(tmp_path: 
 def test_upgrade_0009_to_0010_preserves_existing_client(tmp_path: Path):
     database = tmp_path / "client-upgrade.db"
     backend = Path(__file__).parents[1]
-    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+    env = {**os.environ, "STUDIOLO_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
 
     def upgrade(revision):
         result = subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", revision],
@@ -219,7 +219,7 @@ def test_create_admin_initializes_personal_workspace(tmp_path: Path):
     database = tmp_path / "admin.db"
     backend = Path(__file__).parents[1]
     env = {**os.environ, "DATABASE_URL": f"sqlite:///{database}",
-           "JWT_SECRET": "test-secret-for-admin", "NEXA_MODE": "local"}
+           "JWT_SECRET": "test-secret-for-admin", "STUDIOLO_MODE": "local"}
     script = ("import builtins; from app import create_admin; "
               "builtins.input = lambda _: 'admin_owner'; "
               "create_admin.getpass = lambda _: 'password123'; create_admin.main()")
@@ -237,7 +237,7 @@ def test_create_admin_initializes_personal_workspace(tmp_path: Path):
 
 def test_upgrade_0010_to_0012_preserves_ledger(tmp_path: Path):
     database = tmp_path / "sync-upgrade.db"
-    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+    env = {**os.environ, "STUDIOLO_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
     backend = Path(__file__).parents[1]
 
     def upgrade(revision):
@@ -277,7 +277,7 @@ def test_upgrade_0010_to_0012_preserves_ledger(tmp_path: Path):
 
 def test_upgrade_0011_to_0012_preserves_sync_history(tmp_path: Path):
     database = tmp_path / "phase2-upgrade.db"
-    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+    env = {**os.environ, "STUDIOLO_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
     backend = Path(__file__).parents[1]
 
     def upgrade(revision):
@@ -330,7 +330,7 @@ def test_upgrade_0011_to_0012_preserves_sync_history(tmp_path: Path):
 
 def test_upgrade_0012_to_0013_preserves_pending_outbox(tmp_path: Path):
     database = tmp_path / "phase3-upgrade.db"
-    env = {**os.environ, "NEXA_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
+    env = {**os.environ, "STUDIOLO_MODE": "local", "DATABASE_URL": f"sqlite:///{database}"}
     backend = Path(__file__).parents[1]
 
     def upgrade(revision):

@@ -19,14 +19,14 @@
 | 真实 Windows 菜单“打开网站” | PASS：目标标签页出现，菜单收起 |
 | 真实 Windows 右键 | PASS：显示上下文菜单，Rust 命令计数仍为 4 |
 | 真实 Windows 天气来源 | PASS：Edge 打开 `https://open-meteo.com/`；天气数值使用 QA 缓存，本次不验收定位/天气服务 |
-| URL 保留 | PASS：Edge 中观察到完整 `https://example.com/?nexa_qa=explicit#check`，查询参数和片段均保留 |
+| URL 保留 | PASS：Edge 中观察到完整 `https://example.com/?studiolo_qa=explicit#check`，查询参数和片段均保留 |
 | 访问记录 | PASS：测试网站 lastVisitedAt 与点击同步更新，卡片中键实测为 `2026-09-30T13:56:41.717811+08:00` |
 | 组件浏览器回归 | PASS：左键、中键、Enter 每次调用一次；右键不调用；内部导航不受影响；非法协议/格式在 IPC 前拒绝；网页分支实际出现新标签 |
 | 四个真实页面入口的失败路径 | PASS（模拟 IPC 失败）：四个入口各调用一次；首页和网站错误提示可见；失败时网站菜单仍收起。最终页面无 console error，四条 warning 为刻意模拟打开失败 |
 | 构建 | `npm run build`、`npm run build:desktop`、`npm run desktop:build`、最终默认配置 `npx tauri build --target x86_64-pc-windows-msvc` 均成功 |
 | Rust URL 校验 | `cargo test --target x86_64-pc-windows-msvc`：2 通过；这两项不单独证明浏览器打开 |
 
-Windows QA 使用独立应用标识 `com.isidel.nexa.external-20260930`、独立数据库和测试账户；使用实际 release EXE 与 sidecar。默认浏览器保持 Windows 原有配置，通过浏览器连接器读取真实 Edge 标签 URL，未通过测试脚本直接启动目标网址。未修改正式账户数据或系统权限设置。
+Windows QA 使用独立应用标识 `com.isidel.studiolo.external-20260930`、独立数据库和测试账户；使用实际 release EXE 与 sidecar。默认浏览器保持 Windows 原有配置，通过浏览器连接器读取真实 Edge 标签 URL，未通过测试脚本直接启动目标网址。未修改正式账户数据或系统权限设置。
 
 系统接受打开请求只能说明调用已提交，不能单独证明页面显示；本次用实际 Edge 标签页补齐此项证据。没有因此断言原故障必然是 WebView2 的 `_blank` 缺陷，也未覆盖其他 Windows 默认浏览器配置。
 

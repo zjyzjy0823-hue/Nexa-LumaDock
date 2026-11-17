@@ -27,4 +27,4 @@ def require_native(target: str) -> None:
 
 def sidecar_path(target: str) -> Path:
     suffix = ".exe" if "windows" in target.split("-") else ""
-    return ROOT / "src-tauri" / "binaries" / f"nexa-backend-{target}{suffix}"
+    return ROOT / "src-tauri" / "binaries" / f"studiolo-backend-{target}{suffix}"

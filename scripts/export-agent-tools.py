@@ -27,11 +27,11 @@ for action in REGISTRY.values():
     if action.name == "ledger.transaction.create":
         description += " Supply type (income/expense), positive amount, description and ISO occurredAt. categoryId is optional; list categories first to select a matching type."
     if action.name == "data.record.create":
-        description += " Supply collectionId from nexa_data_collections_list; dataJson is a structured object."
+        description += " Supply collectionId from studiolo_data_collections_list; dataJson is a structured object."
     catalog.append(
         {
             "action": action.name,
-            "toolName": "nexa_" + action.name.replace(".", "_"),
+            "toolName": "studiolo_" + action.name.replace(".", "_"),
             "effect": action.effect,
             "description": description,
             "parameters": schema,

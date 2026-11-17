@@ -48,20 +48,20 @@ async function toggle(id: string, enabled: boolean) {
 <style scoped>
 .automation-card{padding:12px 19px 9px}
 .automation-card :deep(.glass-card__header){margin-bottom:9px}
-.automation-card :deep(.glass-card__title){color:#fff;font-size:20px;font-weight:500}
+.automation-card :deep(.glass-card__title){color:var(--workbench-text);font-size:20px;font-weight:500}
 .automation-card :deep(.glass-card__title)::after{content:'›';display:inline-block;margin-left:12px;font-size:26px;font-weight:300;line-height:.5;vertical-align:-1px}
-.see-all{color:rgba(255,255,255,.88);font-size:13px;white-space:nowrap}
+.see-all{color:var(--workbench-text);font-size:13px;white-space:nowrap}
 .automation-list{display:flex;flex-direction:column}
-.automation-state,.execution-summary{margin:7px 0;color:rgba(255,255,255,.9);font-size:12px}
-.automation-state button{margin-left:5px;border:0;background:none;color:white;text-decoration:underline;cursor:pointer}
+.automation-state,.execution-summary{margin:7px 0;color:var(--workbench-text);font-size:12px}
+.automation-state button{margin-left:5px;border:0;background:none;color:var(--workbench-text);text-decoration:underline;cursor:pointer}
 .execution-summary{line-height:1.5}
-.automation-row{min-height:32px;display:flex;align-items:center;gap:11px;border-bottom:1px solid rgba(255,255,255,.13)}
+.automation-row{min-height:32px;display:flex;align-items:center;gap:11px;border-bottom:1px solid var(--workbench-line)}
 .automation-row:last-child{border-bottom:0}
-.automation-icon{flex:none;color:rgba(255,255,255,.97)}
-.automation-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,.97);font-size:13px}
-.toggle{position:relative;flex:none;width:34px;height:17px;padding:0;border:1px solid rgba(255,255,255,.4);border-radius:20px;background:rgba(223,230,248,.73);cursor:pointer;transition:background .2s ease}
-.toggle.enabled{background:linear-gradient(90deg,#4481f6,#568dff);box-shadow:0 0 9px rgba(115,178,255,.28)}
-.toggle span{position:absolute;left:1px;top:1px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(23,39,85,.25);transition:transform .2s ease}
+.automation-icon{flex:none;color:var(--workbench-text)}
+.automation-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--workbench-text);font-size:13px}
+.toggle{position:relative;flex:none;width:34px;height:17px;padding:0;border:1px solid var(--workbench-line);border-radius:20px;background:var(--workbench-solid);cursor:pointer;transition:background .2s ease}
+.toggle.enabled{background:var(--workbench-solid);box-shadow:0 0 9px rgba(115,178,255,.28)}
+.toggle span{position:absolute;left:1px;top:1px;width:13px;height:13px;border-radius:50%;background:var(--workbench-solid);box-shadow:0 1px 4px rgba(23,39,85,.25);transition:transform .2s ease}
 .toggle.enabled span{transform:translateX(15px)}
 .toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @container (max-height: 210px) {

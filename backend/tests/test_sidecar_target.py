@@ -20,9 +20,9 @@ def test_target_precedence(monkeypatch):
 
 
 @pytest.mark.parametrize("triple,name", [
-    ("x86_64-pc-windows-msvc", "nexa-backend-x86_64-pc-windows-msvc.exe"),
-    ("x86_64-apple-darwin", "nexa-backend-x86_64-apple-darwin"),
-    ("aarch64-apple-darwin", "nexa-backend-aarch64-apple-darwin"),
+    ("x86_64-pc-windows-msvc", "studiolo-backend-x86_64-pc-windows-msvc.exe"),
+    ("x86_64-apple-darwin", "studiolo-backend-x86_64-apple-darwin"),
+    ("aarch64-apple-darwin", "studiolo-backend-aarch64-apple-darwin"),
 ])
 def test_platform_filename(triple, name):
     assert target.sidecar_path(triple).name == name

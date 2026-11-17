@@ -1,18 +1,18 @@
 {
-  "id": "nexa-tools",
-  "name": "Nexa Local Tools",
-  "description": "Access authorized Ledger, Websites and Data through Nexa Local. Never bypass permission errors. Writes remain local until manual sync.",
+  "id": "studiolo-tools",
+  "name": "Studiolo Local Tools",
+  "description": "Access authorized Ledger, Websites and Data through Studiolo Local. Never bypass permission errors. Writes remain local until manual sync.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
     "properties": {
       "serverUrl": {
         "type": "string",
-        "description": "Trusted Nexa Local URL; HTTPS for remote hosts."
+        "description": "Trusted Studiolo Local URL; HTTPS for remote hosts."
       },
       "agentTokenEnv": {
         "type": "string",
-        "description": "Environment variable holding the Agent token; default NEXA_AGENT_TOKEN."
+        "description": "Environment variable holding the Agent token; default STUDIOLO_AGENT_TOKEN."
       },
       "adapterConfigPath": {
         "type": "string",
@@ -26,36 +26,36 @@
   },
   "contracts": {
     "tools": [
-      "nexa_status",
-      "nexa_ledger_categories_list",
-      "nexa_ledger_transactions_list",
-      "nexa_ledger_summary_get",
-      "nexa_website_categories_list",
-      "nexa_website_list",
-      "nexa_website_get",
-      "nexa_website_visit",
-      "nexa_data_collections_list",
-      "nexa_data_collection_get",
-      "nexa_data_records_list",
-      "nexa_data_record_get",
-      "nexa_ledger_category_create",
-      "nexa_ledger_category_update",
-      "nexa_ledger_category_delete",
-      "nexa_ledger_transaction_create",
-      "nexa_ledger_transaction_update",
-      "nexa_ledger_transaction_delete",
-      "nexa_website_category_create",
-      "nexa_website_category_update",
-      "nexa_website_category_delete",
-      "nexa_website_create",
-      "nexa_website_update",
-      "nexa_website_delete",
-      "nexa_data_collection_create",
-      "nexa_data_collection_update",
-      "nexa_data_collection_delete",
-      "nexa_data_record_create",
-      "nexa_data_record_update",
-      "nexa_data_record_delete"
+      "studiolo_status",
+      "studiolo_ledger_categories_list",
+      "studiolo_ledger_transactions_list",
+      "studiolo_ledger_summary_get",
+      "studiolo_website_categories_list",
+      "studiolo_website_list",
+      "studiolo_website_get",
+      "studiolo_website_visit",
+      "studiolo_data_collections_list",
+      "studiolo_data_collection_get",
+      "studiolo_data_records_list",
+      "studiolo_data_record_get",
+      "studiolo_ledger_category_create",
+      "studiolo_ledger_category_update",
+      "studiolo_ledger_category_delete",
+      "studiolo_ledger_transaction_create",
+      "studiolo_ledger_transaction_update",
+      "studiolo_ledger_transaction_delete",
+      "studiolo_website_category_create",
+      "studiolo_website_category_update",
+      "studiolo_website_category_delete",
+      "studiolo_website_create",
+      "studiolo_website_update",
+      "studiolo_website_delete",
+      "studiolo_data_collection_create",
+      "studiolo_data_collection_update",
+      "studiolo_data_collection_delete",
+      "studiolo_data_record_create",
+      "studiolo_data_record_update",
+      "studiolo_data_record_delete"
     ]
   }
 }

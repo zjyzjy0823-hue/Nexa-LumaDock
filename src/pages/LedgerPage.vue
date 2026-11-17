@@ -1,39 +1,52 @@
 <script setup lang="ts">
 import { localDateKey, localDayKey, localMonthKey } from '../services/localTime'
 import { confirmAction } from '../composables/useConfirm'
+import OpusSegment from '../components/ui/OpusSegment.vue'
+import OpusIcon from '../components/ui/OpusIcon.vue'
 import Modal from '../components/ui/Modal.vue'
-import ActionButton from '../components/ui/ActionButton.vue'
-import SectionContainer from '../components/ui/SectionContainer.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useLedgerStore } from '../stores/ledger'
 import { useAuthStore } from '../stores/auth'
-import type { LedgerStat, ExpenseTrend, SpendingCategory, Transaction, LedgerInsight, LedgerTransaction, LedgerCategory } from '../types/ledger'
-import StatCard from '../components/ledger/StatCard.vue'
+import type { ExpenseTrend, SpendingCategory, LedgerTransaction, LedgerCategory } from '../types/ledger'
 import FinanceChart from '../components/ledger/FinanceChart.vue'
-import CategoryChart from '../components/ledger/CategoryChart.vue'
-import TransactionList from '../components/ledger/TransactionList.vue'
-import InsightCard from '../components/ledger/InsightCard.vue'
+
 const store = useLedgerStore(), auth = useAuthStore()
 const localDate = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
+const props = defineProps<{ mobile?: boolean; search?: string }>()
 const emit = defineEmits<{ action: [message: string] }>()
 const transactionOpen = ref(false), categoryOpen = ref(false)
 const editingTransaction = ref<LedgerTransaction | null>(null), editingCategory = ref<LedgerCategory | null>(null)
 const draft = ref({ type: 'expense' as 'income' | 'expense', amount: '', category_id: '', description: '', occurred_at: localDate(), merchant: '', note: '' })
 const categoryDraft = ref({ name: '', type: 'expense' as 'income' | 'expense', icon: 'shopping' })
 const formError = ref('')
+const flashId = ref<string | null>(null)
+let flashTimer: ReturnType<typeof setTimeout> | undefined
 onMounted(() => { if (auth.token) store.load(auth.token).catch(() => {}) })
 const money = (value: string | number) => `${Number(value) < 0 ? '−' : ''}¥${Math.abs(Number(value)).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const ledgerStats = computed<LedgerStat[]>(() => [
-  { id: 'income', label: 'Monthly Income', value: money(store.summary?.income ?? 0), detail: '本月总收入', tone: 'mint' },
-  { id: 'expense', label: 'Monthly Expense', value: money(store.summary?.expense ?? 0), detail: '本月总支出', tone: 'blue' },
-  { id: 'balance', label: 'Balance', value: money(store.summary?.balance ?? 0), detail: '本月收支结余', tone: 'violet' },
-  { id: 'budget', label: 'Transactions', value: String(store.items.filter(item => localMonthKey(item.occurredAt) === store.month).length), detail: '本月交易笔数', tone: 'amber' },
-])
+const optionsOpen = ref(false)
+const showTrends = ref(false)
 const currentTransactions = computed(() => store.items.filter(item => localMonthKey(item.occurredAt) === store.month))
-const transactions = computed<Transaction[]>(() => currentTransactions.value.map(item => ({ id: item.id, description: item.description,
-  detail: item.note || item.merchant, category: item.categoryName ?? '未分类', date: localDateKey(item.occurredAt),
-  amount: Number(item.amount) * (item.type === 'expense' ? -1 : 1), icon: item.type === 'income' ? 'income' : 'shopping' })))
-const spendingCategories = computed<SpendingCategory[]>(() => (store.summary?.categories ?? []).map((entry, index) => ({ ...entry, amount: Number(entry.amount), color: ['#728df1', '#9a82e7', '#70c5d8', '#eda6b7', '#f2c47c', '#9eb2cb'][index % 6]! })))
+const transactions = computed(() => currentTransactions.value.filter(item =>
+  [item.description, item.merchant, item.categoryName].some(value => value?.toLowerCase().includes(props.search?.trim().toLowerCase() ?? '')),
+))
+const thisMonth = localMonthKey(new Date().toISOString())
+const previousMonth = localMonthKey(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15).toISOString())
+const expenseAmount = computed(() => Number(store.summary?.expense ?? 0))
+const incomeAmount = computed(() => Number(store.summary?.income ?? 0))
+const expenseRatio = computed(() => incomeAmount.value > 0 ? Math.round((expenseAmount.value / incomeAmount.value) * 100) : 0)
+const categoryTotal = computed(() => Math.max(1, spendingCategories.value.reduce((sum, item) => sum + item.amount, 0)))
+
+function selectMonth(month: string) {
+  store.month = month
+  changeMonth()
+}
+function markFlash(id: string | undefined) {
+  if (!id) return
+  flashId.value = id
+  if (flashTimer) clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => { flashId.value = null }, 1300)
+}
+const spendingCategories = computed<SpendingCategory[]>(() => (store.summary?.categories ?? []).map((entry, index) => ({ ...entry, amount: Number(entry.amount), color: ['var(--series-1, #6564ed)', '#24a483', '#ec935f', '#dd6e91', 'var(--series-5, #78a9e6)', '#8e9d64'][index % 6]! })))
 const expenseTrends = computed<ExpenseTrend[]>(() => {
   const monthly = (store.summary?.monthlyTrend ?? []).filter(item => item.month <= store.month)
   const daily = new Map<string, number>()
@@ -44,12 +57,14 @@ const expenseTrends = computed<ExpenseTrend[]>(() => {
     { id: 'year', label: '年度', caption: '近 12 个月每月支出', labels: monthly.slice(-12).map(item => item.month), values: monthly.slice(-12).map(item => Number(item.expense)) },
   ]
 })
-const ledgerInsights = computed<LedgerInsight[]>(() => {
-  const top = [...spendingCategories.value].sort((a, b) => b.amount - a.amount)[0]
-  if (!top) return [{ id: 'empty', title: '本月暂无支出', detail: '添加交易后可查看分类统计。', tone: 'blue' }]
-  const share = Math.round(top.amount / Number(store.summary?.expense || 1) * 100)
-  return [{ id: 'top', title: `最大支出分类：${top.name}`, detail: `占本月支出的 ${share}%（${money(top.amount)}）。`, tone: 'blue' }]
-})
+defineExpose({ openCreate: (value?: string) => {
+  openTransaction()
+  const match = value?.match(/^(.+?)\s*[¥￥]?\s*(\d+(?:\.\d{1,2})?)\s*(元|块)?$/)
+  if (match) {
+    draft.value.description = match[1]!.trim()
+    draft.value.amount = match[2]!
+  }
+} })
 function openTransaction(id?: string) {
   editingTransaction.value = store.items.find(item => item.id === id) ?? null
   const item = editingTransaction.value
@@ -61,8 +76,14 @@ async function saveTransaction() {
   if (!auth.token) return
   try {
     const payload = { ...draft.value, category_id: draft.value.category_id || null, occurred_at: new Date(`${draft.value.occurred_at}T12:00:00`).toISOString() }
-    if (editingTransaction.value) await store.updateTransaction(auth.token, editingTransaction.value.id, payload)
-    else await store.createTransaction(auth.token, payload)
+    const before = new Set(store.items.map(item => item.id))
+    if (editingTransaction.value) {
+      await store.updateTransaction(auth.token, editingTransaction.value.id, payload)
+      markFlash(editingTransaction.value.id)
+    } else {
+      await store.createTransaction(auth.token, payload)
+      markFlash(store.items.find(item => !before.has(item.id))?.id)
+    }
     transactionOpen.value = false; emit('action', '交易已保存。')
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
@@ -75,49 +96,105 @@ function changeMonth() { if (auth.token) store.load(auth.token, true).catch(() =
 
 <template>
   <div class="ledger-page">
-    <h1 class="visually-hidden">账本</h1>
-    <div class="ledger-toolbar"><label>月份 <input v-model="store.month" type="month" @change="changeMonth" /></label> <ActionButton @click="openTransaction()">新增交易</ActionButton> <ActionButton variant="secondary" @click="openCategory()">新增分类</ActionButton></div>
-    <p v-if="store.loading" role="status">正在加载账本…</p>
-    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+    <header v-if="!mobile" class="ph"><div><h1>账本</h1><div class="sub">{{ store.month }} · 个人账本 · 时区 {{ Intl.DateTimeFormat().resolvedOptions().timeZone }}</div></div>
+      <div class="actions">
+        <OpusSegment><button type="button" :aria-pressed="store.month === thisMonth && !showTrends" @click="showTrends = false; selectMonth(thisMonth)">本月</button><button type="button" :aria-pressed="store.month === previousMonth && !showTrends" @click="showTrends = false; selectMonth(previousMonth)">上月</button><button type="button" :aria-pressed="showTrends" @click="showTrends = !showTrends">趋势</button></OpusSegment>
+        <button class="icon-btn" type="button" aria-label="账本选项" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen"><OpusIcon name="more" /></button>
+        <button class="btn btn-primary" type="button" @click="openTransaction()"><OpusIcon name="plus" />记一笔</button>
+      </div>
+    </header>
+    <div v-if="optionsOpen" class="card mat ledger-options enter" style="margin-bottom:14px">
+      <div class="ledger-options__bar">
+        <label class="ledger-options__month"><span>月份</span><input v-model="store.month" class="input" type="month" @change="changeMonth"></label>
+        <button class="btn btn-ghost btn-sm" type="button" @click="openCategory()"><OpusIcon name="plus" />新增分类</button>
+      </div>
+      <div v-if="store.categories.length" class="list" style="margin-top:8px">
+        <div v-for="item in store.categories" :key="item.id" class="row"><span class="grow"><span class="title">{{ item.name }}</span><span class="sub">{{ item.type === 'income' ? '收入' : '支出' }}</span></span><button class="btn btn-sm btn-subtle" type="button" @click="openCategory(item)">编辑</button><button class="btn btn-sm btn-danger" type="button" @click="removeCategory(item.id)">删除</button></div>
+      </div>
+    </div>
+    <p v-if="store.loading" class="faint" role="status">正在加载账本…</p>
+    <div v-if="store.error" class="notice danger" role="alert">{{ store.error }} <button class="btn btn-sm btn-ghost" type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></div>
+    <template v-if="mobile">
+      <div class="mlist mat-solid">
+        <div v-for="item in transactions" :key="item.id" class="mrow" :class="{ enter: flashId === item.id }">
+          <span class="tile-icon"><OpusIcon name="receipt" /></span><button class="grow" style="text-align:left;min-width:0" type="button" @click="openTransaction(item.id)"><div class="title">{{ item.description }}</div><div class="sub">{{ item.categoryName ?? '未分类' }} · {{ localDateKey(item.occurredAt) }}</div></button>
+          <span class="end"><span class="num" :class="{ 'amt-pos': item.type === 'income' }" style="font-weight:650">{{ money(Number(item.amount) * (item.type === 'income' ? 1 : -1)) }}</span><button class="btn btn-sm btn-danger" type="button" @click="removeTransaction(item.id)">删除</button></span>
+        </div>
+        <div v-if="!transactions.length" class="mrow faint">暂无记录</div>
+      </div>
+      <button class="btn btn-ghost" type="button" @click="optionsOpen = !optionsOpen">账本选项</button>
+    </template>
+    <template v-else>
+      <div class="stats4">
+        <div class="card mat"><div class="l">支出</div><div class="v num">{{ money(store.summary?.expense ?? 0) }}</div></div>
+        <div class="card mat"><div class="l">收入</div><div class="v num amt-pos">{{ money(store.summary?.income ?? 0) }}</div></div>
+        <div class="card mat"><div class="l">结余</div><div class="v num">{{ money(store.summary?.balance ?? 0) }}</div></div>
+        <div class="card mat">
+          <div class="l">{{ incomeAmount > 0 ? '支出 / 收入比' : '交易笔数' }}</div>
+          <div class="v num">{{ incomeAmount > 0 ? `${expenseRatio}%` : currentTransactions.length }}</div>
+          <div class="meter" style="margin:8px 0 0"><i v-if="incomeAmount > 0" :style="{ width: Math.min(100, expenseRatio) + '%' }"></i></div>
+        </div>
+      </div>
+      <FinanceChart v-if="showTrends" :trends="expenseTrends" />
+      <div v-else class="bento">
+        <section class="card mat s8">
+          <h2 class="card-h"><OpusIcon name="receipt" /> 流水<span class="spacer"></span><span class="faint" style="font-weight:400">{{ transactions.length }} 笔</span></h2>
+          <div style="overflow:auto"><table class="tbl"><thead><tr><th>项目</th><th>分类</th><th>时间</th><th class="r">金额</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="item in transactions" :key="item.id" :class="{ flash: flashId === item.id }"><td><button type="button" style="display:inline-flex;align-items:center;gap:10px" @click="openTransaction(item.id)"><span class="tile-icon" style="width:28px;height:28px"><OpusIcon name="receipt" /></span>{{ item.description }}</button></td><td class="muted">{{ item.categoryName ?? '未分类' }}</td><td class="muted">{{ localDateKey(item.occurredAt) }}</td><td class="r num" style="font-weight:600" :class="{ 'amt-pos': item.type === 'income' }">{{ money(Number(item.amount) * (item.type === 'income' ? 1 : -1)) }}</td><td class="r"><button class="btn btn-sm btn-danger" type="button" @click="removeTransaction(item.id)">删除</button></td></tr>
+              <tr v-if="!transactions.length"><td colspan="5" class="faint">本月暂无记录</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+        <section class="card mat s4">
+          <h2 class="card-h"><OpusIcon name="layers" /> 分类</h2>
+          <div class="cat-bar"><i v-for="item in spendingCategories" :key="item.id" :style="{ '--c': item.color, flex: item.amount }"></i></div>
+          <div class="kv"><div v-for="item in spendingCategories" :key="item.id"><span :style="{ width:'8px', height:'8px', borderRadius:'2px', background:item.color }"></span>{{ item.name }}<span class="num muted">{{ money(item.amount) }} · {{ Math.round(item.amount / categoryTotal * 100) }}%</span></div></div>
+          <div v-if="!spendingCategories.length" class="faint" style="font-size:12.5px">暂无分类支出</div>
+        </section>
+      </div>
+    </template>
 
-    <section v-if="store.loaded" class="ledger-page__stats" aria-label="本月财务概览">
-      <StatCard v-for="stat in ledgerStats" :key="stat.id" :stat="stat" />
-    </section>
+    <Modal :open="transactionOpen" :title="`${editingTransaction ? '编辑' : '新增'}交易`" @close="transactionOpen = false">
+      <form id="ledger-tx-form" @submit.prevent="saveTransaction">
+        <div class="field-grid">
+          <div class="field"><label for="tx-type">类型</label><select id="tx-type" v-model="draft.type" class="input"><option value="expense">支出</option><option value="income">收入</option></select></div>
+          <div class="field"><label for="tx-amount">金额</label><input id="tx-amount" v-model="draft.amount" class="input" type="number" min="0.01" step="0.01" required data-initial-focus /></div>
+        </div>
+        <div class="field-grid">
+          <div class="field"><label for="tx-cat">分类</label><select id="tx-cat" v-model="draft.category_id" class="input"><option value="">未分类</option><option v-for="item in store.categories.filter(entry => entry.type === draft.type)" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+          <div class="field"><label for="tx-date">日期</label><input id="tx-date" v-model="draft.occurred_at" class="input" type="date" required /></div>
+        </div>
+        <div class="field"><label for="tx-desc">描述</label><input id="tx-desc" v-model="draft.description" class="input" required /></div>
+        <div class="field-grid">
+          <div class="field"><label for="tx-merchant">商户</label><input id="tx-merchant" v-model="draft.merchant" class="input" /></div>
+          <div class="field"><label for="tx-note">备注</label><input id="tx-note" v-model="draft.note" class="input" /></div>
+        </div>
+        <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
+      </form>
+      <template #footer>
+        <button class="btn btn-ghost" type="button" @click="transactionOpen = false">取消</button>
+        <button class="btn btn-primary" type="submit" form="ledger-tx-form">保存</button>
+      </template>
+    </Modal>
 
-    <section v-if="store.loaded" class="ledger-page__charts" aria-label="支出分析">
-      <FinanceChart :trends="expenseTrends" />
-      <CategoryChart :categories="spendingCategories" />
-    </section>
-
-    <section v-if="store.loaded" class="ledger-page__details" aria-label="交易与洞察">
-      <TransactionList :transactions="transactions" @edit="openTransaction" @remove="removeTransaction" />
-      <InsightCard :insights="ledgerInsights" />
-    </section>
-    <div v-if="store.loaded && !currentTransactions.length">本月还没有交易，添加一笔开始记账。</div>
-    <SectionContainer v-if="store.loaded" class="ledger-categories" title="分类"><div v-for="item in store.categories" :key="item.id" class="ledger-category-row">{{ item.name }} · {{ item.type === 'income' ? '收入' : '支出' }} <button type="button" @click="openCategory(item)">编辑</button> <button type="button" @click="removeCategory(item.id)">删除</button></div></SectionContainer>
-    <Modal :open="transactionOpen" :title="`${editingTransaction ? '编辑' : '新增'}交易`" @close="transactionOpen = false"><div class="ledger-form"><form @submit.prevent="saveTransaction"><label>类型<select v-model="draft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><label>金额<input v-model="draft.amount" type="number" min="0.01" step="0.01" required /></label><label>分类<select v-model="draft.category_id"><option value="">未分类</option><option v-for="item in store.categories.filter(entry => entry.type === draft.type)" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label>描述<input v-model="draft.description" required /></label><label>日期<input v-model="draft.occurred_at" type="date" required /></label><label>商户<input v-model="draft.merchant" /></label><label>备注<input v-model="draft.note" /></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="transactionOpen = false">取消</button><button type="submit">保存</button></form></div></Modal>
-    <Modal :open="categoryOpen" :title="`${editingCategory ? '编辑' : '新增'}分类`" @close="categoryOpen = false"><div class="ledger-form"><form @submit.prevent="saveCategory"><label>名称<input v-model="categoryDraft.name" required /></label><label>类型<select v-model="categoryDraft.type"><option value="expense">支出</option><option value="income">收入</option></select></label><p v-if="formError" role="alert">{{ formError }}</p><button type="button" @click="categoryOpen = false">取消</button><button type="submit">保存</button></form></div></Modal>
+    <Modal :open="categoryOpen" :title="`${editingCategory ? '编辑' : '新增'}分类`" @close="categoryOpen = false">
+      <form id="ledger-cat-form" @submit.prevent="saveCategory">
+        <div class="field"><label for="cat-name">名称</label><input id="cat-name" v-model="categoryDraft.name" class="input" required data-initial-focus /></div>
+        <div class="field"><label for="cat-type">类型</label><select id="cat-type" v-model="categoryDraft.type" class="input"><option value="expense">支出</option><option value="income">收入</option></select></div>
+        <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
+      </form>
+      <template #footer>
+        <button class="btn btn-ghost" type="button" @click="categoryOpen = false">取消</button>
+        <button class="btn btn-primary" type="submit" form="ledger-cat-form">保存</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <style scoped>
-.ledger-page { --ledger-tile-background:linear-gradient(140deg,rgba(250,251,255,.56),rgba(235,239,255,.34)); --ledger-tile-hover-background:linear-gradient(140deg,rgba(250,251,255,.68),rgba(235,239,255,.47)); min-width:0; padding:0 2px 28px; }
-.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-.ledger-page__stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin:4px 0 16px; }
-.ledger-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px; padding:14px; border:var(--glass-card-border); border-radius:var(--radius-card); background:var(--glass-card-background); box-shadow:var(--shadow-card); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); color:white; }
-.ledger-toolbar label { display:flex; align-items:center; gap:8px; font-size:12px; }
-.ledger-toolbar input,.ledger-form input,.ledger-form select { min-width:0; width:100%; min-height:38px; padding:8px 11px; border:1px solid rgba(131,151,197,.3); border-radius:10px; background:rgba(255,255,255,.55); color:var(--text-primary); font:inherit; font-size:12px; }
-.ledger-toolbar input { width:155px; }
-.ledger-form form { display:grid; gap:12px; }
-.ledger-form label { display:grid; gap:6px; font-size:12px; }
-.ledger-form button,.ledger-category-row button { min-height:34px; padding:7px 12px; border:1px solid rgba(255,255,255,.6); border-radius:9px; color:var(--text-primary); background:rgba(255,255,255,.48); font:inherit; font-size:12px; }
-.ledger-form button[type="submit"] { color:white; background:var(--accent-deep); }
-.ledger-form p[role="alert"] { color:#b74460; }
-.ledger-category-row { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); font-size:12px; }
-.ledger-category-row:last-child { border-bottom:0; }
-.ledger-page__charts,.ledger-page__details { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(310px,1fr); gap:16px; margin-bottom:16px; }
-@media (max-width:1250px) { .ledger-page__stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .ledger-page__charts,.ledger-page__details { grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr); } }
-@media (max-width:1050px) { .ledger-page__charts,.ledger-page__details { grid-template-columns:1fr; } }
-@media (max-width:550px) { .ledger-page__stats { gap:9px; } .ledger-page__charts,.ledger-page__details { gap:12px; margin-bottom:12px; } }
-@media (max-width:370px) { .ledger-page__stats { grid-template-columns:1fr; } }
+.ledger-page { min-width: 0; }
+.ledger-options__bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.ledger-options__month { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.ledger-options__month .input { width: 165px; height: 32px; }
 </style>

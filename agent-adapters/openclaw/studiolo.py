@@ -10,7 +10,7 @@ class FatalApiError(RuntimeError):
     pass
 
 
-class NexaClient:
+class StudioloClient:
     def __init__(self, config: dict, transport=None):
         self.client = httpx.Client(base_url=config["serverUrl"],
                                    headers={"Authorization": f"Bearer {config['agentToken']}"},
@@ -25,21 +25,21 @@ class NexaClient:
                 response = self.client.request(method, path, json=payload)
             except (httpx.NetworkError, httpx.TimeoutException) as error:
                 if attempt == 2:
-                    raise ConnectionError("Nexa API unavailable") from error
+                    raise ConnectionError("Studiolo API unavailable") from error
                 time.sleep(0.2 * 2**attempt)
                 continue
             if response.status_code in (401, 422):
-                raise FatalApiError(f"Nexa API rejected request ({response.status_code})")
+                raise FatalApiError(f"Studiolo API rejected request ({response.status_code})")
             if response.status_code >= 500 and attempt < 2:
                 time.sleep(0.2 * 2**attempt)
                 continue
             if response.status_code == 409 and conflict_ok:
                 return None
             if 400 <= response.status_code < 500:
-                raise FatalApiError(f"Nexa API rejected request ({response.status_code})")
+                raise FatalApiError(f"Studiolo API rejected request ({response.status_code})")
             response.raise_for_status()
             return response.json()
-        raise ConnectionError("Nexa API unavailable")
+        raise ConnectionError("Studiolo API unavailable")
 
     def heartbeat(self, status: str, instance: str, task_id=None):
         return self.request("POST", "/api/agent/heartbeat", {

@@ -62,12 +62,12 @@ class BackgroundSyncConfig:
         """Central timing overrides; production uses the conservative defaults."""
         defaults = cls()
         try:
-            debounce = float(os.getenv("NEXA_SYNC_DEBOUNCE_SECONDS", defaults.debounce))
-            retry = os.getenv("NEXA_SYNC_RETRY_SECONDS")
+            debounce = float(os.getenv("STUDIOLO_SYNC_DEBOUNCE_SECONDS", defaults.debounce))
+            retry = os.getenv("STUDIOLO_SYNC_RETRY_SECONDS")
             return cls(
-                initial_delay=float(os.getenv("NEXA_SYNC_INITIAL_DELAY_SECONDS", defaults.initial_delay)),
+                initial_delay=float(os.getenv("STUDIOLO_SYNC_INITIAL_DELAY_SECONDS", defaults.initial_delay)),
                 debounce=debounce, max_debounce=max(defaults.max_debounce, debounce),
-                periodic_interval=float(os.getenv("NEXA_SYNC_PERIOD_SECONDS", defaults.periodic_interval)),
+                periodic_interval=float(os.getenv("STUDIOLO_SYNC_PERIOD_SECONDS", defaults.periodic_interval)),
                 retry_delays=tuple(float(value.strip()) for value in retry.split(",")) if retry else defaults.retry_delays,
             )
         except (TypeError, ValueError):

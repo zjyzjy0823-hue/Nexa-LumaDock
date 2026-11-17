@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 _guard = Lock()
 _coordinators = WeakKeyDictionary()
-_REQUESTS = "nexa_sync_requests"
+_REQUESTS = "studiolo_sync_requests"
 logger = logging.getLogger(__name__)
 
 

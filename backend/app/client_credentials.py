@@ -1,4 +1,4 @@
-"""Core-issued, revocable Nexa application credentials."""
+"""Core-issued, revocable Studiolo application credentials."""
 
 import hashlib
 import secrets

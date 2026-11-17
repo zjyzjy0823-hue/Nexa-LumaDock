@@ -92,7 +92,7 @@ The known unsynced Mac QA entity is untouched during this code fix:
 - Entity: `5d7bcb9a-5704-4922-a2a2-2d20b3bb4adc`
 
 After a fresh Mac build, the acceptance flow must delete this QA entity through
-normal Nexa UI or a business API and verify that its corresponding pending
+normal Studiolo UI or a business API and verify that its corresponding pending
 mutation will not push. Do not use SQL DELETE. Then restart the complete real
 Mac ↔ Core ↔ Windows acceptance with a new RUN_ID, including offline recovery
 and connection persistence. These regressions and builds do not complete that

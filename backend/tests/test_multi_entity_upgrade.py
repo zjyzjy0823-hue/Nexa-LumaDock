@@ -18,7 +18,7 @@ from app.sync.service import ensure_core_sync_initialized
 def verify_upgrade(database_url, backend, mode):
     def upgrade(revision):
         env = {**os.environ, "DATABASE_URL": database_url,
-               "NEXA_MODE": "core" if database_url.startswith("postgresql") else "local"}
+               "STUDIOLO_MODE": "core" if database_url.startswith("postgresql") else "local"}
         result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", revision],
                                 cwd=backend, env=env, capture_output=True)
         assert result.returncode == 0, "Multi-entity migration failed"

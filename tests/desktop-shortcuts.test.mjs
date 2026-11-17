@@ -10,7 +10,7 @@ test('browser refresh, print, save, address and source shortcuts are blocked', (
   }
   // Shift does not affect the decision: Ctrl+Shift+R uses the same browser filter.
 })
-test('clipboard, editing, Nexa search and ordinary keys remain available', () => {
+test('clipboard, editing, Studiolo search and ordinary keys remain available', () => {
   for (const value of ['c', 'v', 'x', 'a', 'z', 'y', 'k', 'Tab', 'Escape', 'ArrowLeft']) {
     assert.equal(shouldBlockBrowserShortcut(key(value, { ctrlKey: true })), false, value)
   }

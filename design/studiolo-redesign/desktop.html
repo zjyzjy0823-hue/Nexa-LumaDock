@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Studiolo · 桌面端设计原型</title>
+  <link rel="stylesheet" href="studiolo.css">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body class="desk">
+  <header class="proto-bar" id="proto"></header>
+
+  <div class="stage">
+    <div class="window" id="win">
+      <div class="glass-wallpaper" aria-hidden="true"></div>
+
+      <!-- 标题栏 -->
+      <div class="titlebar">
+        <div class="tb-left">
+          <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="tb-brand" id="tb-brand"></div>
+          <button class="icon-btn" id="btn-nav" aria-label="折叠侧栏" title="折叠侧栏"></button>
+        </div>
+        <div class="tb-mid">
+          <div class="crumbs" id="crumbs"></div>
+          <button class="cmdk" id="btn-cmdk" aria-label="搜索或执行命令"></button>
+        </div>
+        <div class="tb-right">
+          <button class="sync-pill" id="tb-sync" aria-label="同步状态"></button>
+          <button class="icon-btn" id="btn-dock" aria-label="Agent 侧板" title="Agent 侧板（Ctrl/⌘ J）" aria-pressed="false"></button>
+          <div class="win-ctl" aria-hidden="true"><i>—</i><i>☐</i><i>✕</i></div>
+        </div>
+      </div>
+
+      <!-- 主体 -->
+      <div class="win-body">
+        <nav class="sidebar" id="sidebar" aria-label="主导航"></nav>
+        <main class="main" id="main" tabindex="-1"></main>
+        <aside class="dock" id="dock" aria-label="Agent 侧板"></aside>
+      </div>
+
+      <!-- 状态栏 -->
+      <footer class="statusbar" id="statusbar"></footer>
+      <div class="sync-panel" id="sync-panel" hidden></div>
+      <div class="toast-host desk" id="toasts"></div>
+    </div>
+  </div>
+
+  <!-- 共享空间：每次读取的密码对话框 -->
+  <dialog class="dlg" id="pw-dlg" aria-labelledby="pw-title">
+    <form class="dlg-body" id="pw-form" method="dialog">
+      <h2 id="pw-title">输入共享空间密码</h2>
+      <div class="scope-tag" id="pw-scope"></div>
+      <div>
+        <div class="pw-field">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+          <input class="input" id="pw-input" type="password" autocomplete="off" aria-label="共享空间密码" aria-describedby="pw-err" autofocus>
+        </div>
+        <div class="pw-error" id="pw-err" role="alert">密码不正确，或此设备无权读取该对象</div>
+        <div class="kdf-bar" id="pw-kdf"><i></i></div>
+      </div>
+      <div class="dlg-actions">
+        <button class="btn btn-ghost" value="cancel" formnovalidate>取消</button>
+        <button class="btn btn-primary" id="pw-ok" value="ok">验证并读取</button>
+      </div>
+      <div class="dlg-foot" id="pw-foot"></div>
+    </form>
+  </dialog>
+
+  <!-- 命令面板 -->
+  <dialog class="dlg palette" id="palette" aria-label="命令面板" closedby="any">
+    <div class="pal-input">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="pal-q" placeholder="跳转到页面、执行操作、搜索记录…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="pal-list" autofocus>
+      <span class="kbd">Esc</span>
+    </div>
+    <div class="pal-list" id="pal-list" role="listbox"></div>
+  </dialog>
+
+  <!-- 新建任务：先选调度所有者 -->
+  <dialog class="dlg" id="new-job" aria-labelledby="nj-title" closedby="any">
+    <form class="dlg-body" method="dialog">
+      <h2 id="nj-title">由谁来运行这个任务？</h2>
+      <p>每个任务只有一个调度所有者。创建后由它独立执行与保存历史，Studiolo 负责统一查看和管理。</p>
+      <div class="owner-pick" id="nj-owners"></div>
+      <div class="dlg-actions">
+        <button class="btn btn-ghost" value="cancel">取消</button>
+        <button class="btn btn-primary" value="ok" autofocus>继续</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="shared.js"></script>
+  <script src="desktop.js"></script>
+</body>
+</html>

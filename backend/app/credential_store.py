@@ -1,4 +1,4 @@
-"""Replaceable storage boundary for Local Nexa Client bearer credentials."""
+"""Replaceable storage boundary for Local Studiolo Client bearer credentials."""
 
 import os
 import tempfile
@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 
 def connection_directory(user_id: int) -> Path:
-    data_dir = os.environ.get("NEXA_DATA_DIR")
+    data_dir = os.environ.get("STUDIOLO_DATA_DIR")
     if not data_dir:
         raise HTTPException(409, "Local data directory is not configured")
     return Path(data_dir) / "core-connections" / str(user_id)
@@ -37,7 +37,7 @@ class StagedCredential(Protocol):
 def stage_file(destination: Path, content: bytes) -> StagedFile:
     """Write and fsync a private temporary file without replacing live data."""
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, name = tempfile.mkstemp(prefix=".nexa-", dir=destination.parent)
+    fd, name = tempfile.mkstemp(prefix=".studiolo-", dir=destination.parent)
     temporary = Path(name)
     try:
         with os.fdopen(fd, "wb") as output:

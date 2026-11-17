@@ -33,27 +33,27 @@ function onSelect(event: Event) {
         <option v-for="item in settingsNavigation" :key="item.id" :value="item.id">{{ item.label }}</option>
       </select>
     </label>
-    <div class="settings-nav__foot"><span class="settings-nav__foot-dot" />Nexa {{ aboutInfo.version }}</div>
+    <div class="settings-nav__foot"><span class="settings-nav__foot-dot" />Studiolo {{ aboutInfo.version }}</div>
   </GlassCard>
 </template>
 
 <style scoped>
 .settings-nav-card { height: auto; align-self: start; padding: 18px 12px 14px; }
 .settings-nav-card :deep(.glass-card__body) { overflow: visible; }
-.settings-nav__heading { padding: 2px 12px 13px; color: rgba(255,255,255,.7); font-size: 10px; font-weight: 760; letter-spacing: .16em; }
+.settings-nav__heading { padding: 2px 12px 13px; color: var(--workbench-muted); font-size: 10px; font-weight: 760; letter-spacing: .16em; }
 .settings-nav__list { display: grid; gap: 4px; }
-.settings-nav__item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 43px; padding: 0 12px; border: 1px solid transparent; border-radius: 12px; color: rgba(255,255,255,.85); background: transparent; text-align: left; font-size: 13px; font-weight: 630; transition: background .2s, box-shadow .2s, transform .2s; }
-.settings-nav__item:hover { background: rgba(255,255,255,.15); transform: translateX(2px); }
-.settings-nav__item.is-active { color: #385587; border-color: rgba(255,255,255,.75); background: rgba(255,255,255,.77); box-shadow: 0 6px 17px rgba(42,65,121,.12), inset 0 1px 0 rgba(255,255,255,.9); }
+.settings-nav__item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 43px; padding: 0 12px; border: 1px solid transparent; border-radius: 12px; color: var(--workbench-text); background: transparent; text-align: left; font-size: 13px; font-weight: 630; transition: background .2s, box-shadow .2s, transform .2s; }
+.settings-nav__item:hover { background: var(--workbench-solid); transform: translateX(2px); }
+.settings-nav__item.is-active { color: var(--workbench-good); border-color: var(--workbench-line); background: var(--workbench-solid); box-shadow: 0 6px 17px rgba(42,65,121,.12), inset 0 1px 0 rgba(255,255,255,.9); }
 .settings-nav__item svg { opacity: .9; }
-.settings-nav__empty { margin: 8px 12px; color: rgba(255,255,255,.75); font-size: 12px; }
+.settings-nav__empty { margin: 8px 12px; color: var(--workbench-muted); font-size: 12px; }
 .settings-nav__mobile { display: none; }
-.settings-nav__foot { display: flex; align-items: center; gap: 7px; margin: 15px 11px 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.22); color: rgba(255,255,255,.64); font-size: 10px; }
-.settings-nav__foot-dot { width: 6px; height: 6px; border-radius: 50%; background: #7ce0c4; box-shadow: 0 0 0 3px rgba(124,224,196,.15); }
+.settings-nav__foot { display: flex; align-items: center; gap: 7px; margin: 15px 11px 0; padding-top: 14px; border-top: 1px solid var(--workbench-line); color: var(--workbench-muted); font-size: 10px; }
+.settings-nav__foot-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--workbench-muted-surface); box-shadow: 0 0 0 3px rgba(124,224,196,.15); }
 @media (max-width: 880px) {
   .settings-nav-card { width: 100%; padding: 12px 16px; }
   .settings-nav__heading,.settings-nav__list,.settings-nav__foot { display: none; }
-  .settings-nav__mobile { display: flex; align-items: center; gap: 12px; color: rgba(255,255,255,.82); font-size: 12px; font-weight: 660; }
-  .settings-nav__mobile select { flex: 1; min-width: 0; height: 36px; padding: 0 11px; border: var(--glass-tile-border); border-radius: 10px; color: var(--text-primary); background: rgba(255,255,255,.77); font: inherit; }
+  .settings-nav__mobile { display: flex; align-items: center; gap: 12px; color: var(--workbench-muted); font-size: 12px; font-weight: 660; }
+  .settings-nav__mobile select { flex: 1; min-width: 0; height: 36px; padding: 0 11px; border: var(--glass-tile-border); border-radius: 10px; color: var(--text-primary); background: var(--workbench-solid); font: inherit; }
 }
 </style>

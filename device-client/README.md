@@ -1,8 +1,8 @@
 # Windows Device Client
 
-The Device Client sends this Windows computer's runtime metrics to Nexa-LumaDock using a dedicated Device Token. Device Token should be treated as a secret. `config.json` contains a secret; do not commit it.
+The Device Client sends this Windows computer's runtime metrics to Studiolo using a dedicated Device Token. Device Token should be treated as a secret. `config.json` contains a secret; do not commit it.
 
-1. Add a device in Nexa-LumaDock and generate its Device Token.
+1. Add a device in Studiolo and generate its Device Token.
 2. Copy `config.example.json` to `config.json`; set `serverUrl` and `deviceToken`.
 3. Run `python -m pip install -r requirements.txt`.
 4. Run `python main.py`. Press Ctrl+C to stop. Use `python main.py --once` for one heartbeat.

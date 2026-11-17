@@ -14,6 +14,7 @@ import { useCoreSync } from '../../composables/useCoreSync'
 import { syncErrorMessage, syncStatusDisplay } from '../../services/coreSyncErrors'
 import type { CorePlatform } from '../../api/core'
 
+defineOptions({ inheritAttrs: false })
 const emit = defineEmits<{ action: [message: string] }>()
 const { connection, connectionTest, syncStatus, syncResult, connectionLoading, syncLoading,
   action, busy, connectionError, syncError, refresh, connect, test, disconnect, sync } = useCoreSync(message => emit('action', message))
@@ -22,7 +23,7 @@ const platformLabels: Record<CorePlatform, string> = { windows: 'Windows', macos
 const coreUrl = ref('')
 const username = ref('')
 const password = ref('')
-const clientName = ref(`Nexa ${platformLabels[platform]}`)
+const clientName = ref(`Studiolo ${platformLabels[platform]}`)
 const validationError = ref('')
 const conflictsOpen = ref(false)
 const testStatus = computed(() => connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
@@ -84,14 +85,14 @@ onUnmounted(() => { password.value = '' })
 </script>
 
 <template>
-  <SettingsSection title="同步" description="本地修改立即保存在这台设备，连接 Nexa Core 后会在后台自动同步。">
+  <SettingsSection title="同步" description="本地修改立即保存在这台设备，连接 Studiolo Core 后会在后台自动同步。">
     <div class="settings-card" :aria-busy="connectionLoading || (!!action && action !== 'sync')">
       <div class="settings-card__heading">
         <span>Core 连接</span>
-        <span v-if="connection" class="core-status" :class="`core-status--${testStatus}`" role="status"><i aria-hidden="true" />{{ statusLabels[testStatus] }}</span>
+        <span v-if="connection" class="conn" :class="testStatus === 'connected' ? 'online' : 'offline'" role="status">{{ statusLabels[testStatus] }}</span>
       </div>
       <p v-if="connectionLoading" class="sync-note" role="status">正在加载连接…</p>
-      <p v-if="connectionError || validationError" class="sync-error" role="alert">{{ validationError || connectionError }}</p>
+      <div v-if="connectionError || validationError" class="notice danger" role="alert">{{ validationError || connectionError }}</div>
 
       <template v-if="connection?.connected">
         <dl class="connection-details">
@@ -103,9 +104,9 @@ onUnmounted(() => { password.value = '' })
         </dl>
         <details class="technical-details"><summary>技术信息</summary>
           <dl class="connection-details">
-            <dt>Client ID</dt><dd>{{ connection.clientId }}</dd>
-            <dt>Installation ID</dt><dd>{{ connection.installationId }}</dd>
-            <dt>Workspace ID</dt><dd>{{ connection.workspaceId }}</dd>
+            <dt>Client ID</dt><dd class="mono">{{ connection.clientId }}</dd>
+            <dt>Installation ID</dt><dd class="mono">{{ connection.installationId }}</dd>
+            <dt>Workspace ID</dt><dd class="mono">{{ connection.workspaceId }}</dd>
           </dl>
         </details>
         <p v-if="connectionTest" class="sync-note" role="status">{{ { connected: '连接正常', disconnected: '尚未连接', unreachable: '无法访问 Core，请检查服务和网络。', unauthorized: 'Client 凭证无效，需要重新连接或修复。当前版本不支持自动修复。' }[connectionTest.status] }}</p>
@@ -131,7 +132,7 @@ onUnmounted(() => { password.value = '' })
     <div class="settings-card" :aria-busy="syncLoading || action === 'sync' || syncStatus?.running">
       <div class="settings-card__heading"><span>数据同步</span><small>后台自动同步</small></div>
       <p v-if="syncLoading" class="sync-note" role="status">正在加载同步状态…</p>
-      <p v-if="syncError" class="sync-error" role="alert">{{ syncError }}</p>
+      <div v-if="syncError" class="notice danger" role="alert">{{ syncError }}</div>
       <template v-if="syncStatus">
         <div v-if="syncDisplay" class="auto-sync-status" :class="`auto-sync-status--${syncDisplay.tone}`" role="status">
           <RefreshCw v-if="syncStatus.running" :size="15" class="sync-spin" aria-hidden="true" />
@@ -140,13 +141,13 @@ onUnmounted(() => { password.value = '' })
           <div v-else><strong>{{ syncDisplay.label }}</strong><p>{{ syncDisplay.detail }}</p></div>
         </div>
         <dl class="sync-counts">
-          <div><dt>待同步</dt><dd class="count-pending">{{ syncStatus.pending }}</dd></div>
-          <div><dt>冲突</dt><dd :class="{ 'count-warning': syncStatus.conflicts > 0 }"><button v-if="syncStatus.conflicts > 0" class="sync-conflict-count" type="button" :aria-label="`查看 ${syncStatus.conflicts} 个同步冲突`" @click="conflictsOpen = true">{{ syncStatus.conflicts }}</button><template v-else>{{ syncStatus.conflicts }}</template></dd></div>
-          <div><dt>处理中</dt><dd>{{ syncStatus.inFlight }}</dd></div>
-          <div><dt>已拒绝</dt><dd :class="{ 'count-warning': syncStatus.rejected > 0 }">{{ syncStatus.rejected }}</dd></div>
+          <div><dt>待同步</dt><dd class="count-pending num">{{ syncStatus.pending }}</dd></div>
+          <div><dt>冲突</dt><dd class="num" :class="{ 'count-warning': syncStatus.conflicts > 0 }"><button v-if="syncStatus.conflicts > 0" class="sync-conflict-count" type="button" :aria-label="`查看 ${syncStatus.conflicts} 个同步冲突`" @click="conflictsOpen = true">{{ syncStatus.conflicts }}</button><template v-else>{{ syncStatus.conflicts }}</template></dd></div>
+          <div><dt>处理中</dt><dd class="num">{{ syncStatus.inFlight }}</dd></div>
+          <div><dt>已拒绝</dt><dd class="num" :class="{ 'count-warning': syncStatus.rejected > 0 }">{{ syncStatus.rejected }}</dd></div>
         </dl>
         <dl class="connection-details sync-details">
-          <dt>Cursor</dt><dd>{{ syncStatus.cursor }}</dd>
+          <dt>Cursor</dt><dd class="mono">{{ syncStatus.cursor }}</dd>
           <dt>上次成功同步</dt><dd>{{ formatTime(syncStatus.lastSuccessAt) }}</dd>
           <template v-if="syncStatus.nextRetryAt && !syncStatus.blocked"><dt>下次自动重试</dt><dd>{{ formatTime(syncStatus.nextRetryAt) }}</dd></template>
           <dt>最后错误</dt><dd :class="{ 'sync-error': syncStatus.lastError }">{{ syncStatus.lastError ? syncErrorMessage(syncStatus.lastError) : '无' }}</dd>
@@ -158,67 +159,59 @@ onUnmounted(() => { password.value = '' })
         {{ syncResult.status === 'ok' ? '同步完成' : '同步未完成' }}：上传 {{ syncResult.pushed }} 项，接收 {{ syncResult.pulled }} 项。
         <span v-if="syncResult.status === 'error'">{{ syncErrorMessage(syncResult.lastError) }}</span>
       </p>
+      <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
+    </div>
 
     <div v-if="rejectedEntries.length" class="settings-card">
       <div class="settings-card__heading"><span>被拒绝的写入</span><small>{{ rejectedEntries.length }} 条</small></div>
-      <p class="sync-rejected-hint">Core 拒绝了这些改动。可以放弃，或修正数据后按当前内容重新提交。</p>
+      <p class="sync-note" style="margin-top:0">Core 拒绝了这些改动。可以放弃，或修正数据后按当前内容重新提交。</p>
       <ul class="sync-rejected-list">
         <li v-for="entry in rejectedEntries" :key="entry.id">
           <div><strong>{{ conflictEntityLabel(entry.entityType) }}</strong><span>{{ entry.reason || '未知原因' }} · {{ entry.operation === 'delete' ? '删除' : '写入' }}</span></div>
-          <div class="settings-button-row">
-            <ActionButton variant="secondary" :disabled="!!rejectedBusy" @click="decideRejected(entry, 'dismiss')">放弃</ActionButton>
-            <ActionButton :disabled="!!rejectedBusy" @click="decideRejected(entry, 'retry')">重试</ActionButton>
+          <div class="btn-row">
+            <ActionButton variant="secondary" size="sm" :disabled="!!rejectedBusy" @click="decideRejected(entry, 'dismiss')">放弃</ActionButton>
+            <ActionButton size="sm" :disabled="!!rejectedBusy" @click="decideRejected(entry, 'retry')">重试</ActionButton>
           </div>
         </li>
       </ul>
-    </div>
-
-      <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
     </div>
   </SettingsSection>
   <ConflictCenter :open="conflictsOpen" :refresh-status="() => refresh(false)" @close="conflictsOpen = false" @action="message => emit('action', message)" />
 </template>
 
 <style scoped>
-.core-status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; font-weight: 670; }
-.core-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.core-status--connected { color: #29846f; }
-.core-status--unauthorized, .core-status--unreachable, .sync-error, .count-warning { color: #b14e65; }
-.connection-details { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 10px 18px; margin: 0; font-size: 12px; line-height: 1.5; }
-.connection-details dt { color: var(--text-secondary); }
-.connection-details dd { margin: 0; overflow-wrap: anywhere; color: var(--text-primary); }
-.technical-details { margin-top: 15px; font-size: 11px; color: var(--text-secondary); }
+.sync-error, .count-warning { color: var(--danger); }
+.connection-details { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 13px; line-height: 1.5; }
+.connection-details dt { color: var(--text-3); }
+.connection-details dd { margin: 0; overflow-wrap: anywhere; color: var(--text); }
+.technical-details { margin-top: 12px; font-size: 12px; color: var(--text-3); }
 .technical-details summary { cursor: pointer; }
-.technical-details .connection-details { margin-top: 12px; font-size: 11px; }
-.sync-note, .sync-error, .sync-result { margin: 12px 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.sync-note { color: var(--text-secondary); }
-.auto-sync-status { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; color: var(--text-secondary); }
-.auto-sync-status > i { width: 7px; height: 7px; flex: 0 0 7px; margin-top: 5px; border-radius: 50%; background: currentColor; }
+.technical-details .connection-details { margin-top: 10px; font-size: 12px; }
+.sync-note, .sync-error, .sync-result { margin: 10px 0; font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.sync-note { color: var(--text-2); }
+.auto-sync-status { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; color: var(--text-2); }
+.auto-sync-status > i { width: 7px; height: 7px; flex: 0 0 7px; margin-top: 6px; border-radius: 50%; background: currentColor; }
 .auto-sync-status > svg { flex-shrink: 0; margin-top: 2px; }
-.auto-sync-status strong { font-size: 13px; }
-.auto-sync-status p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
-.auto-sync-status--success { color: #29846f; }
-.auto-sync-status--active { color: var(--accent-deep); }
-.auto-sync-status--warning { color: #b14e65; }
-.sync-conflict-status { display:block; padding:0; border:0; background:transparent; color:inherit; text-align:left; }
-.sync-conflict-status span { display:block; margin-top:4px; font-size:12px; line-height:1.6; }
-.sync-conflict-status:hover span { text-decoration:underline; }
-.sync-conflict-count { padding:0; border:0; color:inherit; background:transparent; font:inherit; }
-.sync-conflict-count:hover { text-decoration:underline; }
-.sync-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
-.sync-counts div { padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--glass-tile-background); }
-.sync-counts dt { color: var(--text-secondary); font-size: 11px; }
-.sync-counts dd { margin: 6px 0 0; font-size: 22px; font-weight: 700; }
-.count-pending { color: var(--accent-deep); }
-.sync-details .sync-error { color: #b14e65; }
+.auto-sync-status strong { font-size: 13.5px; }
+.auto-sync-status p { margin: 2px 0 0; color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
+.auto-sync-status--success { color: var(--ok); }
+.auto-sync-status--active { color: var(--accent); }
+.auto-sync-status--warning { color: var(--danger); }
+.sync-conflict-status { display: block; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.sync-conflict-status span { display: block; margin-top: 2px; font-size: 12.5px; }
+.sync-conflict-status:hover span { text-decoration: underline; }
+.sync-conflict-count { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; }
+.sync-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 16px; }
+.sync-counts div { padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-3); }
+.sync-counts dt { color: var(--text-3); font-size: 12px; }
+.sync-counts dd { margin: 4px 0 0; font-size: 20px; font-weight: 700; }
+.count-pending { color: var(--accent); }
 .sync-actions { justify-content: flex-end; }
-.sync-spin { animation: sync-rotate 1s linear infinite; }
-@keyframes sync-rotate { to { transform: rotate(360deg); } }
-@media (max-width: 560px) { .sync-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .connection-details { grid-template-columns: 80px minmax(0, 1fr); gap: 10px; } }
-@media (prefers-reduced-motion: reduce) { .sync-spin { animation: none; } }
-.sync-rejected-hint { margin: 0 0 8px; font-size: 11px; color: var(--text-muted); }
+.sync-spin { animation: spin 1s linear infinite; }
 .sync-rejected-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.sync-rejected-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid rgba(150,174,218,.16); border-radius: 10px; font-size: 11px; }
-.sync-rejected-list li strong { display: block; font-size: 12px; }
-.sync-rejected-list li span { color: var(--text-muted); }
+.sync-rejected-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-3); font-size: 12.5px; }
+.sync-rejected-list li strong { display: block; font-size: 13px; }
+.sync-rejected-list li span { color: var(--text-3); }
+@media (max-width: 560px) { .sync-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .connection-details { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; } }
+[data-motion="reduced"] .sync-spin { animation: none; }
 </style>

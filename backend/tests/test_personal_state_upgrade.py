@@ -20,7 +20,7 @@ from app.sync.adapters.personal_state import CATALOG
 def verify_personal_upgrade(database_url, backend, mode):
     def migrate(command, revision, succeeds=True):
         env = {**os.environ, "DATABASE_URL": database_url,
-               "NEXA_MODE": "core" if database_url.startswith("postgresql") else "local"}
+               "STUDIOLO_MODE": "core" if database_url.startswith("postgresql") else "local"}
         result = subprocess.run([sys.executable, "-m", "alembic", command, revision],
                                 cwd=backend, env=env, capture_output=True)
         assert (result.returncode == 0) == succeeds, "Personal state migration outcome"

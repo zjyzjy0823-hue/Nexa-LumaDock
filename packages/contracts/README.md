@@ -10,7 +10,7 @@ Sync Protocol v3 的**唯一权威定义**。三端（桌面 / Android / Core）
 | [`samples/invalid/`](samples/invalid/) | 必须被信封（schema）拒绝的样例 |
 | [`samples/semantic/`](samples/semantic/) | 信封合法但语义违规的样例（SR-1…SR-8） |
 | [`cases.json`](cases.json) | 用例清单 + 语义规则 + 枚举，三种校验器共用 |
-| `rust/` | Rust 侧严格 serde 类型（`nexa-contracts` crate）与契约测试 |
+| `rust/` | Rust 侧严格 serde 类型（`studiolo-contracts` crate）与契约测试 |
 
 ## 校验
 

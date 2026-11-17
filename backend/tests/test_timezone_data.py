@@ -46,7 +46,7 @@ def test_settings_outbox_without_system_timezone_database(client, users, package
         assert expected["appearance"]["accent"] == "mint"
 
     invalid = client.patch("/api/v1/settings", headers=headers,
-                           json={"timezone": "Invalid/Nexa-Timezone"})
+                           json={"timezone": "Invalid/Studiolo-Timezone"})
     assert invalid.status_code == 422
     with closing(app.dependency_overrides[get_db]()) as sessions:
         db = next(sessions)

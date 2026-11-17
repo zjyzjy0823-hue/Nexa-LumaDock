@@ -1,19 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Plus } from 'lucide-vue-next'
-import ApiKeyCard from '../components/api/ApiKeyCard.vue'
+import OpusIcon from '../components/ui/OpusIcon.vue'
 import CreateApiKeyModal from '../components/api/CreateApiKeyModal.vue'
-import ActionButton from '../components/ui/ActionButton.vue'
-import GlassCard from '../components/ui/GlassCard.vue'
-import Input from '../components/ui/Input.vue'
-import PageHeader from '../components/ui/PageHeader.vue'
 import { createApiKey, listApiKeys, setApiKeyStatus } from '../api/apiKeys'
 import { ApiError } from '../api/client'
 import { apiScopes } from '../mock/api'
 import { useAuthStore } from '../stores/auth'
 import type { ApiKeyCreate, ApiKeyCreated, ApiKeyPublic } from '../types/api'
 
-const emit = defineEmits<{ action: [message: string] }>()
+defineProps<{ mobile?: boolean }>()
+const emit = defineEmits<{ action: [message: string]; back: [] }>()
 const auth = useAuthStore()
 const keys = ref<ApiKeyPublic[]>([])
 const query = ref('')
@@ -25,7 +21,6 @@ const createOpen = ref(false)
 const submitting = ref(false)
 const createError = ref('')
 const created = ref<ApiKeyCreated | null>(null)
-const activeKeys = computed(() => keys.value.filter(key => key.status === 'active').length)
 const visibleKeys = computed(() => keys.value.filter(key =>
   `${key.name} ${key.masked_key} ${key.scopes.join(' ')}`.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase())))
 
@@ -91,45 +86,46 @@ onUnmounted(() => { created.value = null })
 </script>
 
 <template>
-  <div class="api-page">
-    <PageHeader title="API" eyebrow="">
-      <template #actions>
-        <div class="api-page__header-actions">
-          <Input v-model="query" class="api-page__search" type="search" placeholder="搜索 API Key..." aria-label="搜索 API Key" />
-          <ActionButton @click="openCreate"><Plus :size="16" />创建 API Key</ActionButton>
+  <div class="api-page" :class="mobile ? 'mpage push' : undefined">
+    <div v-if="mobile" class="navbar">
+      <button class="icon-btn" type="button" aria-label="返回" @click="emit('back')"><OpusIcon name="chevL" /></button>
+      <div class="t">集成与 API</div>
+      <button class="icon-btn" type="button" aria-label="新建令牌" @click="openCreate"><OpusIcon name="plus" /></button>
+    </div>
+    <header v-else class="ph">
+      <div><h1>集成与 API</h1><div class="sub">令牌按身份隔离，可单独管理</div></div>
+      <div class="actions"><button class="btn btn-primary" type="button" @click="openCreate"><OpusIcon name="plus" />新建令牌</button></div>
+    </header>
+    <div class="notice info" style="margin-bottom:14px"><OpusIcon name="shield" /><div><b>任何令牌都无法读取共享空间的明文。</b>读取内容必须由人当次输入密码，普通令牌只允许访问已授权的接口。</div></div>
+    <div v-if="loading" class="cleared" role="status">正在加载令牌…</div>
+    <div v-else-if="loadError" class="notice danger" role="alert">{{ loadError }}<button class="btn btn-sm btn-ghost" type="button" @click="loadKeys">重试</button></div>
+    <template v-else>
+      <p v-if="actionError" class="notice danger" role="alert">{{ actionError }}</p>
+      <div v-if="keys.length" class="api-search">
+        <div :class="mobile ? 'msearch' : 'api-search__box'"><OpusIcon name="search" /><input v-model="query" :class="mobile ? undefined : 'input'" type="search" placeholder="搜索令牌" aria-label="搜索令牌"></div>
+      </div>
+      <div v-if="mobile" class="mlist mat-solid">
+        <div v-for="key in visibleKeys" :key="key.id" class="mrow">
+          <span class="tile-icon"><OpusIcon name="key" /></span>
+          <span class="grow"><div class="title">{{ key.name }}</div><div class="sub mono">{{ key.masked_key }} · {{ key.scopes.join('、') }}</div></span>
+          <button class="btn btn-sm" :class="key.status === 'active' ? 'btn-danger' : 'btn-ghost'" type="button" :disabled="busyId === key.id || key.status === 'expired'" @click="toggleKeyStatus(key.id)">{{ key.status === 'expired' ? '已过期' : key.status === 'active' ? '停用' : '启用' }}</button>
         </div>
-      </template>
-    </PageHeader>
-    <GlassCard class="api-page__keys" title="API Keys">
-      <template #action><span class="api-page__count">{{ activeKeys }} 枚活跃 / {{ keys.length }} 枚总计</span></template>
-      <p class="api-page__description">管理四个模块读取接口的访问密钥与权限范围。</p>
-      <div v-if="loading" class="api-page__empty" role="status">正在加载 API Key…</div>
-      <div v-else-if="loadError" class="api-page__empty" role="alert"><span>{{ loadError }}</span><ActionButton variant="secondary" @click="loadKeys">重试</ActionButton></div>
-      <template v-else>
-        <p v-if="actionError" class="api-page__error" role="alert">{{ actionError }}</p>
-        <div v-if="visibleKeys.length" class="api-page__keys-grid">
-          <ApiKeyCard v-for="key in visibleKeys" :key="key.id" :api-key="key" :busy="busyId === key.id" @toggle-status="toggleKeyStatus" />
-        </div>
-        <div v-else class="api-page__empty">{{ keys.length ? '没有找到匹配的 API Key' : '还没有 API Key。创建后可访问授权的读取接口。' }}</div>
-      </template>
-      <p class="api-page__description">明文仅在创建成功时显示一次。请求日志、用量统计和 Webhook 暂不可用。</p>
-    </GlassCard>
+        <div v-if="!visibleKeys.length" class="mrow faint">{{ keys.length ? '没有匹配的令牌' : '还没有令牌' }}</div>
+      </div>
+      <div v-else class="mat-solid" style="border-radius:var(--r-lg);overflow:auto">
+        <table class="tbl"><thead><tr><th>名称</th><th>令牌</th><th>权限范围</th><th>最近使用</th><th></th></tr></thead>
+          <tbody><tr v-for="key in visibleKeys" :key="key.id"><td style="font-weight:550">{{ key.name }}</td><td class="mono muted">{{ key.masked_key }}</td><td class="muted">{{ key.scopes.join('、') }}</td><td class="faint">{{ key.last_used_at ? new Date(key.last_used_at).toLocaleString('zh-CN') : '—' }}</td><td class="r"><button class="btn btn-sm" :class="key.status === 'active' ? 'btn-danger' : 'btn-subtle'" type="button" :disabled="busyId === key.id || key.status === 'expired'" @click="toggleKeyStatus(key.id)">{{ key.status === 'expired' ? '已过期' : key.status === 'active' ? '停用' : '启用' }}</button></td></tr>
+          <tr v-if="!visibleKeys.length"><td colspan="5" class="faint" style="text-align:center;height:80px">{{ keys.length ? '没有匹配的令牌' : '还没有令牌' }}</td></tr></tbody>
+        </table>
+      </div>
+    </template>
     <CreateApiKeyModal :open="createOpen" :scopes="apiScopes" :submitting="submitting" :server-error="createError" :created="created" @close="closeCreate" @create="createKey" />
   </div>
 </template>
 
 <style scoped>
-.api-page { min-width:0; padding:0 20px 36px; animation:glass-page-rise .42s ease backwards; }
-.api-page :deep(.page-header__eyebrow) { display:none; }
-.api-page :deep(.page-header) { align-items:center; margin:3px 0 21px; }
-.api-page__header-actions { display:flex; align-items:center; gap:9px; min-width:0; }
-.api-page__search { width:228px; min-width:0; }
-.api-page__keys { min-height:437px; }
-.api-page__count { color:rgba(255,255,255,.88); font-size:11px; }
-.api-page__description { margin:0 0 15px; color:rgba(255,255,255,.88); font-size:11px; text-shadow:0 1px 6px rgba(20,33,71,.3); }
-.api-page__keys-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:10px; margin-bottom:15px; }
-.api-page__empty { display:grid; justify-items:center; align-content:center; gap:12px; min-height:180px; color:rgba(255,255,255,.9); font-size:12px; text-align:center; }
-.api-page__error { color:#c76572; font-size:11px; }
-@media (max-width:700px) { .api-page { padding:0 3px 30px; } .api-page__header-actions { width:100%; } .api-page__search { flex:1; width:auto; } }
-@media (prefers-reduced-motion:reduce) { .api-page { animation:none; } }
+.api-search { margin-bottom: 12px; }
+.api-search__box { position: relative; max-width: 280px; }
+.api-search__box :deep(svg.i) { position: absolute; left: 10px; top: 50%; translate: 0 -50%; width: 15px; height: 15px; color: var(--text-3); pointer-events: none; }
+.api-search__box .input { padding-left: 32px; height: 34px; }
 </style>

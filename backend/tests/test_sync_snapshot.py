@@ -23,7 +23,7 @@ TRANSACTION = {"categoryId": None, "type": "expense", "amount": "38.00",
 SITE_CATEGORY = {"name": "Sites", "order": 1}
 
 
-def site(name="Nexa", category_id=None):
+def site(name="Studiolo", category_id=None):
     return {"name": name, "url": "https://example.com", "icon": None, "description": "",
             "categoryId": category_id, "favorite": True, "order": 2, "lastVisitedAt": None,
             "createdAt": "2026-10-01T00:00:00Z", "updatedAt": "2026-11-15T03:00:00Z"}
@@ -133,7 +133,7 @@ def test_snapshot_returns_the_whole_workspace_including_tombstones(client):
         else:
             assert isinstance(row["data"], dict)
     website = by_id[("website", ids["site"])]
-    assert website["data"]["name"] == "Nexa"
+    assert website["data"]["name"] == "Studiolo"
     assert website["data"]["url"] == "https://example.com"
     assert website["data"]["categoryId"] == ids["site_category"]
     assert website["syncRevision"] == revisions["site"]

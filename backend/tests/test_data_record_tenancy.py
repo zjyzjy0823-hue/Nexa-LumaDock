@@ -105,7 +105,7 @@ def migrate(database: Path, direction: str, revision: str):
     return subprocess.run(
         [sys.executable, "-m", "alembic", "-c", "alembic.ini", direction, revision],
         cwd=BACKEND,
-        env={**os.environ, "DATABASE_URL": f"sqlite:///{database}", "NEXA_MODE": "local"},
+        env={**os.environ, "DATABASE_URL": f"sqlite:///{database}", "STUDIOLO_MODE": "local"},
         capture_output=True,
         text=True,
     )

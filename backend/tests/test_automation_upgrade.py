@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, text, inspect
 
 def test_upgrade_simulation_history_and_execution_constraint(tmp_path):
     url = "sqlite:///" + (tmp_path / "old.db").as_posix()
-    env = {**os.environ, "DATABASE_URL": url, "NEXA_MODE": "local"}
+    env = {**os.environ, "DATABASE_URL": url, "STUDIOLO_MODE": "local"}
     def migrate(revision):
         result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", revision], cwd=Path(__file__).parents[1], env=env, capture_output=True)
         assert result.returncode == 0

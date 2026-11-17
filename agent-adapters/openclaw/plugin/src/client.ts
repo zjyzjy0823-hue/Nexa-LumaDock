@@ -11,16 +11,16 @@ export interface Credential { serverUrl: string; agentToken: string }
 
 const messages: Record<string, string> = {
   unauthorized: 'Agent token is invalid or revoked. Configure a current na_live_ credential.',
-  agent_disabled: 'This Agent is disabled. Enable it in Nexa.',
-  permission_denied: 'Permission denied. Ask the user to grant the required data scope in Nexa Agent settings.',
-  unsupported_action: 'This action is unavailable on this Nexa version.',
+  agent_disabled: 'This Agent is disabled. Enable it in Studiolo.',
+  permission_denied: 'Permission denied. Ask the user to grant the required data scope in Studiolo Agent settings.',
+  unsupported_action: 'This action is unavailable on this Studiolo version.',
   validation_error: 'Invalid parameters. Check the tool schema, category type, amount and date.',
   not_found: 'Entity does not exist in the authorized workspace.',
   conflict: 'The operation could not complete. Retry this logical invocation with the same action identity.',
   idempotency_conflict: 'Action identity was already used for different parameters. Do not retry with changed parameters.',
-  local_only: 'Connect this plugin to Nexa Local. Data Actions are unavailable on Core.',
-  unavailable: 'Nexa Local is unavailable. A write may have committed; retry this logical invocation with the same identity.',
-  configuration_error: 'Configure a trusted Nexa Local URL and a na_live_ credential through the named environment variable or explicit adapter config path.',
+  local_only: 'Connect this plugin to Studiolo Local. Data Actions are unavailable on Core.',
+  unavailable: 'Studiolo Local is unavailable. A write may have committed; retry this logical invocation with the same identity.',
+  configuration_error: 'Configure a trusted Studiolo Local URL and a na_live_ credential through the named environment variable or explicit adapter config path.',
 }
 
 export class ToolError extends Error {
@@ -31,8 +31,8 @@ export async function resolveCredential(config: PluginConfig): Promise<Credentia
   try {
     const shared: Partial<Credential> = config.adapterConfigPath
       ? JSON.parse(await readFile(config.adapterConfigPath, 'utf8')) as Partial<Credential> : {}
-    const serverUrl = config.serverUrl ?? shared.serverUrl ?? process.env.NEXA_LOCAL_URL ?? ''
-    const agentToken = process.env[config.agentTokenEnv ?? 'NEXA_AGENT_TOKEN'] ?? shared.agentToken ?? ''
+    const serverUrl = config.serverUrl ?? shared.serverUrl ?? process.env.STUDIOLO_LOCAL_URL ?? ''
+    const agentToken = process.env[config.agentTokenEnv ?? 'STUDIOLO_AGENT_TOKEN'] ?? shared.agentToken ?? ''
     const url = new URL(serverUrl)
     if (url.username || url.password || url.search || url.hash ||
       (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) ||

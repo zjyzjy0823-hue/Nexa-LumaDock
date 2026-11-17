@@ -1,4 +1,4 @@
-export type SettingsSectionId = 'account' | 'appearance' | 'sync' | 'storage' | 'security' | 'notifications' | 'about'
+export type SettingsSectionId = 'account' | 'appearance' | 'sync' | 'agents' | 'storage' | 'security' | 'notifications' | 'about'
 export type GlassTheme = 'light' | 'dark' | 'auto'
 export type AccentColor = 'blue' | 'purple' | 'mint' | 'pink' | 'orange'
 export type BackgroundChoice = 'sky' | 'aurora' | 'minimal' | 'custom'

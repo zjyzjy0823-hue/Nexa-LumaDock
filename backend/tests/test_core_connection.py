@@ -11,8 +11,8 @@ from app import core_connection
 
 def test_connect_status_disconnect_and_secret_storage(client, monkeypatch, tmp_path):
     installation_id = str(uuid4())
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("NEXA_INSTALLATION_ID", installation_id)
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_INSTALLATION_ID", installation_id)
     calls = []
     revoked = False
 
@@ -21,7 +21,7 @@ def test_connect_status_disconnect_and_secret_storage(client, monkeypatch, tmp_p
         calls.append((request.method, request.url.path))
         path = request.url.path
         if path == "/api/health":
-            return httpx.Response(200, json={"status": "ok", "service": "nexa", "version": "0.5.4"})
+            return httpx.Response(200, json={"status": "ok", "service": "studiolo", "version": "0.5.4"})
         if path == "/api/v1/auth/login":
             assert json.loads(request.content) == {"username": "remote_user", "password": "remote-password"}
             return httpx.Response(200, json={"access_token": "temporary-core-jwt"})
@@ -106,8 +106,8 @@ def test_core_url_rejects_unsafe_forms():
 
 
 def test_failed_core_connection_does_not_save_secrets(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("NEXA_INSTALLATION_ID", str(uuid4()))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_INSTALLATION_ID", str(uuid4()))
 
     def redirect(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "https://other.example/"})

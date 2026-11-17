@@ -1,10 +1,10 @@
 [package]
-name = "nexa-contracts"
+name = "studiolo-contracts"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 publish = false
-description = "Nexa Sync Protocol v3 contract types: strict serde models for the frozen wire contract"
+description = "Studiolo Sync Protocol v3 contract types: strict serde models for the frozen wire contract"
 license = "UNLICENSED"
 
 # Standalone crate on purpose: the repo has no Cargo workspace, and this crate
@@ -17,5 +17,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [lib]
-name = "nexa_contracts"
+name = "studiolo_contracts"
 path = "src/lib.rs"

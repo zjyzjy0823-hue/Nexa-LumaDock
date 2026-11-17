@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 os.environ["DATABASE_URL"] = "sqlite://"
-os.environ["JWT_SECRET"] = "test-secret-for-nexa"
+os.environ["JWT_SECRET"] = "test-secret-for-studiolo"
 os.environ["ALLOW_REGISTRATION"] = "true"
 
 from app.database import Base, get_db  # noqa: E402

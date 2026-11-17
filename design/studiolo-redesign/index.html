@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Studiolo · 设计方案说明</title>
+  <link rel="stylesheet" href="studiolo.css">
+  <style>
+    /* ==========================================================================
+       方案说明总览页（复用 studiolo.css tokens，实时响应原型控制条切换）
+       ========================================================================== */
+    html, body { min-block-size: 100%; }
+    body.overview {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: var(--bg);
+      color: var(--text);
+    }
+    [data-theme="glass"] body.overview { background: #141728; }
+    .stage {
+      position: relative;
+      isolation: isolate;
+      padding-block: 36px 72px;
+      padding-inline: clamp(16px, 4vw, 40px);
+    }
+    .stage > :not(.glass-wallpaper) { position: relative; z-index: 1; }
+    .wrap {
+      max-inline-size: 1120px;
+      margin-inline: auto;
+      display: grid;
+      gap: 28px;
+    }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      border-radius: var(--r-xl);
+      padding: clamp(22px, 4vw, 36px);
+      display: grid;
+      gap: 20px;
+    }
+    .hero-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    .hero-title { flex: 1 1 420px; min-inline-size: 0; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-block-end: 10px;
+    }
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: clamp(26px, 3.6vw, 36px);
+      font-weight: 720;
+      letter-spacing: -.02em;
+      line-height: 1.15;
+    }
+    .hero p.lead {
+      margin: 0;
+      max-inline-size: 68ch;
+      font-size: 15px;
+      color: var(--text-2);
+      line-height: 1.65;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .hero-actions a.btn { text-decoration: none; }
+
+    /* ---------- 入口双卡 ---------- */
+    .entry-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 14px;
+    }
+    .entry-card {
+      border-radius: var(--r-lg);
+      padding: 20px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      text-decoration: none;
+      color: inherit;
+      transition: translate var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+    }
+    .entry-card:hover {
+      translate: 0 calc(-2px * var(--move));
+      box-shadow: var(--shadow-2);
+    }
+    .entry-head { display: flex; align-items: center; gap: 12px; }
+    .entry-icon {
+      display: grid;
+      place-items: center;
+      inline-size: 40px;
+      block-size: 40px;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      flex: none;
+    }
+    .entry-icon svg.i { inline-size: 20px; block-size: 20px; }
+    .entry-head h2 { margin: 0; font-size: 17px; font-weight: 660; }
+    .entry-head .sub { font-size: 12.5px; color: var(--text-3); }
+    .entry-card p { margin: 0; font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+    .entry-foot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-block-start: 10px;
+      border-block-start: 1px solid var(--line);
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .entry-foot .spacer { flex: 1; }
+
+    /* ---------- 章节标题 ---------- */
+    .sec { display: grid; gap: 14px; }
+    .sec-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 16px;
+    }
+    .sec-head h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 680;
+      letter-spacing: -.01em;
+    }
+    .sec-head p { margin: 0; font-size: 13.5px; color: var(--text-2); }
+
+    /* ---------- Subgrid 对齐卡片 ---------- */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-rows: auto auto 1fr;
+      gap: 14px;
+    }
+    .spec-card {
+      grid-row: span 3;
+      display: grid;
+      /* 同层叠回退：不支持 subgrid 时退回显式行轨道 */
+      grid-template-rows: auto auto 1fr;
+      grid-template-rows: subgrid;
+      gap: 8px;
+      border-radius: var(--r-lg);
+      padding: 18px;
+    }
+    .spec-card .kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-3);
+    }
+    .spec-card h3 { margin: 0; font-size: 15.5px; font-weight: 650; }
+    .spec-card p { margin: 0; font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+
+    /* ---------- 双端架构对比 ---------- */
+    .split-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+    }
+    .panel {
+      border-radius: var(--r-lg);
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+    .panel h3 {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16.5px;
+      font-weight: 660;
+    }
+    .panel ul {
+      margin: 0;
+      padding-inline-start: 18px;
+      display: grid;
+      gap: 8px;
+      font-size: 13.5px;
+      color: var(--text-2);
+      line-height: 1.6;
+    }
+    .panel li b { color: var(--text); font-weight: 600; }
+
+    /* 手机底栏示意条 */
+    .tabbar-demo {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: center;
+      gap: 6px;
+      padding: 8px;
+      border-radius: var(--r-lg);
+      background: var(--solid);
+      box-shadow: var(--shadow-1);
+    }
+    .tabbar-demo .td-item {
+      display: grid;
+      justify-items: center;
+      gap: 4px;
+      padding: 6px 4px;
+      border-radius: var(--r-md);
+      font-size: 11.5px;
+      color: var(--text-2);
+      font-weight: 550;
+    }
+    .tabbar-demo .td-item.is-on { color: var(--accent); background: var(--accent-soft); }
+    .tabbar-demo .td-add {
+      display: grid;
+      place-items: center;
+      inline-size: 42px;
+      block-size: 34px;
+      margin-inline: auto;
+      border-radius: 12px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    /* 桌面空间结构示意 */
+    .desk-wire {
+      display: grid;
+      grid-template-columns: 92px 1fr 104px;
+      gap: 6px;
+      padding: 8px;
+      border-radius: var(--r-lg);
+      background: var(--solid);
+      box-shadow: var(--shadow-1);
+      font-size: 11.5px;
+      color: var(--text-2);
+    }
+    .desk-wire > div {
+      border-radius: var(--r-sm);
+      background: var(--surface-3);
+      padding: 8px;
+      display: grid;
+      gap: 3px;
+      align-content: start;
+    }
+    .desk-wire .dw-main { background: var(--accent-soft); color: var(--text); }
+    .desk-wire b { font-size: 12px; color: var(--text); }
+
+    /* ---------- 视觉语言互动样本 ---------- */
+    .tokens-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      padding: 14px 18px;
+      border-radius: var(--r-lg);
+    }
+    .tokens-bar .label { font-size: 12.5px; font-weight: 600; color: var(--text-3); }
+    .tokens-bar .group { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .tokens-bar .spacer { flex: 1; }
+
+    /* ---------- 响应式对照表格（遵循 responsive-table） ---------- */
+    .table-wrap {
+      border-radius: var(--r-lg);
+      overflow: auto;
+      max-inline-size: 100%;
+      container-type: inline-size;
+    }
+    .ia-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      background: var(--solid);
+      font-size: 13.5px;
+      --c1: "能力模块";
+      --c2: "桌面端归属";
+      --c3: "手机端归属";
+      --c4: "核心设计要点";
+    }
+    .ia-table caption {
+      text-align: left;
+      padding: 16px 18px 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-2);
+      background: var(--solid);
+      border-block-end: 1px solid var(--line);
+    }
+    .ia-table th,
+    .ia-table td {
+      padding: 12px 16px;
+      text-align: left;
+      vertical-align: top;
+      border-block-end: 1px solid var(--line);
+    }
+    .ia-table thead th {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--surface-2);
+      font-size: 12px;
+      font-weight: 650;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+    .ia-table tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--solid);
+      font-weight: 650;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .ia-table tbody tr:last-child th,
+    .ia-table tbody tr:last-child td { border-block-end: 0; }
+    .ia-table td { color: var(--text-2); line-height: 1.55; }
+
+    @container (inline-size < 640px) {
+      .ia-table, .ia-table thead, .ia-table tbody, .ia-table tr, .ia-table th, .ia-table td {
+        display: block;
+      }
+      .ia-table thead { display: none; }
+      .ia-table tbody { display: grid; gap: 10px; padding: 12px; background: transparent; }
+      .ia-table tr {
+        border: 1px solid var(--line);
+        border-radius: var(--r-md);
+        background: var(--solid);
+        overflow: hidden;
+      }
+      .ia-table tbody th {
+        position: static;
+        background: var(--surface-3);
+        padding: 10px 14px;
+        border-block-end: 1px solid var(--line);
+      }
+      .ia-table td {
+        padding: 9px 14px;
+        border-block-end: 1px solid var(--line);
+      }
+      .ia-table td:nth-child(2)::before { content: var(--c2) "："; font-weight: 600; color: var(--text); }
+      .ia-table td:nth-child(3)::before { content: var(--c3) "："; font-weight: 600; color: var(--text); }
+      .ia-table td:nth-child(4)::before { content: var(--c4) "："; font-weight: 600; color: var(--text); }
+    }
+
+    /* ---------- 推荐体验路线 ---------- */
+    .guide-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .guide-step {
+      padding: 14px 16px;
+      border-radius: var(--r-md);
+      background: var(--solid);
+      box-shadow: var(--shadow-1);
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .guide-step .num-tag {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .guide-step b { font-size: 13.5px; }
+    .guide-step p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
+    .guide-step code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: var(--surface-3);
+      color: var(--text);
+    }
+
+    .toast-host.ov { position: fixed; inset-block-end: 20px; }
+  </style>
+</head>
+<body class="overview">
+  <header class="proto-bar" id="proto"></header>
+
+  <div class="stage">
+    <div class="glass-wallpaper" aria-hidden="true"></div>
+
+    <main class="wrap">
+      <!-- Hero -->
+      <section class="hero mat" aria-labelledby="hero-title">
+        <div class="hero-top">
+          <div class="hero-title">
+            <div class="eyebrow" id="hero-eyebrow"></div>
+            <h1 id="hero-title">安静的工作台（Quiet Desk）</h1>
+            <p class="lead">
+              为 Studiolo 个人工作台设计的 Windows / macOS 桌面端与 Android 手机端统一体验方案。
+              日常使用暖中性「纸墨」实体表面保持长时间浏览的克制与耐看；可选「Liquid Glass」仅用于导航、卡片与浮层，长列表与输入区始终保持实体可读，并在关闭模糊或减少动效时平滑降级。
+            </p>
+          </div>
+          <div class="hero-actions">
+            <a class="btn btn-primary btn-lg" href="desktop.html" id="go-desk">打开桌面端原型</a>
+            <a class="btn btn-ghost btn-lg" href="mobile.html" id="go-mob">打开手机端原型</a>
+          </div>
+        </div>
+
+        <div class="entry-grid">
+          <a class="entry-card mat-solid" href="desktop.html">
+            <div class="entry-head">
+              <div class="entry-icon" id="ic-desk"></div>
+              <div>
+                <h2>桌面端工作台</h2>
+                <div class="sub">Windows / macOS 双平台标题栏 · 1520px 宽屏分栏</div>
+              </div>
+            </div>
+            <p>
+              采用「分组侧栏 + 分栏主工作区 + 可停靠 Agent 侧板 + 全局状态栏」架构。
+              支持 ⌘/Ctrl+K 命令面板、⌘/Ctrl+J 呼出随行对话侧板、数据表格与字段级冲突合并、共享空间按次验密以及三类调度者任务统一面板。
+            </p>
+            <div class="entry-foot">
+              <span>进入桌面端交互原型</span>
+              <span class="spacer"></span>
+              <span class="kbd">⌘/Ctrl K</span>
+              <span class="kbd">⌘/Ctrl J</span>
+            </div>
+          </a>
+
+          <a class="entry-card mat-solid" href="mobile.html">
+            <div class="entry-head">
+              <div class="entry-icon" id="ic-mob"></div>
+              <div>
+                <h2>手机端（Android）</h2>
+                <div class="sub">5 项底部导航 · 单手拇指热区 · 旁侧实时设计说明</div>
+              </div>
+            </div>
+            <p>
+              底栏收敛为「今天 · 资料 · ＋ · 对话 · 任务」，正中 ＋ 键直达记账数字键盘并可切换收藏网站、新建记录与加密共享。
+              支持共享空间两层密码 Sheet、对话断线重连提示、移动端冲突二选一合并及屏幕旁侧交互试玩指南。
+            </p>
+            <div class="entry-foot">
+              <span>进入手机端交互原型</span>
+              <span class="spacer"></span>
+              <span>随附设计说明与快捷试玩</span>
+            </div>
+          </a>
+        </div>
+      </section>
+
+      <!-- 状态语言与材质实时预览 -->
+      <section class="sec" aria-labelledby="sec-lang">
+        <div class="sec-head">
+          <h2 id="sec-lang">贯穿两端的统一状态与归属语言</h2>
+          <p>点击顶部控制条可即时切换当前页面的「纸墨 / Liquid Glass」、「浅色 / 深色」、「模糊开关」与「减少动效」</p>
+        </div>
+        <div class="tokens-bar mat" id="tokens-bar">
+          <span class="label">同步四态</span>
+          <div class="group" id="sync-samples"></div>
+          <span class="label">调度归属</span>
+          <div class="group" id="owner-samples"></div>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-toast-demo">触发 Toast 示例</button>
+        </div>
+      </section>
+
+      <!-- 手机底栏取舍 & 桌面空间利用 -->
+      <section class="sec" aria-labelledby="sec-arch">
+        <div class="sec-head">
+          <h2 id="sec-arch">两端结构策略：手机收敛入口，桌面释放并发工作台</h2>
+        </div>
+        <div class="split-2">
+          <article class="panel mat">
+            <h3 id="h-mob-arch">手机端：底部导航的取舍</h3>
+            <div class="tabbar-demo" aria-label="手机端底部导航结构">
+              <div class="td-item is-on"><span>今天</span></div>
+              <div class="td-item"><span>资料</span></div>
+              <div class="td-add" aria-label="快速新增">＋</div>
+              <div class="td-item"><span>对话</span></div>
+              <div class="td-item"><span>任务</span></div>
+            </div>
+            <ul>
+              <li><b>高频四象限 + 中央快捷动作：</b>手机上主要做「记一笔、找一条、问 Agent、看任务」。将 <b>＋</b> 置于正中拇指热区，一按弹出记账键盘并支持切到网址/记录/共享对象。</li>
+              <li><b>「资料」收拢四类个人数据：</b>把账本、网站、结构化数据、设备合并到「资料」标签，用顶部分段切换并共用搜索栏，避免底栏超过 5 项造成误触与拥挤。</li>
+              <li><b>低频高敏模块不占主底栏：</b>Shared Space 因每次读取都要输入密码，放在「资料」顶部卡片与「今天」快捷入口；设置与 API 归入头像次级入口。</li>
+              <li><b>角标只报需要干预的异常：</b>仅在出现同步冲突、任务失败或结果未知时显示提示，不以常规未读数制造焦虑。</li>
+            </ul>
+          </article>
+
+          <article class="panel mat">
+            <h3 id="h-desk-arch">桌面端：额外空间的三层利用</h3>
+            <div class="desk-wire" aria-label="桌面端工作台分区示意">
+              <div>
+                <b>分组侧栏</b>
+                <span>今天</span>
+                <span>资料（4 项）</span>
+                <span>协同（3 项）</span>
+                <span>设置 / API</span>
+              </div>
+              <div class="dw-main">
+                <b>分栏主工作区（Master-Detail）</b>
+                <span>列表 / 表格与右侧详情、字段级冲突合并器、账本与运行账本并排呈现</span>
+              </div>
+              <div>
+                <b>随行侧板</b>
+                <span>⌘J 随时呼出 Agent 对话，无需切离当前数据</span>
+              </div>
+            </div>
+            <ul>
+              <li><b>分组侧栏替代平铺菜单：</b>将「今天」置顶为每日总览，其余模块按「资料」与「协同」清晰分组，并支持折叠为图标栏与 <code>⌘/Ctrl+K</code> 全局命令跳转。</li>
+              <li><b>多栏并排减少页面跳转：</b>数据页使用「集合列 + 表格 + 详情与冲突合并器」三栏；任务页左表右详情；Agent 页「Agent/会话 + 流式对话 + 能力边界」同屏呈现。</li>
+              <li><b>可停靠 Agent 侧板（Dock）：</b>用户可在浏览账本、网站或任务详情时按下 <code>⌘/Ctrl+J</code> 打开右侧 Mini 对话，边看数据边向 Agent 提问。</li>
+              <li><b>底部全局状态栏：</b>常驻显示本机保存/待同步/冲突汇总（点击展开待同步队列浮层），以及 Core、OpenClaw、Hermes 的实时在线状态。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- 核心产品链路 -->
+      <section class="sec" aria-labelledby="sec-flows">
+        <div class="sec-head">
+          <h2 id="sec-flows">核心体验约束与原型还原</h2>
+          <p>完整覆盖交接文档中的 4 条关键产品规则</p>
+        </div>
+        <div class="card-grid">
+          <article class="spec-card mat">
+            <div class="kicker">01 · Local-first</div>
+            <h3>离线可写与状态递进</h3>
+            <p>
+              任意新建记账、收藏网站或解决冲突，都先落盘显示「已在本机保存」，随后推进为「待同步」并在联网后变为「已同步」。切换到离线模式可体验断网继续记录与联网自动补齐。
+            </p>
+          </article>
+
+          <article class="spec-card mat">
+            <div class="kicker">02 · Shared Space</div>
+            <h3>每次读取都重新验密</h3>
+            <p>
+              锁定状态下不泄露任何对象文件名，仅显示数量与本机副本数；解锁目录输入一次密码，查看/复制/导出每个对象都须再验一次密码（演示密码 <code>studiolo</code>），切离或退后台立即抹除明文。
+            </p>
+          </article>
+
+          <article class="spec-card mat">
+            <div class="kicker">03 · Agent Chat</div>
+            <h3>零正文持久化与断线恢复</h3>
+            <p>
+              支持 OpenClaw 与 Hermes 双 Agent 切换，明确提示对话历史由上游 Agent 实时提供、Studiolo 不做跨端缓存。支持在流式输出途中模拟断网，查看「中断」标记与重连同步体验。
+            </p>
+          </article>
+
+          <article class="spec-card mat">
+            <div class="kicker">04 · 统一任务</div>
+            <h3>单所有者调度与能力边界</h3>
+            <p>
+              Studiolo 原生任务、OpenClaw Cron 与 Hermes Cron 在同一列表呈现，每行明确标出调度所有者及运行实例。对于无历史接口或离线不可达的外部任务，直接禁用操作并说明原因。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- 两端页面归属对照表 -->
+      <section class="sec" aria-labelledby="sec-ia">
+        <div class="sec-head">
+          <h2 id="sec-ia">两端页面与功能归属对照</h2>
+        </div>
+        <div tabindex="0" role="region" aria-labelledby="ia-cap" class="table-wrap mat">
+          <table class="ia-table">
+            <caption id="ia-cap">现有及规划能力在桌面端与手机端的映射关系</caption>
+            <thead>
+              <tr>
+                <th scope="col">能力模块</th>
+                <th scope="col">桌面端归属</th>
+                <th scope="col">手机端归属</th>
+                <th scope="col">关键交互差异</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">今天 / 首页</th>
+                <td>侧栏首项 · 智能意图录入 + Bento 总览</td>
+                <td>底栏首项 · 同步胶囊 + 4 个快捷入口 + 概要卡片</td>
+                <td>桌面支持输入文本自动识别记账 / 网址 / 问 Agent；手机用 ＋ 唤起专用表单</td>
+              </tr>
+              <tr>
+                <th scope="row">账本 / 网站 / 数据 / 设备</th>
+                <td>侧栏「资料」分组下各自独立页面</td>
+                <td>底栏「资料」内以顶部分段切换</td>
+                <td>桌面数据页采用三栏与字段级冲突合并；手机以推入式详情页处理冲突</td>
+              </tr>
+              <tr>
+                <th scope="row">Shared Space</th>
+                <td>侧栏「协同」分组 · 表格 + 原生 &lt;dialog&gt; 验密</td>
+                <td>「资料」顶部卡片 /「今天」入口 + 底部密码 Sheet</td>
+                <td>均严格遵循目录验密 + 单对象每次读取再验密，离开或切后台立即清零</td>
+              </tr>
+              <tr>
+                <th scope="row">Agent Chat</th>
+                <td>侧栏「协同 · Agent」三栏页 + 全局 ⌘J 停靠侧板</td>
+                <td>底栏「对话」· 选 Agent → 选会话 → 隐藏底栏沉浸聊天</td>
+                <td>手机进入会话自动隐藏底栏为输入法留白；桌面支持并排停靠查数据</td>
+              </tr>
+              <tr>
+                <th scope="row">任务与自动化</th>
+                <td>侧栏「协同 · 任务」· 状态汇总条 + 任务表 + 详情侧栏</td>
+                <td>底栏「任务」· 筛选芯片 + 卡片列表 + 推入详情</td>
+                <td>统一展示 Studiolo / OpenClaw / Hermes 唯一调度所有者与执行历史来源</td>
+              </tr>
+              <tr>
+                <th scope="row">API 与设置</th>
+                <td>侧栏底部独立入口（含 Liquid Glass / 降级联调）</td>
+                <td>从「今天」右上角头像进入次级页面</td>
+                <td>手机端重点演示 Liquid Glass 关闭模糊与减少动态效果的降级效果</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 快速验收路径 -->
+      <section class="sec" aria-labelledby="sec-try">
+        <div class="sec-head">
+          <h2 id="sec-try">推荐验证场景（可直接在两端原型中操作）</h2>
+        </div>
+        <div class="guide-list">
+          <div class="guide-step">
+            <span class="num-tag">场景 1 · 断网与冲突合并</span>
+            <b>离线记账 &amp; 字段级合并</b>
+            <p>在顶部控制条切到「离线」记一笔账，观察本机保存态；再去数据页处理 Spotify 家庭的冲突，恢复联网后观察队列自动清空。</p>
+          </div>
+          <div class="guide-step">
+            <span class="num-tag">场景 2 · 按次验密门禁</span>
+            <b>Shared Space 解锁</b>
+            <p>打开共享空间输入演示密码 <code>studiolo</code> 进入目录，再点任一对象读取明文触发二次验密；切换页面或标签页返回后自动重新锁定。</p>
+          </div>
+          <div class="guide-step">
+            <span class="num-tag">场景 3 · 流式中断与重连</span>
+            <b>Agent Chat 断网</b>
+            <p>发送消息并在 AI 流式回复过程中切到顶部「离线」，回复会暂停并标为「中断」；切回「在线」后显示重连状态并从上游恢复。</p>
+          </div>
+          <div class="guide-step">
+            <span class="num-tag">场景 4 · 主题与性能降级</span>
+            <b>Liquid Glass 与无障碍</b>
+            <p>将顶部控制条切到「Liquid Glass」，再分别关闭「模糊」与开启「减少动效」，对比材质降级与视图过渡的克制表现。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-host ov" id="toasts"></div>
+
+  <script src="shared.js"></script>
+  <script>
+    (() => {
+      const N = window.Studiolo;
+      const $ = (s) => document.querySelector(s);
+
+      N.protoBar($('#proto'), { page: 'index' });
+
+      $('#hero-eyebrow').innerHTML = `${N.logoSvg} <span>Studiolo 桌面端与移动端设计交接原型 · v0.6.2–v1.0</span>`;
+      $('#ic-desk').innerHTML = N.icon('device');
+      $('#ic-mob').innerHTML = N.icon('phone');
+      $('#go-desk').insertAdjacentHTML('beforeend', ` ${N.icon('external')}`);
+      $('#go-mob').insertAdjacentHTML('beforeend', ` ${N.icon('external')}`);
+      $('#h-mob-arch').insertAdjacentHTML('afterbegin', N.icon('phone'));
+      $('#h-desk-arch').insertAdjacentHTML('afterbegin', N.icon('device'));
+
+      $('#sync-samples').innerHTML = ['local', 'pending', 'synced', 'conflict']
+        .map((k) => N.syncBadge(k)).join('');
+      $('#owner-samples').innerHTML = ['studiolo', 'openclaw', 'hermes']
+        .map((k) => N.ownerBadge(k)).join('');
+
+      $('#btn-toast-demo').addEventListener('click', () => {
+        const isOnline = N.get().online;
+        N.toast($('#toasts'), isOnline
+          ? `${N.syncBadge('local', { label: '' })} 已在本机保存，正在同步到 Core`
+          : `${N.icon('wifiOff')} 当前处于离线模拟态 · 更改保存在本机`);
+      });
+
+      N.on((s, prev) => {
+        if (s.theme !== prev.theme || s.mode !== prev.mode || s.blur !== prev.blur) {
+          N.toast($('#toasts'), `${N.icon('sparkle')} 已切换：${s.theme === 'glass' ? 'Liquid Glass' : '纸墨'} · ${s.mode === 'dark' ? '深色' : '浅色'}${s.theme === 'glass' && s.blur === 'off' ? '（模糊已关）' : ''}`);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

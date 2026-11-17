@@ -25,10 +25,10 @@ from sqlalchemy import create_engine, text
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = ("ledger_categories", "ledger_transactions", "website_categories",
           "websites", "data_collections", "data_records")
-TEST_TIMING = {"NEXA_SYNC_INITIAL_DELAY_SECONDS": "0.2",
-               "NEXA_SYNC_DEBOUNCE_SECONDS": "0.1",
-               "NEXA_SYNC_PERIOD_SECONDS": "1",
-               "NEXA_SYNC_RETRY_SECONDS": "0.5,1,2"}
+TEST_TIMING = {"STUDIOLO_SYNC_INITIAL_DELAY_SECONDS": "0.2",
+               "STUDIOLO_SYNC_DEBOUNCE_SECONDS": "0.1",
+               "STUDIOLO_SYNC_PERIOD_SECONDS": "1",
+               "STUDIOLO_SYNC_RETRY_SECONDS": "0.5,1,2"}
 
 
 def free_port():
@@ -86,10 +86,10 @@ class Server:
         assert self.process is None
         env = {**os.environ, **TEST_TIMING, "ALLOW_REGISTRATION": "true"}
         if self.core_env is None:
-            packaged = os.environ.get("NEXA_BACKGROUND_SIDECAR")
+            packaged = os.environ.get("STUDIOLO_BACKGROUND_SIDECAR")
             if packaged:
                 binary = Path(packaged).expanduser().resolve()
-                assert binary.is_file(), "NEXA_BACKGROUND_SIDECAR executable is missing"
+                assert binary.is_file(), "STUDIOLO_BACKGROUND_SIDECAR executable is missing"
                 entry = [str(binary)]
             else:
                 entry = [sys.executable, "desktop_entry.py"]
@@ -155,7 +155,7 @@ class Server:
 
     def rows(self, table, entity_id):
         assert table in TABLES
-        with closing(sqlite3.connect(self.directory / "nexa.db")) as db:
+        with closing(sqlite3.connect(self.directory / "studiolo.db")) as db:
             return db.execute(f"SELECT sync_revision FROM {table} WHERE id=?", (entity_id,)).fetchall()
 
 
@@ -243,9 +243,9 @@ def main():
     core_engine = create_engine(core_url)
     with core_engine.connect() as db:
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
-    with TemporaryDirectory(prefix="nexa-background-sync-") as temporary:
+    with TemporaryDirectory(prefix="studiolo-background-sync-") as temporary:
         directory = Path(temporary)
-        core = Server(directory, "core", core_env={"NEXA_MODE": "core", "DATABASE_URL": core_url,
+        core = Server(directory, "core", core_env={"STUDIOLO_MODE": "core", "DATABASE_URL": core_url,
             "JWT_SECRET": core_secret, "CORS_ORIGINS": "http://localhost:5173"})
         a, b = Server(directory, "local-a"), Server(directory, "local-b")
         servers = (a, b, core)
@@ -273,7 +273,7 @@ def main():
             eventually(lambda: drained(b) and received(a, groups[1]), "B wakeup -> Core -> A periodic pull")
             eventually(lambda: drained(a) and drained(b), "online idle")
             verify_converged(core_engine, (a, b), groups)
-            mode = "Packaged Local" if os.environ.get("NEXA_BACKGROUND_SIDECAR") else "Source Local"
+            mode = "Packaged Local" if os.environ.get("STUDIOLO_BACKGROUND_SIDECAR") else "Source Local"
             print(mode + " background-only A/B bidirectional six-entity HTTP/SQLite/PostgreSQL: PASS", flush=True)
 
             before = {replica: replica.status()["cursor"] for replica in (a, b)}
@@ -292,7 +292,7 @@ def main():
             # Restart a real Local process while Core is still unavailable.
             installation = (a.directory / "installation.id").read_bytes()
             secret = (a.directory / "secret.key").read_bytes()
-            with closing(sqlite3.connect(a.directory / "nexa.db")) as db:
+            with closing(sqlite3.connect(a.directory / "studiolo.db")) as db:
                 queue_before = db.execute("SELECT mutation_id, entity_id, base_revision, payload_json "
                     "FROM local_mutation_queue ORDER BY entity_id").fetchall()
             a.stop()
@@ -301,7 +301,7 @@ def main():
             assert (a.directory / "secret.key").read_bytes() == secret
             eventually(lambda: offline_retry(a), "restart initial background attempt")
             assert received(a, offline_a)
-            with closing(sqlite3.connect(a.directory / "nexa.db")) as db:
+            with closing(sqlite3.connect(a.directory / "studiolo.db")) as db:
                 assert db.execute("SELECT mutation_id, entity_id, base_revision, payload_json "
                     "FROM local_mutation_queue ORDER BY entity_id").fetchall() == queue_before
             print("Real Core stop: Local writes, retries, pending mutation IDs and Local restart preserved: PASS", flush=True)

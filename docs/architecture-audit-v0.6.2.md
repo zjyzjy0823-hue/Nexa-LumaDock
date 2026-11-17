@@ -48,7 +48,7 @@ Windows / macOS                                Android（尚未开始）
 └───────────┬──────────────┘
             │ Sync Protocol v3（`protocol.py:1`）
 ┌───────────┴──────────────┐
-│ Nexa Core (FastAPI + PG)  │
+│ Studiolo Core (FastAPI + PG)  │
 │  · 115 路由 / 22 router    │
 │  · 只有 CORS 一层中间件     │
 │  · Automation engine      │
@@ -110,7 +110,7 @@ Windows / macOS                                Android（尚未开始）
 | 🟡 P1 | 主题与移动体验空壳（0 处 setProperty、触控 23–44px、无返回栈） | v0.7.2 全部 | 072-01/072-02 前置 |
 | 🟡 P1 | 测试恰好漏掉失败路径；CI 无 macOS/Android/cargo | 质量不可控 | 062-04 |
 | 🟡 P1 | 文档陈旧反向误导（core.md 83%、desktop.md 75%） | 新人/新会话误判 | 文档归档 |
-| 🟡 P1 | 桌面可靠性：`journal_mode=delete`、`busy_timeout=0`、`nexa.db` 0644、内置 sidecar 停在 0.5.6/0015、Cmd+Q 阻塞 20s | 数据损坏/升级错乱 | 062-04 / 090-05 |
+| 🟡 P1 | 桌面可靠性：`journal_mode=delete`、`busy_timeout=0`、`studiolo.db` 0644、内置 sidecar 停在 0.5.6/0015、Cmd+Q 阻塞 20s | 数据损坏/升级错乱 | 062-04 / 090-05 |
 | 🟢 P2 | 死代码与假实现：`sync/schemas.py` 无人引用、8 个死组件、`callsToday` 硬编码、webhook 在 workspace 行锁内同步 HTTP ≤30s | 维护成本 | 071 / 080 |
 | 🟢 P2 | 无迁移降级路径演练；`DataRecord` 级联行为与另两类实体不一致 | 升级风险 | 090-02 |
 

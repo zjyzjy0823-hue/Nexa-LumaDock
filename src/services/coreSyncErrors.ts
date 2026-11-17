@@ -57,9 +57,9 @@ const connectionErrors: Record<string, string> = {
   'Local Core connection is invalid': '本机保存的 Core 连接信息无效',
   'Local Core connection could not be saved': '无法保存本机 Core 连接信息',
   'Local Core connection could not be removed': '无法移除本机 Core 连接信息',
-  'Local installation ID is not configured': '本机安装身份尚未配置，请使用 Nexa Desktop',
+  'Local installation ID is not configured': '本机安装身份尚未配置，请使用 Studiolo Desktop',
   'Core is unreachable': '无法访问 Core，请检查地址和网络',
-  'Target is not Nexa Core': '目标服务不是 Nexa Core',
+  'Target is not Studiolo Core': '目标服务不是 Studiolo Core',
   'Core redirect is not allowed': 'Core 地址不能重定向，请输入直接地址',
   'Core Client is revoked': '此设备的 Core Client 已被撤销',
   'Core enrollment state is inconsistent': 'Core 设备注册状态不一致',
@@ -70,9 +70,9 @@ export function coreSyncRequestError(error: unknown): string {
   if (!(error instanceof ApiError)) return '操作未完成，请重试'
   if (typeof error.message === 'string' && Object.prototype.hasOwnProperty.call(connectionErrors, error.message)) return connectionErrors[error.message]!
   switch (error.status) {
-    case 0: return '无法连接到 Nexa 本机后端'
+    case 0: return '无法连接到 Studiolo 本机后端'
     case 401: return '本机登录已过期，请重新登录'
-    case 404: return 'Core 连接和同步仅在 Nexa Local 中可用'
+    case 404: return 'Core 连接和同步仅在 Studiolo Local 中可用'
     case 409: return '连接或同步状态发生变化，请刷新后重试'
     case 422: return '请检查 Core 地址、用户名和设备名称'
     case 502: return 'Core 请求未完成，请检查服务和网络'

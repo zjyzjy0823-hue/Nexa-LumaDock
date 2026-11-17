@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { parseRecordJson } from '../src/utils/recordJson.ts'
 
 test('record content preserves nested data and the requested QA metadata', () => {
-  const value = { qaOrigin: 'mac-offline', qaRun: 'NEXA-QA-FINAL-20261004', nested: { values: [false, 2, null, '中文'] } }
+  const value = { qaOrigin: 'mac-offline', qaRun: 'STUDIOLO-QA-FINAL-20261004', nested: { values: [false, 2, null, '中文'] } }
   assert.deepEqual(parseRecordJson(JSON.stringify(value)), value)
 })
 

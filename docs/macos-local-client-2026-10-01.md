@@ -1,4 +1,4 @@
-# Nexa v0.5.6 macOS Local Client QA — 2026-10-01
+# Studiolo v0.5.6 macOS Local Client QA — 2026-10-01
 
 > **状态（2026-11-15 复核）**：本文是 2026-10-01 的 v0.5.6 macOS Local Client QA 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
 
@@ -10,7 +10,7 @@
 - Mac mini 2014，`Macmini7,1`，Intel Core i5 2.6 GHz / 2 cores，8 GB RAM。
 - `uname -m`: `x86_64`；macOS 15.7.9 Sequoia，build `24G830`。
 - 测试设备为 **OCLP macOS 15**，不是 Apple 官方支持硬件测试。安装的 OpenCore-Patcher 为 2.5.0；未修改 SIP、root patches 或 Gatekeeper。
-- 源码：`~/Projects/Nexa-LumaDock`。开始时 Codex 工作目录为无提交、无远端的空仓库。
+- 源码：`~/Projects/Studiolo`。开始时 Codex 工作目录为无提交、无远端的空仓库。
 - `git fetch --all --tags --prune`、`checkout main`、`pull --ff-only` 后，HEAD 与 tag `v0.5.5` 均为 `42d2fd261a14f90b0337f2cfda8eb3cc6f1724de`，工作区 clean。
 - 开发分支：`codex/v0.5.6-macos-local-client`。初始流程要求仅本地提交；2026-10-02 用户另行授权提交并推送 GitHub 开发分支，不创建 PR、tag 或 Release。
 
@@ -30,7 +30,7 @@
 
 - 单一 FastAPI / SQLAlchemy / Alembic / SQLite / Agent Action / Sync 实现；没有创建 macOS Backend 副本。
 - `scripts/build-backend-sidecar.py` 与 `desktop_target.py` 按显式 target、Tauri target 环境变量、Rust host 的优先级处理平台；PyInstaller 必须使用匹配的本机 Python，拒绝错误的架构标签。
-- `scripts/desktop.mjs` 统一 npm Desktop 入口，并选择 repo `.venv` 或 `NEXA_PYTHON`。Windows PowerShell wrapper 保留；Windows 不依赖 Bash，Mac 不依赖 PowerShell。
+- `scripts/desktop.mjs` 统一 npm Desktop 入口，并选择 repo `.venv` 或 `STUDIOLO_PYTHON`。Windows PowerShell wrapper 保留；Windows 不依赖 Bash，Mac 不依赖 PowerShell。
 - sidecar smoke 使用目标文件名；Windows 专用 creationflags / SystemRoot 只在 Windows 使用。原有 Agent replay、六实体 outbox、restart、persistence、迁移测试保留。
 - Tauri 共享安全策略，Windows 配置保留 NSIS / custom titlebar / ICO，macOS 配置为 app/dmg、ICNS、decorations、Overlay 原生 traffic lights。
 - 前端平台由微型 Rust command 提供，没有 User-Agent 判断；Mac 使用公共 36px 顶部 inset，没有 HTML 模拟 traffic lights。
@@ -67,27 +67,27 @@
 
 ## Release bundle 实机结果
 
-- `npm run desktop:build` 生成 Nexa.app，但默认 DMG Finder 布局 AppleScript 超时（`Finder: AppleEvent timed out -1712`）。这属于 Tauri bundler 与本机 Finder 自动化交互问题；没有加入 OCLP-specific hack。
+- `npm run desktop:build` 生成 Studiolo.app，但默认 DMG Finder 布局 AppleScript 超时（`Finder: AppleEvent timed out -1712`）。这属于 Tauri bundler 与本机 Finder 自动化交互问题；没有加入 OCLP-specific hack。
 - `CI=true CARGO_BUILD_JOBS=2 npm run desktop:build` PASS，使用 Tauri 官方 CI 模式跳过 Finder 布局，生成 app 与 dmg。
-- App：`src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Nexa.app`，49.35 MiB。
+- App：`src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Studiolo.app`，49.35 MiB。
 - DMG：`src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Nexa_0.5.6_x64.dmg`，41.71 MiB；`hdiutil verify` checksum VALID。
-- App 名称 Nexa、版本 0.5.6、ICNS 图标均位于 bundle。`codesign` 检查 .app 为未签名；没有 Developer ID 或 notarization，不宣称可正式公开分发。
-- 关闭开发进程后以 `open Nexa.app` 独立启动成功，无 Vite、手动 FastAPI 或激活 .venv；Backend loopback health 0.5.6。
+- App 名称 Studiolo、版本 0.5.6、ICNS 图标均位于 bundle。`codesign` 检查 .app 为未签名；没有 Developer ID 或 notarization，不宣称可正式公开分发。
+- 关闭开发进程后以 `open Studiolo.app` 独立启动成功，无 Vite、手动 FastAPI 或激活 .venv；Backend loopback health 0.5.6。
 - 通过真实 WebKit UI 登录 QA 用户，Dashboard / Sidebar 正常，原生 traffic lights 与顶部 36px inset 避开内容，搜索提示 Cmd+K。
-- 原生 AXCloseButton：关闭后 Backend health ok；点击 Dock Nexa 恢复主窗口。
-- `open -n Nexa.app`：第二个 Nexa 进程短暂出现后退出，只保留原进程和 PyInstaller 的父/子 sidecar 对；没有第二个监听 Backend。
-- 原生 Cmd+Q：Nexa 与 sidecar 退出，17800 不再监听；随后重新 open .app，health 恢复。
-- Tauri 实际数据目录：`/Users/zjy/Library/Application Support/com.isidel.nexa`；SQLite 为同目录 `nexa.db`，Alembic 0015。
+- 原生 AXCloseButton：关闭后 Backend health ok；点击 Dock Studiolo 恢复主窗口。
+- `open -n Studiolo.app`：第二个 Studiolo 进程短暂出现后退出，只保留原进程和 PyInstaller 的父/子 sidecar 对；没有第二个监听 Backend。
+- 原生 Cmd+Q：Studiolo 与 sidecar 退出，17800 不再监听；随后重新 open .app，health 恢复。
+- Tauri 实际数据目录：`/Users/zjy/Library/Application Support/com.isidel.studiolo`；SQLite 为同目录 `studiolo.db`，Alembic 0015。
 - data dir 0700、secret.key 0600、core-connections 0700；installation.id 0644（非敏感身份，受 0700 父目录保护）。真实 Core credential 尚未生成，文件权限实现已由 Backend 测试验证。
 - 重启前后 installation.id / secret.key 的 SHA-256 比较相同（不记录内容或 hash），QA Agent 与 SQLite 数据保留。真实 Core connection 持久化仍待连接验收。
-- 天气来源 Open-Meteo 链接通过 Nexa opener 打开 macOS 默认 Chrome，桌面日志确认 system open accepted。Website UI 真实打开 `https://example.com/?nexa=mac-qa#coffee`，Chrome tab URL 确认 query / fragment 完整；测试 URL 经真实 Agent typed update 保存、audit=ok。
-- 真实 Gateway 已 link/enable nexa-tools；runtime inspect：loaded、30 tools、diagnostics=[]。doctor：没有 install-tree 问题，但现有 Codex 插件有 settings upgrade 警告，命令 exit 1。
-- QA Agent `Nexa Mac QA`：ledger/websites/data 各 read/write 六个 scopes，无 delete；凭据位于仓库外 0700 目录、0600 文件，没有写入 Git 或 prompt。
-- 真实自然语言 status 调用首次因 Gateway 连接中断未执行；后续发现既有 riri Agent 白名单只允许七项工具。通过官方 config set 增加 nexa-tools，保留原 allow / deny，未升级 Gateway 或扩大 Nexa scopes；之后真实 model status 调用成功。
-- macOS App 菜单采用官方预定义 Quit / Edit 等行为，App 子菜单与 About / Hide / Quit 名称为 Nexa；实际 “Quit Nexa” 菜单退出后 17800 释放。
+- 天气来源 Open-Meteo 链接通过 Studiolo opener 打开 macOS 默认 Chrome，桌面日志确认 system open accepted。Website UI 真实打开 `https://example.com/?studiolo=mac-qa#coffee`，Chrome tab URL 确认 query / fragment 完整；测试 URL 经真实 Agent typed update 保存、audit=ok。
+- 真实 Gateway 已 link/enable studiolo-tools；runtime inspect：loaded、30 tools、diagnostics=[]。doctor：没有 install-tree 问题，但现有 Codex 插件有 settings upgrade 警告，命令 exit 1。
+- QA Agent `Studiolo Mac QA`：ledger/websites/data 各 read/write 六个 scopes，无 delete；凭据位于仓库外 0700 目录、0600 文件，没有写入 Git 或 prompt。
+- 真实自然语言 status 调用首次因 Gateway 连接中断未执行；后续发现既有 riri Agent 白名单只允许七项工具。通过官方 config set 增加 studiolo-tools，保留原 allow / deny，未升级 Gateway 或扩大 Studiolo scopes；之后真实 model status 调用成功。
+- macOS App 菜单采用官方预定义 Quit / Edit 等行为，App 子菜单与 About / Hide / Quit 名称为 Studiolo；实际 “Quit Studiolo” 菜单退出后 17800 释放。
 - Tauri dev 首次启动与真实 UI 登录通过；热重载曾留下旧 sidecar，已增加 macOS desktop owner PID 与 Unix 存活探测（signal 0 不发送信号），父进程消失后 Uvicorn 正常退出。Windows 启动参数与行为不变；同一 spec / Backend。
 - 新增 packaged smoke：owner 自然退出后 sidecar exit 0，端口释放；原完整 smoke 仍通过。最终 `npm run desktop:dev` 热重载实际复核 PASS：源文件仅触碰 mtime 触发官方 watcher，旧 port 释放，新 owner / Backend health 恢复，只有一个 App。
-- 实际左键与右键点击 status item：均显示“打开 Nexa / 退出 Nexa”；选“退出 Nexa”后 App、sidecar 退出，17800 释放。
+- 实际左键与右键点击 status item：均显示“打开 Studiolo / 退出 Studiolo”；选“退出 Studiolo”后 App、sidecar 退出，17800 释放。
 - 完整 Backend 最终重跑：156 passed，143 warnings，314.89s；Rust release 2 passed；最终 app/dmg 重建 PASS，DMG checksum VALID；app 仍未签名。
 
 ## 真实 OpenClaw / Local SQLite / 离线写入
@@ -96,11 +96,11 @@ CLI / Gateway 2026.9.7，Agent riri，DeepSeek `deepseek-flash`，普通 `opencl
 
 | 自然语言 | 成功工具 / 验证 |
 | --- | --- |
-| 检查 Nexa 状态 | nexa_status：connected=true，Nexa Mac QA，0.5.6，六个 read/write scopes |
-| 查看我的账本分类 | nexa_ledger_categories_list：ok，QA workspace 分类为空 |
-| 记一笔咖啡 38 元 | nexa_ledger_transaction_create：ok，expense 38，未 replay |
-| 把 https://example.com 保存到网站收藏 | nexa_website_create / get：收藏创建并回读 |
-| 在 Mac QA Test 新增 Mac mini 2014 记录 | nexa_data_collections_list / record_create / record_get：model=Macmini7,1 |
+| 检查 Studiolo 状态 | studiolo_status：connected=true，Studiolo Mac QA，0.5.6，六个 read/write scopes |
+| 查看我的账本分类 | studiolo_ledger_categories_list：ok，QA workspace 分类为空 |
+| 记一笔咖啡 38 元 | studiolo_ledger_transaction_create：ok，expense 38，未 replay |
+| 把 https://example.com 保存到网站收藏 | studiolo_website_create / get：收藏创建并回读 |
+| 在 Mac QA Test 新增 Mac mini 2014 记录 | studiolo_data_collections_list / record_create / record_get：model=Macmini7,1 |
 
 - 咖啡 entity：`76452ddf-47da-4ced-ae51-fd70f3933d3b`；Website：`d171ac22-f1a3-487a-ae78-6e6dbebd8338`；DataRecord：`5c067760-dbd9-49b1-bdb1-b5b4f0e48fcb`。这些是 QA 业务标识，用于后续跨设备匹配，不是 bearer 凭据。
 - SQLite 查证三项 write audit 均 status=ok，action_id、target_entity_id 与持久化 result_summary receipt 存在。
@@ -122,14 +122,14 @@ CLI / Gateway 2026.9.7，Agent riri，DeepSeek `deepseek-flash`，普通 `opencl
 
 仍不标记 LOCAL COMPLETE。2026-10-02 用户另行要求提交代码到 GitHub，授权提交并推送当前开发分支；Core / Windows / 离线恢复验收保持待完成。
 
-Sidecar 路径：`src-tauri/binaries/nexa-backend-x86_64-apple-darwin`，可执行权限已验证。构建命令：`.venv/bin/python scripts/build-backend-sidecar.py --target x86_64-apple-darwin`；烟测：`.venv/bin/python scripts/smoke-backend-sidecar.py --target x86_64-apple-darwin`。后续构建复用 PyInstaller 的依赖缓存，必要时可加 `--clean`。
+Sidecar 路径：`src-tauri/binaries/studiolo-backend-x86_64-apple-darwin`，可执行权限已验证。构建命令：`.venv/bin/python scripts/build-backend-sidecar.py --target x86_64-apple-darwin`；烟测：`.venv/bin/python scripts/smoke-backend-sidecar.py --target x86_64-apple-darwin`。后续构建复用 PyInstaller 的依赖缓存，必要时可加 `--clean`。
 
 ## Git 提交与外部设备验收状态（2026-10-02 更新）
 
 - Branch：`codex/v0.5.6-macos-local-client`。
 - 开发基线：`42d2fd261a14f90b0337f2cfda8eb3cc6f1724de`；用户已授权将本轮实现提交并推送该开发分支，提交 SHA 以 Git 日志为准。
 - 本轮实现涉及 33 个文件，包含新增文件与 ICNS binary；最终 diff stat 以提交为准。
-- git diff --check PASS；真实 QA password / JWT / Agent token / secret.key 匹配扫描：Git 与 Nexa logs 均无泄露。
+- git diff --check PASS；真实 QA password / JWT / Agent token / secret.key 匹配扫描：Git 与 Studiolo logs 均无泄露。
 - .venv / node_modules / target / backend build/dist / .app / dmg / QA 数据与截图均未纳入提交。
 - 本次提交记录已完成的 Mac 本机实现和验证；真实 Core / Windows / 离线恢复验收仍待完成，不能据此标记 LOCAL COMPLETE。
 - 本次发布范围仅为开发分支代码；不创建 PR、tag 或 GitHub Release。

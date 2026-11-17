@@ -42,7 +42,7 @@ export function installDesktopInteractions(doc: Document = document, platform: D
 }
 
 export function scrollPageToTop(behavior: ScrollBehavior = 'instant'): void {
-  if (document.documentElement.classList.contains('nexa-desktop')) {
+  if (document.documentElement.classList.contains('studiolo-desktop')) {
     document.querySelector<HTMLElement>('[data-desktop-scroll]')?.scrollTo({ top: 0, behavior })
   } else {
     window.scrollTo({ top: 0, behavior })

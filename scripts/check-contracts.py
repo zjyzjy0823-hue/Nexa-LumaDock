@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nexa Sync Protocol v3 契约校验器（仅标准库，无第三方依赖）。
+"""Studiolo Sync Protocol v3 契约校验器（仅标准库，无第三方依赖）。
 
 用法:
     python3 scripts/check-contracts.py [--contracts-dir DIR] [--notes]
@@ -929,7 +929,7 @@ def run(contracts_dir, want_notes=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="校验 Nexa Sync Protocol v3 契约（cases.json + schema + 样例）"
+        description="校验 Studiolo Sync Protocol v3 契约（cases.json + schema + 样例）"
     )
     parser.add_argument(
         "--contracts-dir",

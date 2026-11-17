@@ -1,10 +1,10 @@
-# Nexa Core（当前 0.6.1；本文原始基线 v0.5.5）
+# Studiolo Core（当前 0.6.1；本文原始基线 v0.5.5）
 
-Nexa 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
+Studiolo 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
 | 宿主 | 启动链 | 数据库 | 监听地址 |
 | --- | --- | --- | --- |
-| Local | `Nexa.exe` → Tauri → `desktop_entry.py` sidecar | AppData 中的 SQLite | `127.0.0.1:17800` |
+| Local | `Studiolo.exe` → Tauri → `desktop_entry.py` sidecar | AppData 中的 SQLite | `127.0.0.1:17800` |
 | Core | Docker → `core_entry.py` → `app.main:app` | 持久化 PostgreSQL | 容器内 `0.0.0.0:8000` |
 
 Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 通过本地 Backend 加入 Core并保存 Client Credential，可用 `POST /api/v1/sync/run` 手动双向同步 Ledger、Websites 和 Data。Core 分配 authoritative revision；本地离线修改保存在 SQLite outbox 中，关闭 Core 不影响本地业务。Local 与 Core 的用户、Workspace ID 独立，远端实体在 Local 重新绑定本地归属；DataRecord 通过 DataCollection 解析归属。
@@ -23,16 +23,16 @@ docker compose -f docker-compose.core.yml up --build -d
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/health
-docker compose -f docker-compose.core.yml exec postgres psql -U nexa -d nexa -Atc 'SELECT version_num FROM alembic_version'
+docker compose -f docker-compose.core.yml exec postgres psql -U studiolo -d studiolo -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`、产品版本 `0.6.1`，迁移版本为 `0018_data_record_tenancy`。PostgreSQL 使用 `nexa-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok`、产品版本 `0.6.1`，迁移版本为 `0018_data_record_tenancy`。PostgreSQL 使用 `studiolo-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 
 每个用户现在有一个自动创建的 Personal Workspace，作为 Dashboard、网站、设备、智能体、数据、自动化和账本的归属边界。现有用户和资源由 `0009` 迁移回填。当前 API 自动选用该 Workspace；多 Workspace 创建和切换尚未实现。Agent 原有的 `workspace` 字符串仍是 UI 配置，独立于新的 `workspace_id`。
 
-Client 表示一份 Nexa 应用安装实例，与 Device（硬件及 Runtime 遥测）和 Agent（AI Runtime）是不同实体。Desktop 在 AppData 中保存稳定的 `installation.id` UUID。它只是身份标识，**不是认证凭证、Token、密钥或同步状态**。当前可用用户 JWT 访问 `GET/PATCH /api/v1/workspace`，以及 `GET/POST /api/v1/clients`、`GET /api/v1/clients/{id}`、`POST /api/v1/clients/{id}/revoke`。Client 管理只作用于当前用户的 Personal Workspace；撤销保留记录，再次用同一 installation ID 注册会返回 409。
+Client 表示一份 Studiolo 应用安装实例，与 Device（硬件及 Runtime 遥测）和 Agent（AI Runtime）是不同实体。Desktop 在 AppData 中保存稳定的 `installation.id` UUID。它只是身份标识，**不是认证凭证、Token、密钥或同步状态**。当前可用用户 JWT 访问 `GET/PATCH /api/v1/workspace`，以及 `GET/POST /api/v1/clients`、`GET /api/v1/clients/{id}`、`POST /api/v1/clients/{id}/revoke`。Client 管理只作用于当前用户的 Personal Workspace；撤销保留记录，再次用同一 installation ID 注册会返回 409。
 
 `Client Identity` 是安装实例 UUID；`Client Credential` 是 Core 一次性签发的 `nc_live_` bearer secret。Core 仅存 SHA-256、末四位和签发时间。它与用户 JWT、`sk_live_` API Key、`nd_live_` Device Token、`na_live_` Agent Token 相互独立。用户 JWT 负责 enrollment、轮换和撤销；Client Credential 可访问 `GET /api/v1/client/me`、`POST /api/v1/client/heartbeat` 以及 Core Sync API。Sync 从认证后的 `Client.workspace_id` 获取归属，不接受客户端自报的归属 ID。
 
@@ -52,15 +52,15 @@ v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`
 
 | 变量 | Local | Core |
 | --- | --- | --- |
-| `NEXA_MODE` | Desktop 强制设为 `local`；Web 开发默认 `local` | 必须为 `core` |
-| `DATABASE_URL` | 默认 `sqlite:///./nexa.db`；Desktop 强制使用 AppData 的 `nexa.db` | 必填 `postgresql+psycopg://...`，禁止 SQLite |
+| `STUDIOLO_MODE` | Desktop 强制设为 `local`；Web 开发默认 `local` | 必须为 `core` |
+| `DATABASE_URL` | 默认 `sqlite:///./studiolo.db`；Desktop 强制使用 AppData 的 `studiolo.db` | 必填 `postgresql+psycopg://...`，禁止 SQLite |
 | `JWT_SECRET` | Desktop 的 `secret.key`；Web 开发需自行配置 | 必填，至少 16 字符；容器重启后应保持不变 |
 | `CORS_ORIGINS` | Desktop 含 Tauri 和本地 Vite origins | 逗号分隔的明确 origins；不允许 `*`，未配置时为空 |
 | `APP_TIMEZONE` | 默认 `Asia/Shanghai` | 默认 `Asia/Shanghai` |
 | `ALLOW_REGISTRATION` | 默认 `true` | 默认 `true`；设为 `false` 可关闭公开注册 |
-| `NEXA_HOST` / `NEXA_PORT` | Desktop 固定 `127.0.0.1:17800` | 入口默认 `0.0.0.0:8000`；Docker Compose 的端口映射和健康检查按 8000 配置 |
+| `STUDIOLO_HOST` / `STUDIOLO_PORT` | Desktop 固定 `127.0.0.1:17800` | 入口默认 `0.0.0.0:8000`；Docker Compose 的端口映射和健康检查按 8000 配置 |
 
-Core 也可在 `backend` 目录安装 `requirements-postgres.txt` 后运行 `python core_entry.py`；此时设置 `NEXA_MODE=core`、PostgreSQL URL 和 JWT secret。配置错误会在连接数据库前退出，错误消息不会打印数据库密码。
+Core 也可在 `backend` 目录安装 `requirements-postgres.txt` 后运行 `python core_entry.py`；此时设置 `STUDIOLO_MODE=core`、PostgreSQL URL 和 JWT secret。配置错误会在连接数据库前退出，错误消息不会打印数据库密码。
 
 ## v0.5.5 升级与协议兼容
 
@@ -74,4 +74,4 @@ Settings 仍为 Local-only：整数主键的 UserPreference/settings_json 同时
 
 ## Agent Data Actions
 
-v0.5.5 的 `0015_agent_data_actions` 为 Agent 添加默认空的 dataScopes 和持久化安全 Action receipts。已有 Agent 不自动授权。`/api/agent/actions/*` 只在 Nexa Local 可用，Core 返回 404；普通 Core CRUD 与 Runtime API 保持原有行为。业务服务与普通 REST 共享，Agent 业务写入与本地 outbox/audit 同事务提交，仍由用户手动 sync。安装、权限与幂等说明见 [Agent Data Actions](agent-data-actions.md)。
+v0.5.5 的 `0015_agent_data_actions` 为 Agent 添加默认空的 dataScopes 和持久化安全 Action receipts。已有 Agent 不自动授权。`/api/agent/actions/*` 只在 Studiolo Local 可用，Core 返回 404；普通 Core CRUD 与 Runtime API 保持原有行为。业务服务与普通 REST 共享，Agent 业务写入与本地 outbox/audit 同事务提交，仍由用户手动 sync。安装、权限与幂等说明见 [Agent Data Actions](agent-data-actions.md)。

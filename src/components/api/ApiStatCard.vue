@@ -29,7 +29,7 @@ const sparkline = computed(() => {
 @media (max-width:560px) {
   .api-stat-card {
     min-height:128px;
-    background:linear-gradient(160deg,rgba(78,99,163,.81),rgba(45,60,118,.79) 62%,rgba(65,54,117,.8));
+    background:var(--workbench-solid);
   }
   .api-stat-card__sparkline { width:75px; opacity:.88; }
 }

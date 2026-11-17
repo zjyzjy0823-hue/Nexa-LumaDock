@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 
 def test_0019_creates_local_event_outbox_and_can_downgrade(tmp_path):
     url = f"sqlite:///{tmp_path / 'migration.db'}"
-    env = {**os.environ, "DATABASE_URL": url, "NEXA_MODE": "local"}
+    env = {**os.environ, "DATABASE_URL": url, "STUDIOLO_MODE": "local"}
     def migrate(direction, revision):
         result = subprocess.run([sys.executable, "-m", "alembic", direction, revision],
                                 cwd=Path(__file__).parents[1], env=env, capture_output=True, text=True)

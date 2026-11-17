@@ -1,9 +1,9 @@
 {
-  "name": "@nexa/openclaw-tools",
+  "name": "@studiolo/openclaw-tools",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Typed Nexa Local data tools for OpenClaw",
+  "description": "Typed Studiolo Local data tools for OpenClaw",
   "openclaw": {
     "extensions": [
       "./dist/index.js"

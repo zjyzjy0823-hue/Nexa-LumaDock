@@ -1,4 +1,4 @@
-//! Nexa Sync Protocol v3 — Rust contract types (strict serde models).
+//! Studiolo Sync Protocol v3 — Rust contract types (strict serde models).
 //!
 //! Normative references:
 //!

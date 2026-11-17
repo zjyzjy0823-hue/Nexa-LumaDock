@@ -20,7 +20,7 @@ RULES = [
     ("sidecar", ["backend/desktop_entry.py", "backend/core_entry.py", "backend/app/main.py", "backend/app/resources.py", "src-tauri/src/backend_startup.rs"]),
     ("windows-packaging", ["src-tauri/tauri.windows.conf.json", "scripts/build-backend-sidecar.ps1"]),
     ("macos-packaging", ["src-tauri/tauri.macos.conf.json"]),
-    ("packaging", ["src-tauri/Cargo.*", "src-tauri/tauri.conf.json", "src-tauri/build.rs", "src-tauri/capabilities/*", "backend/nexa-backend.spec", "backend/requirements*.txt", "scripts/*sidecar*.py", "scripts/desktop*", "package*.json", "vite.config.ts"]),
+    ("packaging", ["src-tauri/Cargo.*", "src-tauri/tauri.conf.json", "src-tauri/build.rs", "src-tauri/capabilities/*", "backend/studiolo-backend.spec", "backend/requirements*.txt", "scripts/*sidecar*.py", "scripts/desktop*", "package*.json", "vite.config.ts"]),
     ("desktop", ["src-tauri/*", "src/desktop/*"]),
 ]
 VERSION_FILES = {"package.json", "package-lock.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "backend/app/main.py"}
@@ -62,7 +62,7 @@ def version_only(path, base, head, worktree, root=ROOT):
     if path == "backend/app/main.py":
         scrub = lambda value: re.sub(r'^APP_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"$', 'APP_VERSION = "VERSION"', value, flags=re.M)
     elif path.endswith("Cargo.lock"):
-        scrub = lambda value: re.sub(r'(name = "nexa-desktop"\nversion = )"[0-9]+\.[0-9]+\.[0-9]+"', r'\1"VERSION"', value)
+        scrub = lambda value: re.sub(r'(name = "studiolo-desktop"\nversion = )"[0-9]+\.[0-9]+\.[0-9]+"', r'\1"VERSION"', value)
     else:
         scrub = lambda value: re.sub(r'^version = "[0-9]+\.[0-9]+\.[0-9]+"$', 'version = "VERSION"', value, count=1, flags=re.M)
     return scrub(before.replace("\r\n", "\n")) == scrub(after.replace("\r\n", "\n"))
@@ -170,7 +170,7 @@ def plan(args, root=ROOT):
     return result
 
 
-def human(result, title="NEXA_CHANGE_IMPACT"):
+def human(result, title="STUDIOLO_CHANGE_IMPACT"):
     lines = [title]
     for key in ("head", "baseline", "risk", "changedAreas", "changedBoundaries", "requiredValidation", "reusedValidation", "invalidatedValidation", "fullCrossDeviceE2ERequired"):
         value = result[key]

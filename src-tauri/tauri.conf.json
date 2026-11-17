@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Nexa",
-  "mainBinaryName": "Nexa",
+  "productName": "Studiolo",
+  "mainBinaryName": "Studiolo",
   "version": "0.6.1",
-  "identifier": "com.isidel.nexa",
+  "identifier": "com.isidel.studiolo",
   "build": {
     "beforeDevCommand": "npm run dev:desktop",
     "devUrl": "http://127.0.0.1:5173",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Nexa",
+        "title": "Studiolo",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -42,7 +42,7 @@
   "bundle": {
     "active": true,
     "externalBin": [
-      "binaries/nexa-backend"
+      "binaries/studiolo-backend"
     ],
     "icon": [
       "icons/32x32.png",

@@ -1,1 +1,1 @@
-"""Nexa Sync Protocol v2 engine, adapters and Core services."""
+"""Studiolo Sync Protocol v2 engine, adapters and Core services."""

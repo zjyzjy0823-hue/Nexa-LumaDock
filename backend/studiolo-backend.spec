@@ -18,6 +18,6 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name='nexa-backend',
+exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name='studiolo-backend',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
           console=False)

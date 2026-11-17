@@ -5,12 +5,14 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parse, compileScript } from '@vue/compiler-sfc'
 
 // The API sends UTC; the ledger UI groups by the viewer's calendar. These cases
 // pin one instant and check what each zone must see.
-const dir = mkdtempSync(path.join(tmpdir(), 'nexa-localtime-'))
+const dir = mkdtempSync(path.join(tmpdir(), 'studiolo-localtime-'))
 const bundle = path.join(dir, 'localTime.mjs')
+const bundleUrl = pathToFileURL(bundle).href
 await build({
   entryPoints: ['src/services/localTime.ts'],
   bundle: true,
@@ -22,6 +24,7 @@ await build({
 // Run the real page's setup/save functions with its real Pinia stores. Only the
 // store's final write is replaced, so this checks both create and edit payloads.
 const saveBundle = path.join(dir, 'ledgerSave.mjs')
+const saveBundleUrl = pathToFileURL(saveBundle).href
 await build({
   stdin: { contents: `
     import LedgerPage from './src/pages/LedgerPage.vue'
@@ -63,7 +66,7 @@ await build({
 for (const tz of ['Asia/Shanghai', 'America/Los_Angeles', 'Pacific/Auckland']) {
   for (const editing of [false, true]) {
     test(`ledger ${editing ? 'edit' : 'create'} payload preserves selected local noon in ${tz}`, () => {
-      const script = `import { save } from ${JSON.stringify(saveBundle)};
+      const script = `import { save } from ${JSON.stringify(saveBundleUrl)};
         const dates = ['2026-11-01', '2026-03-01', '2026-03-08'];
         const results = [];
         for (const date of dates) {
@@ -104,7 +107,7 @@ const CASES = [
 ]
 
 function keysIn(zone, iso) {
-  const script = `import { localDateKey, localMonthKey, localDayKey } from ${JSON.stringify(bundle)};
+  const script = `import { localDateKey, localMonthKey, localDayKey } from ${JSON.stringify(bundleUrl)};
 process.stdout.write(JSON.stringify({ date: localDateKey(${JSON.stringify(iso)}), month: localMonthKey(${JSON.stringify(iso)}), day: localDayKey(${JSON.stringify(iso)}) }))`
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, TZ: zone },
@@ -127,7 +130,7 @@ test('slicing the raw UTC string would have been wrong', () => {
 })
 
 test('unparseable input falls back to the text slice', () => {
-  const script = `import { localMonthKey } from ${JSON.stringify(bundle)};
+  const script = `import { localMonthKey } from ${JSON.stringify(bundleUrl)};
 process.stdout.write(localMonthKey('not-a-date'))`
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
@@ -135,6 +138,7 @@ process.stdout.write(localMonthKey('not-a-date'))`
 })
 
 const settingsBundle = path.join(dir, 'deploymentTimezone.mjs')
+const settingsBundleUrl = pathToFileURL(settingsBundle).href
 await build({
   stdin: { contents: `
     import AccountSettings from './src/components/settings/AccountSettings.vue'
@@ -179,7 +183,7 @@ await build({
     builder.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }))
   } }],
 })
-const deploymentTimezone = await import(settingsBundle)
+const deploymentTimezone = await import(settingsBundleUrl)
 test('account renders the deployment timezone read-only with its explanation', async () => {
   const html = await deploymentTimezone.renderAccount('Pacific/Auckland')
   assert.match(html, /<input[^>]*value="Pacific\/Auckland"[^>]*readonly/)

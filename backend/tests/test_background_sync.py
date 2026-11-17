@@ -558,11 +558,11 @@ async def test_external_engine_lock_returns_existing_manual_409(local):
 def test_central_config_validation(monkeypatch):
     defaults = BackgroundSyncConfig()
     assert defaults.periodic_interval == 30 and defaults.retry_delays[-1] == 60
-    monkeypatch.setenv("NEXA_SYNC_PERIOD_SECONDS", "0.25")
-    monkeypatch.setenv("NEXA_SYNC_RETRY_SECONDS", "0.1,0.2,0.5")
+    monkeypatch.setenv("STUDIOLO_SYNC_PERIOD_SECONDS", "0.25")
+    monkeypatch.setenv("STUDIOLO_SYNC_RETRY_SECONDS", "0.1,0.2,0.5")
     configured = BackgroundSyncConfig.from_env()
     assert configured.periodic_interval == 0.25 and configured.retry_delays == (0.1, 0.2, 0.5)
     for value in ("0", "-1", "nan", "inf", "private_invalid_value"):
-        monkeypatch.setenv("NEXA_SYNC_PERIOD_SECONDS", value)
+        monkeypatch.setenv("STUDIOLO_SYNC_PERIOD_SECONDS", value)
         with pytest.raises(ValueError, match="Invalid background sync intervals"):
             BackgroundSyncConfig.from_env()

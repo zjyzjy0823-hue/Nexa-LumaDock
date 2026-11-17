@@ -18,7 +18,7 @@
 //! `valid_mutations_batch_keeps_entity_data_opaque` and
 //! `semantic_naive_timestamp_is_rejected_by_the_payload_layer`.
 
-use nexa_contracts::*;
+use studiolo_contracts::*;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -692,7 +692,7 @@ fn scalar_formats_are_enforced() {
     assert!(TokenLast4::try_from("S9t0").is_ok());
     assert!(TokenLast4::try_from("S9t").is_err());
 
-    assert!(HttpUrl::try_from("https://github.com/zjyzjy0823-hue/Nexa-LumaDock").is_ok());
+    assert!(HttpUrl::try_from("https://github.com/zjyzjy0823-hue/Studiolo").is_ok());
     assert!(HttpUrl::try_from("ftp://example.com").is_err(), "scheme");
     assert!(HttpUrl::try_from("https://exa mple.com").is_err(), "whitespace");
     assert!(HttpUrl::try_from("http://").is_err(), "scheme without authority");
@@ -1068,8 +1068,8 @@ fn entity_payloads_accept_the_documented_shapes() {
     let website: EntityPayload = parse_entity_data(
         EntityType::Website,
         &json!({
-            "name": "Nexa Roadmap",
-            "url": "https://github.com/zjyzjy0823-hue/Nexa-LumaDock",
+            "name": "Studiolo Roadmap",
+            "url": "https://github.com/zjyzjy0823-hue/Studiolo",
             "icon": null,
             "description": "规划文档",
             "categoryId": null,
@@ -1109,7 +1109,7 @@ fn entity_payloads_accept_the_documented_shapes() {
         ),
         (
             EntityType::Website,
-            json!({"name": "Nexa Roadmap"}),
+            json!({"name": "Studiolo Roadmap"}),
         ),
         (EntityType::DataRecord, json!({"name": "no collectionId"})),
     ] {

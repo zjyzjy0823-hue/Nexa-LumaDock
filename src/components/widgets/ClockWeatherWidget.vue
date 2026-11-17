@@ -93,7 +93,7 @@ const isNight = computed(() => now.value.getHours() < 6 || now.value.getHours() 
 </template>
 
 <style scoped>
-.clock-card { isolation: isolate; min-width: 0; padding: 0; border-color: rgba(255,255,255,.4); background: #334c7d; color: white; }
+.clock-card { isolation: isolate; min-width: 0; padding: 0; border-color: var(--workbench-line); background: var(--workbench-accent); color: var(--workbench-accent-ink); }
 .clock-card::before, .clock-card::after { display: none; }
 .clock-card :deep(.glass-card__body) { position: relative; z-index: 1; height: 100%; }
 .clock-content { position: relative; display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; padding: 20px 24px 26px; }
@@ -101,20 +101,20 @@ const isNight = computed(() => now.value.getHours() < 6 || now.value.getHours() 
 .clock-feature-moon { position: absolute; z-index: 1; top: 17px; right: 16px; width: 69px; height: 69px; pointer-events: none; filter: drop-shadow(0 0 7px rgba(255,232,190,.28)); }
 .clock-scenery { background: #344e7d url('/night-city.png') center center / cover no-repeat; }
 .clock-scenery--day { background: #8bbce9 url('/day-city.png') center center / cover no-repeat; }
-.night-vignette { background: linear-gradient(90deg, rgba(20,35,76,.23), transparent 75%), linear-gradient(180deg, rgba(11,25,59,.17) 0%, transparent 35%, rgba(14,27,57,.12) 63%, rgba(11,25,54,.55) 100%); }
+.night-vignette { background: var(--workbench-solid); }
 .clock-main, .weather-reading, .weather-location { position: relative; z-index: 1; }
 .clock-main { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.clock-time { font-size: clamp(44px, 3.3vw, 51px); font-weight: 430; line-height: 1; letter-spacing: -.045em; font-variant-numeric: tabular-nums; text-shadow: 0 2px 12px rgba(8,20,50,.2); }
-.clock-date { font-size: 16px; font-weight: 450; letter-spacing: -.018em; text-shadow: 0 1px 8px rgba(8,20,50,.3); }
-.weather-reading { display: flex; align-items: center; gap: 10px; margin-top: auto; color: #fff4dc; }
+.clock-time { font-size: clamp(44px, 3.3vw, 51px); font-weight: 430; line-height: 1; letter-spacing: -.045em; font-variant-numeric: tabular-nums; text-shadow: none; }
+.clock-date { font-size: 16px; font-weight: 450; letter-spacing: -.018em; text-shadow: none; }
+.weather-reading { display: flex; align-items: center; gap: 10px; margin-top: auto; color: var(--workbench-muted); }
 .weather-symbol { width: 44px; height: 44px; flex: none; }
-.weather-reading span { display: flex; flex-direction: column; color: white; }
+.weather-reading span { display: flex; flex-direction: column; color: var(--workbench-text); }
 .weather-reading strong { font-size: 24px; font-weight: 490; line-height: 1; letter-spacing: -.045em; }
 .weather-reading small { margin-top: 3px; font-size: 14px; font-weight: 450; }
-.weather-location { display: flex; align-items: center; gap: 8px; align-self: flex-start; margin-top: 19px; padding: 0; color: white; border: 0; background: none; font: inherit; font-size: 14px; font-weight: 500; text-shadow: 0 1px 8px rgba(8,20,50,.35); cursor: pointer; }
+.weather-location { display: flex; align-items: center; gap: 8px; align-self: flex-start; margin-top: 19px; padding: 0; color: var(--workbench-text); border: 0; background: none; font: inherit; font-size: 14px; font-weight: 500; text-shadow: none; cursor: pointer; }
 .weather-location:focus-visible { outline: 2px solid white; outline-offset: 4px; }
-.weather-credit { position: absolute; z-index: 2; right: 10px; bottom: 8px; color: rgba(255,255,255,.82); font-size: 9px; text-decoration: none; text-shadow: 0 1px 4px rgba(8,20,50,.5); }
-.weather-credit:hover { color: white; text-decoration: underline; }
+.weather-credit { position: absolute; z-index: 2; right: 10px; bottom: 8px; color: var(--workbench-muted); font-size: 9px; text-decoration: none; text-shadow: none; }
+.weather-credit:hover { color: var(--workbench-text); text-decoration: underline; }
 @container (max-width: 280px) {
   .clock-content { padding-inline: 16px; }
   .clock-time { font-size: clamp(37px, 17cqw, 48px); }

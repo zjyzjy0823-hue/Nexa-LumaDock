@@ -19,7 +19,7 @@ const rust = spawnSync('rustc', ['--print', 'host-tuple'], { encoding: 'utf8' })
 const target = args[1] || process.env.TAURI_ENV_TARGET_TRIPLE || rust.stdout?.trim()
 if (!target) throw new Error('Install Rust stable or specify --target')
 const venv = path.join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
-const python = process.env.NEXA_PYTHON || (existsSync(venv) ? venv : process.platform === 'win32' ? 'python' : 'python3')
+const python = process.env.STUDIOLO_PYTHON || (existsSync(venv) ? venv : process.platform === 'win32' ? 'python' : 'python3')
 run(python, ['scripts/build-backend-sidecar.py', '--target', target])
 if (action !== 'prepare') {
   run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', action, '--target', target])

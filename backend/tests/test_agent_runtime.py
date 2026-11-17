@@ -173,7 +173,7 @@ def test_adapter_protocol_roundtrip_with_fake_openclaw(client, users):
     sys.path.insert(0, str(adapter_path))
     try:
         from main import run_once
-        from nexa import NexaClient
+        from studiolo import StudioloClient
         from openclaw import ExecutionResult
     finally:
         sys.path.remove(str(adapter_path))
@@ -191,7 +191,7 @@ def test_adapter_protocol_roundtrip_with_fake_openclaw(client, users):
         return httpx.Response(response.status_code, content=response.content,
                               headers=dict(response.headers))
 
-    api = NexaClient(config, httpx.MockTransport(forward))
+    api = StudioloClient(config, httpx.MockTransport(forward))
     try:
         run_once(api, config)
         online = client.get(f"/api/v1/agents/{agent_id}", headers=owner).json()

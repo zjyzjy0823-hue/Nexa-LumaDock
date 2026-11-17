@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 
-LOCAL_DATABASE_URL = "sqlite:///./nexa.db"
+LOCAL_DATABASE_URL = "sqlite:///./studiolo.db"
 LOCAL_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 
@@ -21,6 +21,7 @@ class RuntimeConfig:
     cors_origins: tuple[str, ...]
     app_timezone: str
     allow_registration: bool
+    local_workstation: bool = False
 
 
 def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
@@ -28,9 +29,9 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         load_dotenv()
         environ = os.environ
 
-    mode = environ.get("NEXA_MODE", "local").strip().lower()
+    mode = environ.get("STUDIOLO_MODE", "local").strip().lower()
     if mode not in ("local", "core"):
-        raise RuntimeError(f"Unsupported NEXA_MODE: {mode}")
+        raise RuntimeError(f"Unsupported STUDIOLO_MODE: {mode}")
 
     database_url = environ.get("DATABASE_URL", "")
     if mode == "core":
@@ -63,6 +64,11 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
     if mode == "core" and "*" in origins:
         raise RuntimeError("Core mode does not allow wildcard CORS_ORIGINS")
 
+    local_workstation = (
+        mode == "local"
+        and environ.get("STUDIOLO_LOCAL_WORKSTATION", "false").strip().lower() in ("1", "true", "yes")
+    )
+
     return RuntimeConfig(
         mode=mode,
         database_url=database_url,
@@ -70,4 +76,5 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         cors_origins=origins,
         app_timezone=environ.get("APP_TIMEZONE", "Asia/Shanghai"),
         allow_registration=environ.get("ALLOW_REGISTRATION", "true").lower() == "true",
+        local_workstation=local_workstation,
     )

@@ -1,4 +1,4 @@
-"""Nexa Client self-service endpoints authenticated by Core credential."""
+"""Studiolo Client self-service endpoints authenticated by Core credential."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field

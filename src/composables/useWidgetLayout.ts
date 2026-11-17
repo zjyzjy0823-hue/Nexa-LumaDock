@@ -7,7 +7,7 @@ type Frame = { x: number; y: number; w: number; h: number }
 type Frames = Record<string, Frame>
 type Interaction = { id: string; kind: 'move' | 'resize'; pointerId: number; x: number; y: number; initial: Frames }
 const canvasWidth = 1284
-const guestKey = 'nexa:guest-layout:v1'
+const guestKey = 'studiolo:guest-layout:v1'
 
 export function useWidgetLayout(notify: (message: string) => void) {
   const auth = useAuthStore()

@@ -25,7 +25,7 @@ const { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS, useAuthStore, resolveCon
   syncErrorMessage, syncStatusDisplay, ApiError, createRenderer, createPinia, ref, useSyncConflicts, getSyncStatus,
   conflictFields, conflictTitle, conflictEntityLabel, conflictConfirmation, conflictRequestError, detectedTime } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
-const metadata = { connected: true, coreUrl: 'http://127.0.0.1:8000', clientId: 'client', workspaceId: 'workspace', installationId: 'installation', clientName: 'Nexa Windows', platform: 'windows', appVersion: '0.5.6', connectedAt: '2026-10-02T01:00:00Z' }
+const metadata = { connected: true, coreUrl: 'http://127.0.0.1:8000', clientId: 'client', workspaceId: 'workspace', installationId: 'installation', clientName: 'Studiolo Windows', platform: 'windows', appVersion: '0.5.6', connectedAt: '2026-10-02T01:00:00Z' }
 const status = { enabled: true, running: false, connected: true, blocked: false, pending: 3, conflicts: 0, inFlight: 0, rejected: 0, cursor: 0, queueSeeded: true, lastAttemptAt: null, lastSuccessAt: null, nextRetryAt: null, lastError: null }
 const reply = (value, code = 200) => new Response(JSON.stringify(value), { status: code, headers: { 'Content-Type': 'application/json' } })
 

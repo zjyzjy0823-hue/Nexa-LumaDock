@@ -43,7 +43,7 @@ async function mountPage(t, fetch) {
   return { automation, root, messages, polls, async click(label, index = 0) {
     const button = nodes(root).filter(node => node.type === 'button' && text(node) === label)[index]
     assert.ok(button, `Button ${label} exists`); assert.ok(!button.props.disabled)
-    await button.props.onClick(); await settle()
+    await button.props.onClick({ stopPropagation() {} }); await settle()
   } }
 }
 
@@ -102,11 +102,12 @@ test('simulation on an unselected automation is labelled and stays visible after
     assert.ok(path.endsWith('/executions?runtime=true'))
     return response(path.includes(second.id) ? [] : [execution])
   })
-  await ctx.click('模拟测试', 1)
+  await ctx.click('Simulation target仅模拟')
+  await ctx.click('模拟测试')
   function assertVisible() {
-    assert.ok(nodes(ctx.root).some(node => node.type === 'h2' && text(node) === '执行记录 · Simulation target'))
-    const row = nodes(ctx.root).find(node => node.type === 'tr' && text(node).includes('模拟成功'))
-    assert.ok(row); assert.ok(nodes(row).some(node => node.type === 'small' && text(node) === '模拟'))
+    assert.ok(nodes(ctx.root).some(node => node.type === 'h3' && text(node) === 'Simulation target'))
+    const row = nodes(ctx.root).find(node => node.type === 'button' && text(node).includes('模拟成功'))
+    assert.ok(row); assert.ok(nodes(row).some(node => node.type === 'small' && text(node).includes('模拟')))
     assert.match(text(row), /未执行任何真实动作/)
   }
   assertVisible(); assert.match(ctx.messages.at(-1), /模拟测试完成/)

@@ -67,39 +67,39 @@ function activityPoints(values: number[]) {
 <style scoped>
 .devices-card { min-width: 0; padding: 19px 19px 1px; }
 .devices-card :deep(.glass-card__header) { margin-bottom: 12px; }
-.devices-card :deep(.glass-card__title) { color: #fff; font-size: 18px; font-weight: 580; text-shadow: 0 1px 10px rgba(37,52,94,.16); }
+.devices-card :deep(.glass-card__title) { color: var(--workbench-text); font-size: 18px; font-weight: 580; text-shadow: none; }
 .devices-card :deep(.glass-card__title)::after { content: '›'; margin-left: 11px; font-size: 25px; font-weight: 300; vertical-align: -1px; }
-.view-all { color: rgba(255,255,255,.96); font-size: 14px; font-weight: 450; white-space: nowrap; }
+.view-all { color: var(--workbench-text); font-size: 14px; font-weight: 450; white-space: nowrap; }
 .devices-card :deep(.glass-card__body) { min-height: 0; }
 .device-list { display: grid; height: 100%; grid-template-rows: repeat(4, minmax(42px, 1fr)); gap: 4px; }
-.widget-empty { grid-row: 1 / -1; align-self: center; margin: 0; color: rgba(255,255,255,.9); font-size: 12px; text-align: center; }
-.device-row { display: grid; grid-template-columns: 37px minmax(0,1fr) 62px 72px 60px; align-items: center; gap: 7px; min-width: 0; min-height: 0; padding: 5px 11px; border: 1px solid rgba(255,255,255,.5); border-radius: 15px; background: linear-gradient(110deg, rgba(247,249,255,.76), rgba(231,238,255,.64)); box-shadow: inset 0 1px 0 rgba(255,255,255,.58); transition: transform .2s ease, background .2s ease; }
-.device-row:hover { transform: translateX(2px); background: rgba(255,255,255,.85); }
+.widget-empty { grid-row: 1 / -1; align-self: center; margin: 0; color: var(--workbench-text); font-size: 12px; text-align: center; }
+.device-row { display: grid; grid-template-columns: 37px minmax(0,1fr) 62px 72px 60px; align-items: center; gap: 7px; min-width: 0; min-height: 0; padding: 5px 11px; border: 1px solid var(--workbench-line); border-radius: 15px; background: var(--workbench-solid); box-shadow: inset 0 1px 0 rgba(255,255,255,.58); transition: transform .2s ease, background .2s ease; }
+.device-row:hover { transform: translateX(2px); background: var(--workbench-soft); }
 .device-icon { display: grid; width: 34px; height: 34px; place-items: center; }
-.device-icon--laptop { color: #353a48; }
-.device-icon--phone { color: #61bb38; }
+.device-icon--laptop { color: var(--workbench-text); }
+.device-icon--phone { color: var(--workbench-warn); }
 .android-mark { width: 32px; height: 32px; }
 .windows-mark { display: grid; width: 25px; height: 25px; grid-template-columns: repeat(2,1fr); gap: 2px; transform: perspective(35px) rotateY(-9deg); }
-.windows-mark i { background: #0b9bee; }
-.windows-mark i:nth-child(2), .windows-mark i:nth-child(4) { background: #087aca; }
+.windows-mark i { background: var(--workbench-solid); }
+.windows-mark i:nth-child(2), .windows-mark i:nth-child(4) { background: var(--workbench-muted-surface); }
 .minecraft-mark { width: 34px; height: 34px; filter: drop-shadow(0 2px 2px rgba(38,63,32,.24)); }
 .device-identity { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .device-identity strong, .device-identity small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.device-identity strong { color: #111a2b; font-size: 13px; font-weight: 680; letter-spacing: -.025em; }
-.device-identity small { color: #536176; font-size: 11px; font-weight: 500; }
-.connection-status { display: flex; align-items: center; gap: 5px; color: #24844f; font-size: 11px; font-weight: 540; white-space: nowrap; }
-.connection-status i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #1c9856; }
-.connection-status--offline { color: #7b8392; }
-.connection-status--offline i { background: #9199a6; }
-.device-metrics { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding-left: 9px; border-left: 1px solid rgba(119,139,178,.25); }
-.device-metrics span { color: #637087; font-size: 11px; line-height: 1.22; white-space: nowrap; }
-.device-metrics strong { float: right; margin-left: 4px; color: #202a3b; font-weight: 680; font-variant-numeric: tabular-nums; }
+.device-identity strong { color: var(--workbench-text); font-size: 13px; font-weight: 680; letter-spacing: -.025em; }
+.device-identity small { color: var(--workbench-muted); font-size: 11px; font-weight: 500; }
+.connection-status { display: flex; align-items: center; gap: 5px; color: var(--workbench-good); font-size: 11px; font-weight: 540; white-space: nowrap; }
+.connection-status i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--workbench-muted-surface); }
+.connection-status--offline { color: var(--workbench-muted); }
+.connection-status--offline i { background: var(--workbench-solid); }
+.device-metrics { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding-left: 9px; border-left: 1px solid var(--workbench-line); }
+.device-metrics span { color: var(--workbench-muted); font-size: 11px; line-height: 1.22; white-space: nowrap; }
+.device-metrics strong { float: right; margin-left: 4px; color: var(--workbench-text); font-weight: 680; font-variant-numeric: tabular-nums; }
 .device-visual { display: flex; align-items: center; justify-content: center; min-width: 0; }
 .device-sparkline { width: 60px; height: 28px; overflow: visible; filter: drop-shadow(0 2px 3px rgba(26,129,247,.18)); }
 .device-sparkline polyline { fill: none; stroke: #278dff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.battery { position: relative; display: block; width: 35px; height: 15px; padding: 2px; border: 1.5px solid #5c6677; border-radius: 3px; }
+.battery { position: relative; display: block; width: 35px; height: 15px; padding: 2px; border: 1.5px solid var(--workbench-line); border-radius: 3px; }
 .battery::after { position: absolute; top: 4px; right: -4px; width: 2px; height: 5px; border-radius: 0 2px 2px 0; background: #5c6677; content: ''; }
-.battery i { display: block; height: 100%; border-radius: 1px; background: #28b861; }
+.battery i { display: block; height: 100%; border-radius: 1px; background: var(--workbench-muted-surface); }
 @container (max-width: 440px) {
   .devices-card { padding: 13px 13px 9px; }
   .devices-card :deep(.glass-card__header) { margin-bottom: 8px; }

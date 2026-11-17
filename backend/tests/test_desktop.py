@@ -23,15 +23,16 @@ def test_desktop_detects_exited_process_owner():
 
 
 def test_desktop_config_and_persistence(tmp_path: Path):
-    data_dir = tmp_path / "Nexa Data"
-    original = {key: os.environ.get(key) for key in ("NEXA_MODE", "DATABASE_URL", "JWT_SECRET",
-                                                    "CORS_ORIGINS", "NEXA_INSTALLATION_ID", "NEXA_DATA_DIR")}
+    data_dir = tmp_path / "Studiolo Data"
+    original = {key: os.environ.get(key) for key in ("STUDIOLO_MODE", "STUDIOLO_LOCAL_WORKSTATION", "DATABASE_URL", "JWT_SECRET",
+                                                    "CORS_ORIGINS", "STUDIOLO_INSTALLATION_ID", "STUDIOLO_DATA_DIR")}
     try:
         first = prepare_desktop(data_dir)
-        assert first["NEXA_MODE"] == "local"
-        assert os.environ["NEXA_MODE"] == "local"
-        assert first["NEXA_DATA_DIR"] == str(data_dir.resolve())
-        assert os.environ["NEXA_DATA_DIR"] == str(data_dir.resolve())
+        assert first["STUDIOLO_MODE"] == "local"
+        assert first["STUDIOLO_LOCAL_WORKSTATION"] == "true"
+        assert os.environ["STUDIOLO_MODE"] == "local"
+        assert first["STUDIOLO_DATA_DIR"] == str(data_dir.resolve())
+        assert os.environ["STUDIOLO_DATA_DIR"] == str(data_dir.resolve())
         assert data_dir.is_dir()
         assert (data_dir / "logs").is_dir()
         assert (data_dir / "secret.key").is_file()
@@ -40,8 +41,8 @@ def test_desktop_config_and_persistence(tmp_path: Path):
             assert data_dir.stat().st_mode & 0o777 == 0o700
         assert (data_dir / "core-connections").is_dir()
         assert (data_dir / "installation.id").is_file()
-        assert str(UUID(first["NEXA_INSTALLATION_ID"])) == first["NEXA_INSTALLATION_ID"]
-        assert (data_dir / "installation.id").read_text(encoding="ascii") == first["NEXA_INSTALLATION_ID"]
+        assert str(UUID(first["STUDIOLO_INSTALLATION_ID"])) == first["STUDIOLO_INSTALLATION_ID"]
+        assert (data_dir / "installation.id").read_text(encoding="ascii") == first["STUDIOLO_INSTALLATION_ID"]
         assert first["DATABASE_URL"].startswith("sqlite:///")
         assert "http://tauri.localhost" in first["CORS_ORIGINS"]
         assert "tauri://localhost" in first["CORS_ORIGINS"].split(",")
@@ -57,8 +58,8 @@ def test_desktop_config_and_persistence(tmp_path: Path):
         if os.name != "nt":
             assert (data_dir / "secret.key").stat().st_mode & 0o777 == 0o600
         assert second["JWT_SECRET"] == first["JWT_SECRET"]
-        assert second["NEXA_INSTALLATION_ID"] == first["NEXA_INSTALLATION_ID"]
-        assert second["NEXA_DATA_DIR"] == first["NEXA_DATA_DIR"]
+        assert second["STUDIOLO_INSTALLATION_ID"] == first["STUDIOLO_INSTALLATION_ID"]
+        assert second["STUDIOLO_DATA_DIR"] == first["STUDIOLO_DATA_DIR"]
         with create_engine(second["DATABASE_URL"]).connect() as db:
             assert db.scalar(text("SELECT value FROM desktop_test")) == "persisted"
     finally:
@@ -72,7 +73,7 @@ def test_desktop_config_and_persistence(tmp_path: Path):
 def test_health_is_public(client):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "nexa", "version": "0.6.1"}
+    assert response.json() == {"status": "ok", "service": "studiolo", "version": "0.6.1"}
 
 
 def test_desktop_csp_allows_weather_service_origins():

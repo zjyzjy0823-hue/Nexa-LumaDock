@@ -1,0 +1,125 @@
+/* 将遗留 workbench / glass 变量统一映射到 Opus studiolo.css 设计 Tokens，消除双套视觉割裂 */
+:root {
+  --workbench-wallpaper:
+    radial-gradient(40% 50% at 15% 20%, #9db4ff 0%, transparent 70%),
+    radial-gradient(35% 45% at 85% 15%, #ffc4dd 0%, transparent 70%),
+    radial-gradient(45% 55% at 70% 85%, #a6f0dd 0%, transparent 70%),
+    radial-gradient(40% 40% at 25% 85%, #ffe0a8 0%, transparent 70%),
+    linear-gradient(135deg, #e9edff, #f7ecf5);
+}
+
+:root[data-mode="dark"] {
+  --workbench-wallpaper:
+    radial-gradient(40% 50% at 15% 20%, #2b3a8f 0%, transparent 70%),
+    radial-gradient(35% 45% at 85% 15%, #6a2457 0%, transparent 70%),
+    radial-gradient(45% 55% at 70% 85%, #0f5c50 0%, transparent 70%),
+    radial-gradient(40% 40% at 25% 85%, #5a3b10 0%, transparent 70%),
+    linear-gradient(135deg, #0d1022, #160d1a);
+}
+
+:root[data-theme] {
+  --workbench-bg: var(--bg);
+  --workbench-text: var(--text);
+  --workbench-muted: var(--text-2);
+  --workbench-faint: var(--text-3);
+  --workbench-line: var(--line);
+  --workbench-solid: var(--solid);
+  --workbench-surface: var(--surface);
+  --workbench-muted-surface: var(--surface-3);
+  --workbench-soft: var(--accent-soft);
+  --workbench-accent: var(--accent);
+  --workbench-accent-ink: var(--accent-ink);
+  --workbench-good: var(--ok);
+  --workbench-warn: var(--warn);
+  --workbench-danger: var(--danger);
+  --workbench-good-soft: var(--ok-soft);
+  --workbench-warn-soft: var(--warn-soft);
+  --workbench-danger-soft: var(--danger-soft);
+  --workbench-scrim: var(--scrim);
+  --workbench-radius: var(--r-lg);
+  --workbench-material: var(--material-filter);
+  --workbench-shadow: var(--shadow-1);
+  --workbench-elevated-shadow: var(--shadow-pop);
+  --workbench-overlay: var(--solid);
+
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+  --text-muted: var(--text-3);
+  --accent-deep: var(--accent-hover);
+  --card-glow: var(--accent-soft);
+  --radius-card: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --glass-overlay-filter: var(--material-filter);
+  --glass-card-background: var(--surface);
+  --glass-dialog-background: var(--solid);
+  --glass-popover-background: var(--solid);
+  --glass-card-border: 1px solid var(--line);
+  --glass-tile-border: 1px solid var(--line);
+  --glass-tile-background: var(--surface-2);
+  --glass-tile-hover-background: var(--surface-3);
+  --glass-border: var(--line);
+  --shadow-card: var(--shadow-1);
+  --shadow-card-hover: var(--shadow-2);
+  --glass-tile-shadow: none;
+  --glass-tile-hover-shadow: var(--shadow-1);
+}
+
+:root[data-theme="glass"] {
+  --workbench-bg: var(--workbench-wallpaper);
+  --glass-dialog-background: color-mix(in srgb, var(--solid) 82%, transparent);
+}
+
+.workbench-material {
+  background: var(--surface);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-1);
+}
+
+.workbench-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background-color var(--dur-1), color var(--dur-1), box-shadow var(--dur-1), scale var(--dur-1) var(--ease-out);
+}
+
+.workbench-button:hover:not(:disabled) { background: var(--surface-3); }
+.workbench-button:active:not(:disabled) { scale: calc(1 - .03 * var(--move)); }
+
+.workbench-button--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+
+.workbench-button--primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.workbench-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  background: transparent;
+  transition: background-color var(--dur-1), color var(--dur-1);
+}
+
+.workbench-icon:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+
+:root[data-theme] body { color: var(--text); background: var(--workbench-bg) fixed; }
+:root[data-theme] body::before { display: none; }
+:root[data-theme] :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+:root[data-theme] :where(input, select, textarea) { accent-color: var(--accent); }

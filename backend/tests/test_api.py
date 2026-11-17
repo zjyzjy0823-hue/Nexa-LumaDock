@@ -6,7 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = "sqlite://"
-os.environ["JWT_SECRET"] = "test-secret-for-nexa"
+os.environ["JWT_SECRET"] = "test-secret-for-studiolo"
 os.environ["ALLOW_REGISTRATION"] = "true"
 
 from fastapi.testclient import TestClient
@@ -79,7 +79,7 @@ def test_websites_crud_categories_and_ownership():
         assert category.status_code == 201
         category_id = category.json()["id"]
         assert client.patch(f"/api/v1/website-categories/{category_id}", headers=first, json={"name": "工作资料"}).json()["name"] == "工作资料"
-        created = client.post("/api/v1/websites", headers=first, json={"name": "Nexa", "url": "https://example.com", "categoryId": category_id, "favorite": True, "order": 2})
+        created = client.post("/api/v1/websites", headers=first, json={"name": "Studiolo", "url": "https://example.com", "categoryId": category_id, "favorite": True, "order": 2})
         assert created.status_code == 201
         website_id = created.json()["id"]
         assert client.get("/api/v1/websites", headers=first).json()[0]["id"] == website_id
@@ -89,7 +89,7 @@ def test_websites_crud_categories_and_ownership():
         visited = client.post(f"/api/v1/websites/{website_id}/visit", headers=first)
         assert visited.status_code == 200 and visited.json()["lastVisitedAt"]
         assert client.get("/api/v1/websites?sort=recent", headers=first).json()[0]["id"] == website_id
-        assert len(client.get("/api/v1/websites?search=nex&favorite=true&sort=name", headers=first).json()) == 1
+        assert len(client.get("/api/v1/websites?search=stud&favorite=true&sort=name", headers=first).json()) == 1
         other_read = client.get(f"/api/v1/websites/{website_id}", headers=second)
         assert other_read.status_code == 404
         assert other_read.json()["error"]["code"] == "request_error"
@@ -225,7 +225,7 @@ def test_websocket_ping_pong():
             socket.send_json({"type": "ping", "payload": {"id": 1}})
             event = socket.receive_json()
             assert event["type"] == "pong"
-            assert event["source"] == "nexa"
+            assert event["source"] == "studiolo"
             assert event["payload"] == {"id": 1}
             assert event["timestamp"]
 

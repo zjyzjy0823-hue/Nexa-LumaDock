@@ -22,8 +22,8 @@ def main() -> None:
     backend = ROOT / "backend"
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", *(["--clean"] if args.clean else []),
                     "--distpath", str(backend / "dist"), "--workpath", str(backend / "build"),
-                    str(backend / "nexa-backend.spec")], cwd=backend, check=True)
-    source = backend / "dist" / ("nexa-backend.exe" if os.name == "nt" else "nexa-backend")
+                    str(backend / "studiolo-backend.spec")], cwd=backend, check=True)
+    source = backend / "dist" / ("studiolo-backend.exe" if os.name == "nt" else "studiolo-backend")
     if not source.is_file():
         raise FileNotFoundError(f"Missing PyInstaller executable: {source}")
     destination = sidecar_path(target)

@@ -1,7 +1,7 @@
 [
   {
     "action": "ledger.categories.list",
-    "toolName": "nexa_ledger_categories_list",
+    "toolName": "studiolo_ledger_categories_list",
     "effect": "read",
     "description": "ledger.categories.list. Requires ledger:read.",
     "parameters": {
@@ -13,7 +13,7 @@
   },
   {
     "action": "ledger.transactions.list",
-    "toolName": "nexa_ledger_transactions_list",
+    "toolName": "studiolo_ledger_transactions_list",
     "effect": "read",
     "description": "ledger.transactions.list. Requires ledger:read.",
     "parameters": {
@@ -39,7 +39,7 @@
   },
   {
     "action": "ledger.summary.get",
-    "toolName": "nexa_ledger_summary_get",
+    "toolName": "studiolo_ledger_summary_get",
     "effect": "read",
     "description": "ledger.summary.get. Requires ledger:read.",
     "parameters": {
@@ -65,7 +65,7 @@
   },
   {
     "action": "website.categories.list",
-    "toolName": "nexa_website_categories_list",
+    "toolName": "studiolo_website_categories_list",
     "effect": "read",
     "description": "website.categories.list. Requires websites:read.",
     "parameters": {
@@ -77,7 +77,7 @@
   },
   {
     "action": "website.list",
-    "toolName": "nexa_website_list",
+    "toolName": "studiolo_website_list",
     "effect": "read",
     "description": "website.list. Requires websites:read.",
     "parameters": {
@@ -139,7 +139,7 @@
   },
   {
     "action": "website.get",
-    "toolName": "nexa_website_get",
+    "toolName": "studiolo_website_get",
     "effect": "read",
     "description": "website.get. Requires websites:read.",
     "parameters": {
@@ -160,7 +160,7 @@
   },
   {
     "action": "website.visit",
-    "toolName": "nexa_website_visit",
+    "toolName": "studiolo_website_visit",
     "effect": "write",
     "description": "website.visit. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -181,7 +181,7 @@
   },
   {
     "action": "data.collections.list",
-    "toolName": "nexa_data_collections_list",
+    "toolName": "studiolo_data_collections_list",
     "effect": "read",
     "description": "data.collections.list. Requires data:read.",
     "parameters": {
@@ -193,7 +193,7 @@
   },
   {
     "action": "data.collection.get",
-    "toolName": "nexa_data_collection_get",
+    "toolName": "studiolo_data_collection_get",
     "effect": "read",
     "description": "data.collection.get. Requires data:read.",
     "parameters": {
@@ -214,7 +214,7 @@
   },
   {
     "action": "data.records.list",
-    "toolName": "nexa_data_records_list",
+    "toolName": "studiolo_data_records_list",
     "effect": "read",
     "description": "data.records.list. Requires data:read.",
     "parameters": {
@@ -235,7 +235,7 @@
   },
   {
     "action": "data.record.get",
-    "toolName": "nexa_data_record_get",
+    "toolName": "studiolo_data_record_get",
     "effect": "read",
     "description": "data.record.get. Requires data:read.",
     "parameters": {
@@ -256,7 +256,7 @@
   },
   {
     "action": "ledger.category.create",
-    "toolName": "nexa_ledger_category_create",
+    "toolName": "studiolo_ledger_category_create",
     "effect": "write",
     "description": "ledger.category.create. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -293,7 +293,7 @@
   },
   {
     "action": "ledger.category.update",
-    "toolName": "nexa_ledger_category_update",
+    "toolName": "studiolo_ledger_category_update",
     "effect": "write",
     "description": "ledger.category.update. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -357,7 +357,7 @@
   },
   {
     "action": "ledger.category.delete",
-    "toolName": "nexa_ledger_category_delete",
+    "toolName": "studiolo_ledger_category_delete",
     "effect": "delete",
     "description": "ledger.category.delete. Requires ledger:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {
@@ -378,7 +378,7 @@
   },
   {
     "action": "ledger.transaction.create",
-    "toolName": "nexa_ledger_transaction_create",
+    "toolName": "studiolo_ledger_transaction_create",
     "effect": "write",
     "description": "ledger.transaction.create. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content. Supply type (income/expense), positive amount, description and ISO occurredAt. categoryId is optional; list categories first to select a matching type.",
     "parameters": {
@@ -453,7 +453,7 @@
   },
   {
     "action": "ledger.transaction.update",
-    "toolName": "nexa_ledger_transaction_update",
+    "toolName": "studiolo_ledger_transaction_update",
     "effect": "write",
     "description": "ledger.transaction.update. Requires ledger:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -572,7 +572,7 @@
   },
   {
     "action": "ledger.transaction.delete",
-    "toolName": "nexa_ledger_transaction_delete",
+    "toolName": "studiolo_ledger_transaction_delete",
     "effect": "delete",
     "description": "ledger.transaction.delete. Requires ledger:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {
@@ -593,7 +593,7 @@
   },
   {
     "action": "website.category.create",
-    "toolName": "nexa_website_category_create",
+    "toolName": "studiolo_website_category_create",
     "effect": "write",
     "description": "website.category.create. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -620,7 +620,7 @@
   },
   {
     "action": "website.category.update",
-    "toolName": "nexa_website_category_update",
+    "toolName": "studiolo_website_category_update",
     "effect": "write",
     "description": "website.category.update. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -667,7 +667,7 @@
   },
   {
     "action": "website.category.delete",
-    "toolName": "nexa_website_category_delete",
+    "toolName": "studiolo_website_category_delete",
     "effect": "delete",
     "description": "website.category.delete. Requires websites:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {
@@ -688,7 +688,7 @@
   },
   {
     "action": "website.create",
-    "toolName": "nexa_website_create",
+    "toolName": "studiolo_website_create",
     "effect": "write",
     "description": "website.create. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -764,7 +764,7 @@
   },
   {
     "action": "website.update",
-    "toolName": "nexa_website_update",
+    "toolName": "studiolo_website_update",
     "effect": "write",
     "description": "website.update. Requires websites:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -860,7 +860,7 @@
   },
   {
     "action": "website.delete",
-    "toolName": "nexa_website_delete",
+    "toolName": "studiolo_website_delete",
     "effect": "delete",
     "description": "website.delete. Requires websites:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {
@@ -881,7 +881,7 @@
   },
   {
     "action": "data.collection.create",
-    "toolName": "nexa_data_collection_create",
+    "toolName": "studiolo_data_collection_create",
     "effect": "write",
     "description": "data.collection.create. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -921,7 +921,7 @@
   },
   {
     "action": "data.collection.update",
-    "toolName": "nexa_data_collection_update",
+    "toolName": "studiolo_data_collection_update",
     "effect": "write",
     "description": "data.collection.update. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -995,7 +995,7 @@
   },
   {
     "action": "data.collection.delete",
-    "toolName": "nexa_data_collection_delete",
+    "toolName": "studiolo_data_collection_delete",
     "effect": "delete",
     "description": "data.collection.delete. Requires data:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {
@@ -1016,9 +1016,9 @@
   },
   {
     "action": "data.record.create",
-    "toolName": "nexa_data_record_create",
+    "toolName": "studiolo_data_record_create",
     "effect": "write",
-    "description": "data.record.create. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content. Supply collectionId from nexa_data_collections_list; dataJson is a structured object.",
+    "description": "data.record.create. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content. Supply collectionId from studiolo_data_collections_list; dataJson is a structured object.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
@@ -1061,7 +1061,7 @@
   },
   {
     "action": "data.record.update",
-    "toolName": "nexa_data_record_update",
+    "toolName": "studiolo_data_record_update",
     "effect": "write",
     "description": "data.record.update. Requires data:write. Returns entityId/entityType receipt; use a read tool to fetch content.",
     "parameters": {
@@ -1135,7 +1135,7 @@
   },
   {
     "action": "data.record.delete",
-    "toolName": "nexa_data_record_delete",
+    "toolName": "studiolo_data_record_delete",
     "effect": "delete",
     "description": "data.record.delete. Requires data:delete. Destructive deletion; requires separate delete permission.",
     "parameters": {

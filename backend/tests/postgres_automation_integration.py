@@ -1,6 +1,6 @@
 """Real Core/PostgreSQL, background Local A/B, Adapter and process crash E2E.
 
-Use NEXA_BACKGROUND_SIDECAR to run replicas from the packaged Windows backend.
+Use STUDIOLO_BACKGROUND_SIDECAR to run replicas from the packaged Windows backend.
 """
 from contextlib import closing
 from datetime import timedelta
@@ -52,7 +52,7 @@ def main():
     # PostgreSQL assertions include parallel schedule scan, SKIP LOCKED claim,
     # fencing, lease takeover, all internal response-loss receipts and loops.
     unit = subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/test_automation_engine.py", "tests/test_automation_webhook_tls.py", "--tb=short"],
-        cwd=BACKEND, env={**os.environ, "NEXA_MODE": "local", "NEXA_AUTOMATION_TEST_DATABASE": url}, capture_output=True, text=True)
+        cwd=BACKEND, env={**os.environ, "STUDIOLO_MODE": "local", "STUDIOLO_AUTOMATION_TEST_DATABASE": url}, capture_output=True, text=True)
     if unit.returncode:
         raise AssertionError("Automation PostgreSQL transactional suite failed")
     print("Automation SQLite/PostgreSQL transactional and multi-worker suite: PASS", flush=True)
@@ -63,9 +63,9 @@ def main():
     factory = sessionmaker(engine, autoflush=False, expire_on_commit=False)
     password, jwt = secrets.token_urlsafe(24), secrets.token_hex(32)
     credentials = [password, jwt]
-    with TemporaryDirectory(prefix="nexa-automation-") as temporary:
+    with TemporaryDirectory(prefix="studiolo-automation-") as temporary:
         directory = Path(temporary)
-        core = Server(directory, "core", core_env={"NEXA_MODE": "core", "DATABASE_URL": url,
+        core = Server(directory, "core", core_env={"STUDIOLO_MODE": "core", "DATABASE_URL": url,
             "JWT_SECRET": jwt, "CORS_ORIGINS": "http://localhost:5173"})
         a, b = Server(directory, "local-a"), Server(directory, "local-b")
         try:
@@ -108,11 +108,11 @@ def main():
             eventually(lambda: succeeded(a, dispatch), "Agent task dispatch")
             sys.path.insert(0, str(BACKEND.parent / "agent-adapters" / "openclaw"))
             from main import run_once
-            from nexa import NexaClient
+            from studiolo import StudioloClient
             from openclaw import ExecutionResult
             config = {"serverUrl": core.origin, "agentToken": token, "runtimeInstance": "automation-integration",
                       "pollIntervalSeconds": 5, "executionTimeoutSeconds": 10}
-            adapter = NexaClient(config)
+            adapter = StudioloClient(config)
             try: run_once(adapter, config, lambda *_args: ExecutionResult("Deterministic Adapter completed"))
             finally: adapter.close()
             completed = eventually(lambda: succeeded(a, completion), "Adapter completion event -> Data update")
@@ -158,7 +158,7 @@ def main():
             print("Queued schedule -> Core killed -> restart -> one action; offline editing + proxy recovery: PASS", flush=True)
 
             for replica in (a, b):
-                with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+                with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
                     for table in ("automation_executions", "automation_events", "automation_action_receipts", "automation_schedule_state"):
                         assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
             for server in (core, a, b):

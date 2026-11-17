@@ -76,8 +76,8 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+def create_access_token(user_id: int, expires_delta: timedelta | None = None) -> str:
+    expires = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=24))
     return jwt.encode({"sub": str(user_id), "exp": expires}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 

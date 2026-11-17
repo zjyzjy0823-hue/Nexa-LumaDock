@@ -3,12 +3,17 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import AuthGate from './components/auth/AuthGate.vue'
 import ConfirmDialog from './components/ui/ConfirmDialog.vue'
-import Sidebar from './components/layout/Sidebar.vue'
-import TopSearchBar from './components/layout/TopSearchBar.vue'
 import DesktopTitleBar from './components/desktop/DesktopTitleBar.vue'
 import { desktopPlatform } from './desktop/platform'
 import { scrollPageToTop } from './desktop/desktopInteractions'
+import OpusShell from './components/layout/OpusShell.vue'
+import OpusSegment from './components/ui/OpusSegment.vue'
+import OpusIcon from './components/ui/OpusIcon.vue'
+import OpusSyncBadge from './components/ui/OpusSyncBadge.vue'
+import { libraryItems } from './components/layout/opusNavigation'
+import OpusModulePage from './pages/OpusModulePage.vue'
 import DashboardPage from './pages/DashboardPage.vue'
+import TodayPage from './pages/TodayPage.vue'
 import WebsitesPage from './pages/WebsitesPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
 import AgentsPage from './pages/AgentsPage.vue'
@@ -27,11 +32,13 @@ import { useSettingsStore } from './stores/settings'
 import { useDataStore } from './stores/data'
 import { useAutomationStore } from './stores/automation'
 import { useLedgerStore } from './stores/ledger'
+import { nextWorkbenchTheme, useWorkbenchTheme, workbenchThemeLabel } from './composables/useWorkbenchTheme'
+import type { WorkbenchTheme } from './composables/useWorkbenchTheme'
 
-type Page = 'Home' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings'
+type Page = 'Home' | 'Dashboard' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings' | 'Space' | 'Chat'
 const pagePaths: Record<Page, string> = {
-  Home: '/', Websites: '/websites', Devices: '/devices', Agents: '/agents',
-  Data: '/data', Ledger: '/ledger', Automation: '/automation', API: '/api', Settings: '/settings',
+  Home: '/', Dashboard: '/dashboard', Websites: '/websites', Devices: '/devices', Agents: '/agents',
+  Data: '/data', Ledger: '/ledger', Automation: '/automation', API: '/api', Settings: '/settings', Space: '/space', Chat: '/chat',
 }
 const pageByPath = Object.fromEntries(Object.entries(pagePaths).map(([key, value]) => [value, key])) as Record<string, Page>
 function pageFromLocation(): Page {
@@ -41,20 +48,49 @@ function pageFromLocation(): Page {
 }
 
 const currentPage = ref<Page>(pageFromLocation())
-const desktop = isTauri()
+const android = desktopPlatform() === 'android'
+const desktop = isTauri() && !android
 const auth = useAuthStore()
+const settings = useSettingsStore()
+const { theme, setTheme } = useWorkbenchTheme()
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
+const prefersDark = ref(systemDark.matches)
+const syncSettings = ref(new URLSearchParams(window.location.search).get('section') === 'sync')
+const mobileMedia = window.matchMedia('(max-width: 700px)')
+const mobile = ref(android || (mobileMedia.matches && !desktop))
+const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
+const storedMotion = localStorage.getItem('studiolo:reduced-motion')
+const motionReduced = ref(storedMotion === null ? motionMedia.matches : storedMotion === 'true')
+const libraryQuery = ref('')
+const libraryDetailOpen = ref(false)
+const shellRef = ref<InstanceType<typeof OpusShell> | null>(null)
+const storedPreviewMode = localStorage.getItem('studiolo:preview-mode')
+const previewMode = ref<'light' | 'dark' | null>(
+  storedPreviewMode === 'light' || storedPreviewMode === 'dark' ? storedPreviewMode : null
+)
+const mode = computed(() => {
+  if (!auth.token) {
+    if (previewMode.value) return previewMode.value
+    return prefersDark.value ? 'dark' : 'light'
+  }
+  const appearance = settings.settings.appearance.theme
+  return appearance === 'auto' || !appearance ? (prefersDark.value ? 'dark' : 'light') : appearance
+})
 const authReady = ref(false)
 const authStartupError = ref('')
 const desktopError = ref('')
 let backendTimer: ReturnType<typeof setInterval> | undefined
 let restoringSession = false
 const currentComponent = computed(() => ({
+  Home: TodayPage, Dashboard: DashboardPage,
   Websites: WebsitesPage, Devices: DevicesPage, Agents: AgentsPage,
   Data: DataPage, Ledger: LedgerPage, Automation: AutomationPage,
-  API: ApiPage, Settings: SettingsPage,
-})[currentPage.value as Exclude<Page, 'Home'>])
-const pageRef = ref<{ openCreate: () => void } | null>(null)
+  API: ApiPage, Settings: SettingsPage, Space: OpusModulePage, Chat: OpusModulePage,
+})[currentPage.value])
+const pageRef = ref<{ openCreate?: (value?: string) => void; openCreateRecord?: () => void } | null>(null)
+const settingsPageRef = ref<InstanceType<typeof SettingsPage> | null>(null)
 const toast = ref('')
+const toastKey = ref(0)
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 watch(() => auth.user?.id, (current, previous) => {
   if (previous !== undefined && current !== previous) {
@@ -67,36 +103,130 @@ watch(() => auth.user?.id, (current, previous) => {
     useAutomationStore().reset()
     useLedgerStore().reset()
   }
+  if (current !== undefined && auth.token) void settings.load(auth.token).catch(() => {})
 })
+watch([theme, mode, motionReduced, () => settings.settings.appearance], ([value, colorMode, reduced, appearance]) => {
+  const root = document.documentElement
+  const blur = appearance.blur ?? 26
+  root.dataset.theme = root.dataset.workbenchTheme = value
+  root.dataset.mode = root.dataset.workbenchMode = colorMode
+  root.dataset.blur = root.dataset.workbenchBlur = blur > 0 ? 'on' : 'off'
+  root.dataset.motion = reduced ? 'reduced' : 'full'
+  root.style.setProperty('--workbench-blur', blur + 'px')
+  document.querySelector('meta[name="theme-color"]')?.setAttribute(
+    'content',
+    colorMode === 'dark' ? '#0d1117' : value === 'paper' ? '#f3f2ee' : '#fdfdfe',
+  )
+}, { immediate: true })
+
+function setReducedMotion(value: boolean) {
+  motionReduced.value = value
+  localStorage.setItem('studiolo:reduced-motion', String(value))
+}
+function updateSystemMotion(event: MediaQueryListEvent) {
+  if (localStorage.getItem('studiolo:reduced-motion') === null) motionReduced.value = event.matches
+}
+function updateSystemTheme(event: MediaQueryListEvent) {
+  prefersDark.value = event.matches
+}
+function updateMobile(event: MediaQueryListEvent) {
+  mobile.value = android || (event.matches && !desktop)
+  if (!mobile.value) libraryDetailOpen.value = false
+}
 
 function showToast(message: string) {
   toast.value = message
+  toastKey.value++
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { toast.value = '' }, 3000)
 }
-function navigate(page: string) {
-  if (!(page in pagePaths)) { showToast('此页面正在准备中。'); return }
-  const target = page as Page
-  currentPage.value = target
-  if (window.location.pathname !== pagePaths[target] || window.location.hash) {
-    window.history.pushState({ page: target }, '', pagePaths[target])
+async function toggleColorMode() {
+  const next = mode.value === 'dark' ? 'light' : 'dark'
+  if (!auth.token) {
+    previewMode.value = next
+    localStorage.setItem('studiolo:preview-mode', next)
+    showToast(`已预览${next === 'dark' ? '深色' : '浅色'}模式`)
+    return
   }
-  void nextTick(() => scrollPageToTop())
+  try {
+    await settings.update(auth.token, { theme: next, appearance: { ...settings.settings.appearance, theme: next } })
+    previewMode.value = next
+    localStorage.setItem('studiolo:preview-mode', next)
+    showToast(`已切换为${next === 'dark' ? '深色' : '浅色'}模式`)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '切换失败')
+  }
+}
+function setThemeWithToast(next: WorkbenchTheme) {
+  if (next === theme.value) return
+  setTheme(next)
+  showToast(`已切换为 ${workbenchThemeLabel(next)} 主题`)
+}
+function toggleWorkbenchTheme() {
+  setThemeWithToast(nextWorkbenchTheme(theme.value))
+}
+function setReducedMotionWithToast(value: boolean) {
+  setReducedMotion(value)
+  showToast(value ? '已开启减弱动画' : '已开启完整动画')
+}
+async function navigate(page: string, section?: 'sync', back = false) {
+  if (!Object.hasOwn(pagePaths, page)) return
+  const target = page as Page
+  const toSync = target === 'Settings' && section === 'sync'
+  const url = pagePaths[target] + (toSync ? '?section=sync' : '')
+  if (currentPage.value === target && syncSettings.value === toSync) return
+  const pushed = target === 'Settings' || target === 'Space' || target === 'Agents' || target === 'API' || target === 'Dashboard'
+  const update = async () => {
+    currentPage.value = target
+    syncSettings.value = toSync
+    libraryDetailOpen.value = false
+    if (!libraryItems.some(item => item.page === target)) libraryQuery.value = ''
+    if (window.location.pathname + window.location.search !== url || window.location.hash) {
+      window.history.pushState({ page: target }, '', url)
+    }
+    await nextTick()
+    scrollPageToTop()
+    document.querySelector('.main')?.scrollTo(0, 0)
+    document.querySelector('.mpage')?.scrollTo(0, 0)
+  }
+  if (document.startViewTransition && !motionReduced.value) {
+    const transition = document.startViewTransition({ update, types: mobile.value ? [back ? 'backward' : pushed ? 'forward' : 'tab'] : [] })
+    await transition.updateCallbackDone
+  } else await update()
 }
 function onLocationChange() {
-  currentPage.value = pageFromLocation()
-  void nextTick(() => scrollPageToTop())
+  const target = pageFromLocation()
+  const toSync = new URLSearchParams(window.location.search).get('section') === 'sync'
+  if (target === currentPage.value && toSync === syncSettings.value) return
+  const update = async () => {
+    currentPage.value = target
+    syncSettings.value = toSync
+    libraryDetailOpen.value = false
+    await nextTick()
+    document.querySelector('.main, .mpage')?.scrollTo(0, 0)
+  }
+  if (mobile.value && document.startViewTransition && !motionReduced.value) {
+    document.startViewTransition({ update, types: ['backward'] })
+  } else void update()
+}
+async function openSyncSettings() {
+  await navigate('Settings', 'sync')
+  settingsPageRef.value?.selectSection('sync')
+}
+function back() {
+  if (window.history.state?.page) window.history.back()
+  else void navigate('Home', undefined, true)
 }
 async function restoreSession() {
   if (restoringSession) return
   restoringSession = true
   authReady.value = false
   authStartupError.value = ''
-  try { if (auth.token) await auth.restore() }
+  try { await auth.bootstrap() }
   catch (error) {
-    if (auth.token) authStartupError.value = error instanceof ApiError && (error.status === 0 || error.status >= 500)
-      ? '无法连接到 Nexa 后端，请确认服务已启动。'
-      : error instanceof Error ? error.message : '无法连接到 Nexa 后端。'
+    authStartupError.value = error instanceof ApiError && (error.status === 0 || error.status >= 500)
+      ? '无法连接到 Studiolo 后端，请确认服务已启动。'
+      : error instanceof Error ? error.message : '无法连接到 Studiolo 后端。'
   } finally { authReady.value = true; restoringSession = false }
 }
 async function checkDesktopBackend() {
@@ -106,23 +236,28 @@ async function checkDesktopBackend() {
     desktopError.value = status === 'ready' || status === 'starting' ? '' : status
     if (status === 'ready' && !authReady.value) await restoreSession()
   } catch {
-    desktopError.value = '无法读取 Nexa Backend 状态。请重新启动 Nexa。'
+    desktopError.value = '无法读取 Studiolo Backend 状态。请重新启动 Studiolo。'
   }
 }
-async function create(kind: string) {
+async function create(kind: string, value?: string) {
   const destination: Record<string, Page> = {
-    website: 'Websites', device: 'Devices', agent: 'Agents',
-    collection: 'Data', automation: 'Automation',
+    ledger: 'Ledger', website: 'Websites', device: 'Devices', agent: 'Agents',
+    collection: 'Data', record: 'Data', automation: 'Automation',
     '网站快捷方式': 'Websites', '数据集': 'Data', '自动化': 'Automation',
   }
   if (!destination[kind]) return
-  navigate(destination[kind])
+  if (kind === 'record' && auth.token) await useDataStore().load(auth.token).catch(() => {})
+  await navigate(destination[kind])
   await nextTick()
-  pageRef.value?.openCreate?.()
+  if (kind === 'record') pageRef.value?.openCreateRecord?.()
+  else pageRef.value?.openCreate?.(value)
 }
 onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
+  systemDark.addEventListener('change', updateSystemTheme)
+  mobileMedia.addEventListener('change', updateMobile)
+  motionMedia.addEventListener('change', updateSystemMotion)
   if (isTauri()) {
     await checkDesktopBackend()
     backendTimer = setInterval(checkDesktopBackend, 2000)
@@ -133,6 +268,9 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
   window.removeEventListener('hashchange', onLocationChange)
+  systemDark.removeEventListener('change', updateSystemTheme)
+  mobileMedia.removeEventListener('change', updateMobile)
+  motionMedia.removeEventListener('change', updateSystemMotion)
   if (toastTimer) clearTimeout(toastTimer)
   if (backendTimer) clearInterval(backendTimer)
 })
@@ -141,36 +279,58 @@ onUnmounted(() => {
 <template>
   <ConfirmDialog />
   <div :class="desktop ? 'desktop-app' : undefined">
-  <DesktopTitleBar v-if="desktopPlatform() === 'windows'" />
-  <div v-if="desktopPlatform() === 'macos'" class="macos-titlebar-inset" data-tauri-drag-region aria-hidden="true" />
+  <div v-if="(desktopError || !authReady || authStartupError || !auth.user) && desktopPlatform() === 'macos'" class="macos-titlebar-inset" data-tauri-drag-region aria-hidden="true" />
   <div :class="desktop ? 'desktop-body' : undefined">
-  <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
-  <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Nexa…</div>
-  <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></section></div>
-  <AuthGate v-else-if="!auth.user" />
-  <DashboardPage v-else-if="currentPage === 'Home'" @navigate="navigate" @create="create" />
-  <div v-else class="workspace-shell nexa-shell">
-    <Sidebar :active-item="currentPage" @select="navigate" />
-    <main class="workspace-main">
-      <TopSearchBar v-if="currentPage !== 'API' && currentPage !== 'Settings'" :current-page="currentPage" @navigate="navigate" @create="create" />
-      <div class="workspace-content" data-desktop-scroll><component :is="currentComponent" :key="currentPage" ref="pageRef" @action="showToast" @navigate="navigate" /></div>
-    </main>
+  <template v-if="desktopError || !authReady || authStartupError || !auth.user">
+    <div :class="!mobile && desktopPlatform() !== 'macos' ? 'opus-auth-shell' : undefined">
+      <template v-if="!mobile && desktopPlatform() !== 'macos'">
+        <div class="glass-wallpaper" aria-hidden="true"></div>
+        <DesktopTitleBar :theme="theme" :mode="mode" :reduced-motion="motionReduced" :workstation="auth.workstation" :setup-required="auth.setupRequired"
+          @set-theme="setThemeWithToast" @toggle-mode="toggleColorMode"
+          @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)" @action="showToast" />
+      </template>
+      <div :class="!mobile && desktopPlatform() !== 'macos' ? 'opus-auth-body' : undefined">
+        <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
+        <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Studiolo…</div>
+        <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></section></div>
+        <AuthGate v-else />
+      </div>
+    </div>
+  </template>
+  <OpusShell v-else ref="shellRef" :page="currentPage" :mobile="mobile" :toast="toast" :toast-key="toastKey" :theme="theme" :mode="mode" :reduced-motion="motionReduced"
+    @navigate="navigate" @create="create" @action="showToast" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
+    <template #default="{ syncStatus, syncLabel, syncKind, openSync, openAdd, inLibrary }">
+      <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @add="openAdd" @sync="openSync" @ask-agent="shellRef?.openDock()" />
+      <OpusModulePage v-else-if="currentPage === 'Space' || currentPage === 'Chat'" :page="currentPage" :mobile="mobile" @navigate="navigate" @back="back" />
+      <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">
+        <template v-if="!libraryDetailOpen">
+          <div class="mhead"><h1>资料</h1><span class="spacer"></span><button class="mpill" type="button" @click="openSync"><OpusSyncBadge :kind="syncKind" :label="syncLabel" /></button></div>
+          <div class="msearch"><OpusIcon name="search" /><input v-model="libraryQuery" placeholder="搜索账本、网站、记录…" aria-label="搜索"></div>
+          <button class="vault-entry mat" type="button" @click="navigate('Space')">
+            <span class="lk"><OpusIcon name="lock" /></span>
+            <span style="flex:1;min-width:0"><div style="font-weight:650;font-size:15px">共享空间</div><div class="faint" style="font-size:12.5px">查看需输入密码 · 待接入</div></span><OpusIcon name="chevR" />
+          </button>
+          <OpusSegment class="mseg" role="group" aria-label="资料类型"><button v-for="item in libraryItems" :key="item.page" type="button" :aria-pressed="currentPage === item.page" @click="navigate(item.page)">{{ item.label }}</button></OpusSegment>
+        </template>
+        <component :is="currentComponent" :key="currentPage" ref="pageRef" mobile :search="libraryQuery" @action="showToast" @mobile-detail="libraryDetailOpen = $event" />
+      </div>
+      <SettingsPage v-else-if="currentPage === 'Settings'" ref="settingsPageRef" :sync-status="syncStatus" :sync-label="syncLabel" :mobile="mobile" :reduced-motion="motionReduced" :open-sync="syncSettings" @update:reduced-motion="setReducedMotion" @action="showToast" @navigate="navigate" @back="back" />
+      <DataPage v-else-if="currentPage === 'Data'" ref="pageRef" @action="showToast" />
+      <div v-else :class="mobile ? 'opus-subpage-host' : 'page'">
+        <component :is="currentComponent" :key="currentPage" ref="pageRef" :mobile="mobile" @action="showToast" @navigate="navigate" @back="back" />
+      </div>
+    </template>
+  </OpusShell>
   </div>
   </div>
-  </div>
-  <Transition name="workspace-toast"><div v-if="toast" class="workspace-toast" role="status">✦ <span>{{ toast }}</span></div></Transition>
+  <div v-if="toast && !auth.user" class="auth-toast" role="status">{{ toast }}</div>
 </template>
 
 <style scoped>
-.auth-loading { display:grid; min-height:100dvh; place-items:center; color:white; background:#1c2a5e url('/nexa-wallpaper.png') center/cover; font-size:14px; }
+.auth-loading { display:grid; min-height:100dvh; place-items:center; color:var(--text); background:var(--bg); font-size:14px; }
 .auth-loading--error { align-content:center; gap:14px; }
 .auth-loading--error p { margin:0; }
-.auth-error-panel { display:grid; justify-items:center; gap:18px; width:min(520px,calc(100vw - 40px)); padding:28px; border:var(--glass-card-border); border-radius:var(--radius-xl); background:var(--glass-dialog-background); color:var(--text-primary); box-shadow:var(--shadow-glass); backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); line-height:1.7; text-align:center; }
-.auth-loading--error button { padding:9px 16px; border:var(--glass-tile-border); border-radius:9px; color:#30436c; background:var(--glass-tile-background); cursor:pointer; }
-.workspace-main { min-width:0; }
-.workspace-content { min-width:0; padding-bottom:12px; }
-.workspace-toast { position:fixed; z-index:80; right:28px; bottom:25px; display:flex; gap:8px; align-items:center; max-width:min(360px,calc(100vw - 32px)); padding:12px 16px; border:1px solid rgba(255,255,255,.64); border-radius:14px; color:#314263; background:rgba(249,251,255,.9); box-shadow:0 15px 32px rgba(30,42,89,.22); backdrop-filter:blur(22px); font-size:12px; font-weight:630; }
-.workspace-toast-enter-active,.workspace-toast-leave-active { transition:opacity .2s,transform .2s; }
-.workspace-toast-enter-from,.workspace-toast-leave-to { opacity:0; transform:translateY(10px); }
-@media (max-width:700px) { .workspace-main { margin-top:7px; } }
+.auth-error-panel { display:grid; justify-items:center; gap:18px; width:min(520px,calc(100vw - 40px)); padding:28px; border-radius:var(--r-xl); background:var(--solid); color:var(--text); box-shadow:var(--shadow-pop); line-height:1.7; text-align:center; }
+.auth-loading--error button { padding:9px 16px; border-radius:var(--r-sm); color:var(--text); background:var(--surface-3); cursor:pointer; }
+.auth-toast { position:fixed; right:24px; bottom:24px; color:var(--inv); background:var(--text); padding:9px 14px; border-radius:var(--r-md); box-shadow:var(--shadow-pop); font-size:13px; }
 </style>

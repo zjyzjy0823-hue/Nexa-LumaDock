@@ -60,7 +60,7 @@ and verified CI PASS. It does not create a tag, merge or publish anything.
 Exit 0 means reporting succeeded (even if checks are pending); invalid input,
 stale evidence, failed executed checks or failed verified CI return nonzero.
 
-Settings → About includes **Nexa Diagnostics**, Refresh and Copy Diagnostics.
+Settings → About includes **Studiolo Diagnostics**, Refresh and Copy Diagnostics.
 The authenticated read-only snapshot shows backend/database health, local/Core
 workspace and client presence, queue counts, last sync success, protocol
 compatibility and actual automation task status. An older Core without the new

@@ -21,14 +21,14 @@ from app.utils.time import aware_utc
 UTC = timezone.utc
 
 
-@pytest.fixture(params=["sqlite"] + (["postgres"] if os.getenv("NEXA_AUTOMATION_TEST_DATABASE") else []))
+@pytest.fixture(params=["sqlite"] + (["postgres"] if os.getenv("STUDIOLO_AUTOMATION_TEST_DATABASE") else []))
 def network(request, tmp_path, monkeypatch):
     schema = "automation_" + uuid4().hex
     if request.param == "postgres":
-        admin = create_engine(os.environ["NEXA_AUTOMATION_TEST_DATABASE"])
+        admin = create_engine(os.environ["STUDIOLO_AUTOMATION_TEST_DATABASE"])
         with admin.begin() as db:
             db.execute(text(f'CREATE SCHEMA "{schema}"'))
-        db_engine = create_engine(os.environ["NEXA_AUTOMATION_TEST_DATABASE"], connect_args={"options": "-csearch_path=" + schema})
+        db_engine = create_engine(os.environ["STUDIOLO_AUTOMATION_TEST_DATABASE"], connect_args={"options": "-csearch_path=" + schema})
     else:
         db_engine = create_engine("sqlite:///" + (tmp_path / "runtime.db").as_posix())
     Base.metadata.create_all(db_engine)

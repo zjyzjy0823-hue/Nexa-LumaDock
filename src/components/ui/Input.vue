@@ -18,10 +18,11 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 </script>
 
 <template>
-  <div class="glass-input" :class="{ 'glass-input--search': type === 'search', 'glass-input--disabled': disabled }">
-    <Search v-if="type === 'search'" :size="16" :stroke-width="1.9" aria-hidden="true" />
+  <div class="opus-input-wrap" :class="{ 'opus-input-wrap--search': type === 'search', 'opus-input-wrap--disabled': disabled }">
+    <Search v-if="type === 'search'" :size="15" :stroke-width="1.9" aria-hidden="true" />
     <input
       :id="id"
+      class="input"
       :name="name"
       :autocomplete="autocomplete"
       :value="modelValue"
@@ -37,11 +38,9 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 </template>
 
 <style scoped>
-.glass-input { display:flex; align-items:center; gap:8px; min-width:0; min-height:39px; padding:0 11px; border:1px solid rgba(156,177,216,.36); border-radius:11px; color:#6380bb; background:rgba(255,255,255,.76); box-shadow:inset 0 1px 0 rgba(255,255,255,.85),0 5px 14px rgba(31,49,103,.07); transition:border-color .18s,background .18s,box-shadow .18s; }
-.glass-input:focus-within { border-color:color-mix(in srgb,var(--accent-color) 66%,white); background:rgba(255,255,255,.9); box-shadow:0 0 0 3px rgba(113,145,237,.14),inset 0 1px 0 rgba(255,255,255,.9); }
-.glass-input--disabled { opacity:.55; }
-.glass-input svg { flex:none; }
-.glass-input input { width:100%; min-width:0; padding:0; border:0; outline:0; color:var(--text-primary); background:transparent; font-size:12px; }
-.glass-input input::placeholder { color:#8594aa; }
-.glass-input input::-webkit-search-cancel-button { display:none; }
+.opus-input-wrap { position: relative; min-width: 0; }
+.opus-input-wrap--search svg { position: absolute; left: 10px; top: 50%; translate: 0 -50%; color: var(--text-3); pointer-events: none; }
+.opus-input-wrap--search .input { padding-left: 32px; }
+.opus-input-wrap--disabled { opacity: .55; }
+.opus-input-wrap .input::-webkit-search-cancel-button { display: none; }
 </style>

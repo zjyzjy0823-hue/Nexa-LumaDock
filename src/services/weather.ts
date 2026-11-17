@@ -5,8 +5,8 @@ export interface LocationWeather {
   approximate?: boolean
 }
 
-const cacheKey = 'nexa.location-weather'
-const failureKey = 'nexa.location-weather-failure'
+const cacheKey = 'studiolo.location-weather'
+const failureKey = 'studiolo.location-weather-failure'
 const cacheAge = 30 * 60 * 1000
 
 function conditionFor(code: number): string {

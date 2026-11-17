@@ -1,4 +1,4 @@
-# Nexa v0.5.7 Background Auto Sync
+# Studiolo v0.5.7 Background Auto Sync
 
 > **状态（2026-11-15 复核）**：本文是 2026-10-02 的 v0.5.6 后台自动同步 记录，正文里的版本号、协议号、迁移号以及“尚未启用/未实现/不支持”类描述均为**当时**快照。当前仓库为 **0.6.1**、**Sync Protocol 3**、Alembic head **`0018_data_record_tenancy`**、**9 个同步实体**；后台自动同步与 Conflict Center 已启用，另有 `GET /api/v1/sync/snapshot` 与 `POST /api/v1/sync/resync`。以 README 与代码为准。
 
@@ -32,8 +32,8 @@ of indefinite retries. Manual sync joins the same active cycle or explicitly
 requests the same engine. New writes during a cycle retain a follow-up request.
 
 Central timing overrides, primarily useful for isolated integration tests, are
-`NEXA_SYNC_INITIAL_DELAY_SECONDS`, `NEXA_SYNC_DEBOUNCE_SECONDS`,
-`NEXA_SYNC_PERIOD_SECONDS` and `NEXA_SYNC_RETRY_SECONDS` (a comma-separated list).
+`STUDIOLO_SYNC_INITIAL_DELAY_SECONDS`, `STUDIOLO_SYNC_DEBOUNCE_SECONDS`,
+`STUDIOLO_SYNC_PERIOD_SECONDS` and `STUDIOLO_SYNC_RETRY_SECONDS` (a comma-separated list).
 Unset variables use the defaults above.
 
 Windows close-to-tray and macOS close-main-window hide the window and keep the
@@ -54,7 +54,7 @@ for later user handling; this version does not merge or resolve conflicts.
 
 Use an isolated PostgreSQL 16 database with permission to create a temporary
 database for the upgrade regression. Do not point these scripts at a user's Core
-database. Set `NEXA_MODE=core`, `DATABASE_URL=postgresql+psycopg://...`,
+database. Set `STUDIOLO_MODE=core`, `DATABASE_URL=postgresql+psycopg://...`,
 `JWT_SECRET` to a temporary secret, and `ALLOW_REGISTRATION=true`, then run from
 `backend`:
 
@@ -93,7 +93,7 @@ The script shortens test timings to 0.2-second initial delay, 0.1-second debounc
 unchanged. CI runs it in the existing `backend-postgres` job, after the original
 regressions. Coordinator deterministic tests remain in the existing Backend job.
 
-After building a native sidecar, set `NEXA_BACKGROUND_SIDECAR` to its absolute
+After building a native sidecar, set `STUDIOLO_BACKGROUND_SIDECAR` to its absolute
 executable path and rerun `postgres_background_sync_integration.py` with the same
 isolated PostgreSQL environment. Both Local replicas then execute that packaged
 binary instead of source Python; Core still runs the production source backend.
@@ -146,7 +146,7 @@ Python dependency warnings did not prevent the regressions from passing.
 | Both background runs: normal Local exit code 0, released test ports and password/JWT/Client credential/Authorization log scan | PASS |
 | Physical Windows ↔ Core ↔ Mac background sync and current macOS desktop regression | NOT VERIFIED |
 
-The packaged run executes the final `nexa-backend-x86_64-pc-windows-msvc.exe`;
+The packaged run executes the final `studiolo-backend-x86_64-pc-windows-msvc.exe`;
 it is a real frozen-runtime integration rather than a source-only unit test.
 No remote CI run, push, pull request, tag or release was performed by these local
 verification steps.

@@ -51,21 +51,21 @@ const icons: Record<AutomationIcon, Component> = {
 .automation-card { min-height: 175px; padding: 17px 18px 15px; border: var(--glass-tile-border); background: var(--glass-tile-background); box-shadow: var(--glass-tile-shadow); }
 .automation-card :deep(.glass-card__body) { display: flex; flex-direction: column; overflow: visible; }
 .automation-card__top { display: flex; align-items: flex-start; justify-content: space-between; }
-.automation-card__icon { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid rgba(130,154,227,.15); border-radius: 13px; color: #6984dc; background: rgba(255,255,255,.57); box-shadow: inset 0 1px 0 rgba(255,255,255,.6); }
-.automation-card__icon--nas,.automation-card__icon--cloud,.automation-card__icon--file { color: #3c9c94; }
-.automation-card__icon--agent,.automation-card__icon--workflow,.automation-card__icon--webhook { color: #8a67c4; }
-.automation-card__icon--notification,.automation-card__icon--calendar { color: #c78d4d; }
-.automation-switch { display: flex; align-items: center; width: 36px; height: 21px; padding: 2px; border: 1px solid rgba(126,145,177,.19); border-radius: 999px; background: #c4cfdf; box-shadow: inset 0 2px 4px rgba(51,68,110,.12); transition: background .2s ease,box-shadow .2s ease; }
-.automation-switch--on { background:linear-gradient(110deg,#77a5f5,#8b83e8); box-shadow:0 3px 9px rgba(100,124,216,.23); }
-.automation-switch span { width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(31,42,89,.18); transition: transform .2s ease; }
+.automation-card__icon { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--workbench-line); border-radius: 13px; color: var(--workbench-good); background: var(--workbench-muted-surface); box-shadow: inset 0 1px 0 rgba(255,255,255,.6); }
+.automation-card__icon--nas,.automation-card__icon--cloud,.automation-card__icon--file { color: var(--workbench-good); }
+.automation-card__icon--agent,.automation-card__icon--workflow,.automation-card__icon--webhook { color: var(--workbench-accent); }
+.automation-card__icon--notification,.automation-card__icon--calendar { color: var(--workbench-danger); }
+.automation-switch { display: flex; align-items: center; width: 36px; height: 21px; padding: 2px; border: 1px solid var(--workbench-line); border-radius: 999px; background: var(--workbench-solid); box-shadow: inset 0 2px 4px rgba(51,68,110,.12); transition: background .2s ease,box-shadow .2s ease; }
+.automation-switch--on { background:var(--workbench-solid); box-shadow:0 3px 9px rgba(100,124,216,.23); }
+.automation-switch span { width: 15px; height: 15px; border-radius: 50%; background: var(--workbench-solid); box-shadow: 0 1px 4px rgba(31,42,89,.18); transition: transform .2s ease; }
 .automation-switch--on span { transform: translateX(15px); }
 .automation-card__heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.automation-card__heading h3 { margin: 0; color: #2e405f; font-size: 14px; font-weight: 720; letter-spacing: -.025em; }
-.automation-card__status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid rgba(163,178,207,.24); border-radius: 999px; color: #6d7b95; background: rgba(255,255,255,.58); font-size: 9px; font-weight: 650; white-space: nowrap; }
+.automation-card__heading h3 { margin: 0; color: var(--workbench-text); font-size: 14px; font-weight: 720; letter-spacing: -.025em; }
+.automation-card__status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--workbench-line); border-radius: 999px; color: var(--workbench-muted); background: var(--workbench-solid); font-size: 9px; font-weight: 650; white-space: nowrap; }
 .automation-card__status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.automation-card__status--on { color: #238f71; background: rgba(219,248,234,.82); }
-.automation-card__description { margin: 5px 0 0; color: #405572; font-size: 11px; font-weight: 520; line-height: 1.45; }
-.automation-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; padding-top: 12px; color: #4a5d79; font-size: 10px; font-weight: 570; }
+.automation-card__status--on { color: var(--workbench-good); background: var(--workbench-solid); }
+.automation-card__description { margin: 5px 0 0; color: var(--workbench-muted); font-size: 11px; font-weight: 520; line-height: 1.45; }
+.automation-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; padding-top: 12px; color: var(--workbench-text); font-size: 10px; font-weight: 570; }
 .automation-card__footer span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
 .automation-card__footer span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .automation-card__actions { display:flex; flex-wrap:wrap; gap:6px; padding-top:12px; }

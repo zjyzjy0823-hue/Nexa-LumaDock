@@ -45,10 +45,10 @@ const latest = computed(() => props.points.at(-1))
 <style scoped>
 .api-usage-chart { min-height:261px; }
 .api-usage-chart :deep(.glass-card__body) { overflow:visible; }
-.api-usage-chart__range { padding:5px 8px; border:1px solid rgba(255,255,255,.4); border-radius:7px; color:rgba(255,255,255,.88); background:rgba(255,255,255,.14); font-size:9px; font-weight:650; white-space:nowrap; }
+.api-usage-chart__range { padding:5px 8px; border:1px solid var(--workbench-line); border-radius:7px; color:var(--workbench-text); background:var(--workbench-solid); font-size:9px; font-weight:650; white-space:nowrap; }
 .api-usage-chart__summary { display:flex; gap:13px; margin:4px 0 8px; }
-.api-usage-chart__summary div { display:flex; align-items:center; gap:5px; min-width:0; color:rgba(255,255,255,.78); font-size:9px; white-space:nowrap; }
-.api-usage-chart__summary strong { margin-left:2px; color:white; font-size:12px; font-weight:740; }
+.api-usage-chart__summary div { display:flex; align-items:center; gap:5px; min-width:0; color:var(--workbench-muted); font-size:9px; white-space:nowrap; }
+.api-usage-chart__summary strong { margin-left:2px; color:var(--workbench-text); font-size:12px; font-weight:740; }
 .api-usage-chart__dot { width:6px; height:6px; flex:none; border-radius:50%; }
 .api-usage-chart__dot--requests { background:#9bb1fa; }.api-usage-chart__dot--errors { background:#f3a5b2; }
 .api-usage-chart__plot { display:block; width:100%; max-height:180px; overflow:visible; }

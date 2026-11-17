@@ -17,11 +17,11 @@
 
 ## Windows UI + 真实 Docker Core
 
-运行 `npm run desktop:dev`，使用本次创建的独立测试账户，在 Windows Nexa WebView 真实点击操作。Docker 使用仓库 `docker-compose.core.yml`；Core 为 `127.0.0.1:8000` + PostgreSQL 16，Local sidecar 为 `127.0.0.1:17800` + SQLite。API 仅用于准备测试账户和读回结果；connect、connection test、sync、disconnect、重连及本地业务数据创建均通过 UI。
+运行 `npm run desktop:dev`，使用本次创建的独立测试账户，在 Windows Studiolo WebView 真实点击操作。Docker 使用仓库 `docker-compose.core.yml`；Core 为 `127.0.0.1:8000` + PostgreSQL 16，Local sidecar 为 `127.0.0.1:17800` + SQLite。API 仅用于准备测试账户和读回结果；connect、connection test、sync、disconnect、重连及本地业务数据创建均通过 UI。
 
 | 验收步骤 | 真实结果 |
 | --- | --- |
-| 未连接 Sync 页面 | 显示 Core 地址、用户名、密码、Nexa Windows 默认设备名；状态可加载，立即同步禁用 |
+| 未连接 Sync 页面 | 显示 Core 地址、用户名、密码、Studiolo Windows 默认设备名；状态可加载，立即同步禁用 |
 | UI 连接 Core | connected=true，显示 Windows / 0.5.6 / 连接时间；主界面隐藏密码表单 |
 | UI 测试连接 | 连接正常 |
 | UI 本地写入 | Ledger transaction 1、Website 1、Data collection 1、Data record 1；pending=4 |
@@ -35,7 +35,7 @@
 | 错误 Core 密码 | UI 明确提示用户名或密码不正确，密码框清空，Local 登录保持 |
 | UI 重连 | connected=true，Client ID / Installation ID / Workspace ID 与首次连接相同；再次测试连接正常 |
 | Windows shell 交互 | 自定义标题栏正常；关闭到托盘后窗口隐藏、进程保留，再次启动唤回原窗口，进程 PID 相同、仅一个实例 |
-| 外部浏览器 | UI 点击测试 Website，链接交给 Microsoft Edge，Nexa 保持在网站页面 |
+| 外部浏览器 | UI 点击测试 Website，链接交给 Microsoft Edge，Studiolo 保持在网站页面 |
 | 最后一次 UI 同步 | Website 访问产生 1 条修改；上传 1、接收 1，最终 pending=0、cursor=6；Core Data record=1 |
 
 连接/同步操作按钮在 invocation 期间禁用；成功和失败返回均刷新 Local status。手动同步结果不会用 Settings refresh 替代。组件只保存短期表单状态，未连接时 Local pending 仍可查看。

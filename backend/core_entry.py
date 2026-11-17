@@ -1,4 +1,4 @@
-"""Nexa Core host for the shared FastAPI application."""
+"""Studiolo Core host for the shared FastAPI application."""
 
 import os
 from typing import Mapping
@@ -9,16 +9,16 @@ from app.config import load_runtime_config
 def core_bind(environ: Mapping[str, str] | None = None) -> tuple[str, int]:
     values = os.environ if environ is None else environ
     if load_runtime_config(values).mode != "core":
-        raise RuntimeError("core_entry requires NEXA_MODE=core")
-    host = values.get("NEXA_HOST", "0.0.0.0").strip()
+        raise RuntimeError("core_entry requires STUDIOLO_MODE=core")
+    host = values.get("STUDIOLO_HOST", "0.0.0.0").strip()
     if not host:
-        raise RuntimeError("NEXA_HOST must not be empty")
+        raise RuntimeError("STUDIOLO_HOST must not be empty")
     try:
-        port = int(values.get("NEXA_PORT", "8000"))
+        port = int(values.get("STUDIOLO_PORT", "8000"))
     except ValueError:
-        raise RuntimeError("NEXA_PORT must be an integer from 1 to 65535") from None
+        raise RuntimeError("STUDIOLO_PORT must be an integer from 1 to 65535") from None
     if not 1 <= port <= 65535:
-        raise RuntimeError("NEXA_PORT must be an integer from 1 to 65535")
+        raise RuntimeError("STUDIOLO_PORT must be an integer from 1 to 65535")
     return host, port
 
 

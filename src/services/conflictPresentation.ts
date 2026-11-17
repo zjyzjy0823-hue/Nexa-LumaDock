@@ -113,7 +113,7 @@ export function conflictRequestError(error: unknown) {
   if (!(error instanceof ApiError)) return '冲突操作未完成，请重试。'
   if (Object.prototype.hasOwnProperty.call(safeErrors, error.message)) return safeErrors[error.message]!
   switch (error.status) {
-    case 0: return '无法连接到 Nexa 本机后端。'
+    case 0: return '无法连接到 Studiolo 本机后端。'
     case 401: return '本机登录已过期，请重新登录。'
     case 404: return '此冲突已处理或不可访问，请刷新冲突列表。'
     case 409: return '冲突状态发生变化，请查看最新版本后重新确认。'

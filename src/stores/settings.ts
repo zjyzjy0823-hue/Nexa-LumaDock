@@ -6,7 +6,7 @@ import type { SettingsPayload } from '../types/settings'
 export const defaultSettings: SettingsPayload = {
   theme: 'system', language: 'zh-CN', timezone: 'Asia/Shanghai',
   notifications: { events: { agentComplete: true, deviceOffline: true, automationFailure: true, budgetAlert: false, securityAlert: true }, channels: { desktop: true, email: false, telegram: false, webhook: false } },
-  appearance: { theme: 'auto', transparency: 62, blur: 18, accent: 'blue', background: 'sky' },
+  appearance: { theme: 'auto', transparency: 62, blur: 26, accent: 'blue', background: 'sky' },
   sync: { mode: 'local', serverUrl: '', automatic: false, cellular: false, lastSynced: '尚未同步' },
   security: { twoFactor: false, requireRemoteConfirmation: true, trustedDevices: 0, activeSessions: 1, apiTokens: 0 },
 }

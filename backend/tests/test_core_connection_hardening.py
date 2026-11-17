@@ -49,8 +49,8 @@ def connect_payload():
 def test_failed_local_save_recovers_with_explicit_rotation(client, monkeypatch, tmp_path, caplog):
     app.dependency_overrides[require_core_mode] = lambda: None
     installation_id = str(uuid4())
-    monkeypatch.setenv("NEXA_INSTALLATION_ID", installation_id)
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_INSTALLATION_ID", installation_id)
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     remote_headers = register(client, "remote_owner")
     local_headers = register(client, "local_owner")
     calls, tokens = [], []
@@ -116,8 +116,8 @@ def test_failed_local_save_recovers_with_explicit_rotation(client, monkeypatch, 
 def test_revoked_client_cannot_be_recovered(client, monkeypatch, tmp_path):
     app.dependency_overrides[require_core_mode] = lambda: None
     installation_id = str(uuid4())
-    monkeypatch.setenv("NEXA_INSTALLATION_ID", installation_id)
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_INSTALLATION_ID", installation_id)
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     remote_headers = register(client, "remote_owner")
     local_headers = register(client, "local_owner")
     enrolled = client.post("/api/v1/clients/enroll", headers=remote_headers, json={
@@ -138,8 +138,8 @@ def test_revoked_client_cannot_be_recovered(client, monkeypatch, tmp_path):
 
 
 def test_unmatched_enrollment_conflict_never_rotates(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_INSTALLATION_ID", str(uuid4()))
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_INSTALLATION_ID", str(uuid4()))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     local_headers = register(client, "local_owner")
     calls = []
     workspace_id = str(uuid4())
@@ -147,7 +147,7 @@ def test_unmatched_enrollment_conflict_never_rotates(client, monkeypatch, tmp_pa
     def handle(request: httpx.Request) -> httpx.Response:
         calls.append(request.url.path)
         if request.url.path == "/api/health":
-            return httpx.Response(200, json={"status": "ok", "service": "nexa"})
+            return httpx.Response(200, json={"status": "ok", "service": "studiolo"})
         if request.url.path == "/api/v1/auth/login":
             return httpx.Response(200, json={"access_token": "short-lived-jwt"})
         if request.url.path == "/api/v1/workspace":
@@ -191,7 +191,7 @@ def sample_metadata() -> dict:
 
 
 def test_metadata_validation_and_legacy_upgrade(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     headers = register(client, "metadata_owner")
     path = tmp_path / "core-connections" / "1" / "connection.json"
     path.parent.mkdir(parents=True)
@@ -221,7 +221,7 @@ def test_metadata_validation_and_legacy_upgrade(client, monkeypatch, tmp_path):
 
 
 def test_file_credential_store_and_staging_failure(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     store = FileCredentialStore()
     assert store.load(7) is None
     store.save(7, "nc_live_first")
@@ -242,14 +242,14 @@ def test_file_credential_store_and_staging_failure(monkeypatch, tmp_path):
     with pytest.raises(OSError):
         store.save(7, "nc_live_third")
     assert store.load(7) == "nc_live_second"
-    assert not list(path.parent.glob(".nexa-*"))
+    assert not list(path.parent.glob(".studiolo-*"))
     store.delete(7)
     assert store.load(7) is None
     store.delete(7)
 
 
 def test_both_files_staged_before_commit_and_existing_pair_survives_failure(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     store = FileCredentialStore()
     monkeypatch.setattr(core_connection, "credential_store", store)
     metadata_path = tmp_path / "core-connections" / "1" / "connection.json"
@@ -269,12 +269,12 @@ def test_both_files_staged_before_commit_and_existing_pair_survives_failure(monk
     assert error.value.status_code == 500
     assert store.load(1) == "nc_live_old"
     assert core_connection.load_connection(1) == old
-    assert not list(metadata_path.parent.glob(".nexa-*"))
+    assert not list(metadata_path.parent.glob(".studiolo-*"))
     monkeypatch.setattr(core_connection, "stage_file", original_stage)
 
 
 def test_metadata_commit_failure_restores_previous_credential(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     store = FileCredentialStore()
     monkeypatch.setattr(core_connection, "credential_store", store)
     old = core_connection.CoreConnectionMetadata.model_validate(sample_metadata())
@@ -295,11 +295,11 @@ def test_metadata_commit_failure_restores_previous_credential(monkeypatch, tmp_p
     assert error.value.status_code == 500
     assert store.load(1) == "nc_live_old"
     assert core_connection.load_connection(1) == old
-    assert not list(metadata_path.parent.glob(".nexa-*"))
+    assert not list(metadata_path.parent.glob(".studiolo-*"))
 
 
 def test_core_offline_keeps_local_dashboard_available(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("STUDIOLO_DATA_DIR", str(tmp_path))
     headers = register(client, "offline_owner")
     metadata = core_connection.CoreConnectionMetadata.model_validate(sample_metadata())
     path = tmp_path / "core-connections" / "1" / "connection.json"

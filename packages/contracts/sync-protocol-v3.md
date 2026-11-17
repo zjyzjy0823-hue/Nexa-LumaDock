@@ -304,7 +304,7 @@ Core 在 `apply` 前比较 `baseRevision` 与当前 `sync_revision`：
 ```bash
 python3 scripts/check-contracts.py     # 规范 + 样例 + 语义规则
 node    scripts/check-contracts.mjs    # 同一份 cases.json 的独立实现
-cargo test -p nexa-contracts           # Rust 侧 serde 结构严格性
+cargo test -p studiolo-contracts           # Rust 侧 serde 结构严格性
 bash scripts/ci-local.sh --contracts-only   # 三件套一次跑完
 ```
 

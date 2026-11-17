@@ -69,19 +69,19 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: nexa
-          POSTGRES_PASSWORD: nexa-ci-password
-          POSTGRES_DB: nexa
+          POSTGRES_USER: studiolo
+          POSTGRES_PASSWORD: studiolo-ci-password
+          POSTGRES_DB: studiolo
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U nexa -d nexa"
+          --health-cmd "pg_isready -U studiolo -d studiolo"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
     env:
-      NEXA_MODE: core
-      DATABASE_URL: postgresql+psycopg://nexa:nexa-ci-password@127.0.0.1:5432/nexa
+      STUDIOLO_MODE: core
+      DATABASE_URL: postgresql+psycopg://studiolo:studiolo-ci-password@127.0.0.1:5432/studiolo
       CORS_ORIGINS: http://localhost:5173
       ALLOW_REGISTRATION: 'true'
     steps:
@@ -175,10 +175,10 @@ jobs:
       - name: Verify installer and sidecar
         shell: pwsh
         run: |
-          if (-not (Test-Path 'src-tauri/binaries/nexa-backend-x86_64-pc-windows-msvc.exe')) { throw 'Sidecar missing' }
+          if (-not (Test-Path 'src-tauri/binaries/studiolo-backend-x86_64-pc-windows-msvc.exe')) { throw 'Sidecar missing' }
           $installer = Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe' | Select-Object -First 1
           if (-not $installer) { throw 'NSIS installer missing' }
       - uses: actions/upload-artifact@v4
         with:
-          name: nexa-desktop-windows
+          name: studiolo-desktop-windows
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe

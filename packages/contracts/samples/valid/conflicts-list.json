@@ -5,8 +5,8 @@
       "entityType": "website",
       "entityId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
       "local": {
-        "name": "Nexa Roadmap",
-        "url": "https://github.com/zjyzjy0823-hue/Nexa-LumaDock",
+        "name": "Studiolo Roadmap",
+        "url": "https://github.com/zjyzjy0823-hue/Studiolo",
         "icon": null,
         "description": "规划文档",
         "categoryId": null,
@@ -18,8 +18,8 @@
       },
       "localDeleted": false,
       "remote": {
-        "name": "Nexa Roadmap (Core)",
-        "url": "https://github.com/zjyzjy0823-hue/Nexa-LumaDock",
+        "name": "Studiolo Roadmap (Core)",
+        "url": "https://github.com/zjyzjy0823-hue/Studiolo",
         "icon": null,
         "description": "规划文档",
         "categoryId": null,

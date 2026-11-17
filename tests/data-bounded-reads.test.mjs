@@ -23,7 +23,7 @@ const bundle = await build({
   plugins: [{ name: 'vue-script', setup(builder) {
     builder.onLoad({ filter: /\.vue$/ }, ({ path: filename }) => {
       const { descriptor } = parse(readFileSync(filename, 'utf8'), { filename })
-      return { contents: compileScript(descriptor, { id: filename, inlineTemplate: /\/(DataTable|GlassCard|ActionButton|StatusBadge)\.vue$/.test(filename) }).content, loader: 'ts' }
+      return { contents: compileScript(descriptor, { id: filename, inlineTemplate: /[\\/](DataTable|GlassCard|ActionButton|StatusBadge)\.vue$/.test(filename) }).content, loader: 'ts' }
     })
   } }],
 })

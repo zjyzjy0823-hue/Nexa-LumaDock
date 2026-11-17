@@ -12,7 +12,7 @@ from sqlalchemy.engine import make_url
 
 
 BACKEND = Path(__file__).resolve().parents[1]
-DATABASE_NAME = f"nexa_upgrade_{uuid4().hex[:12]}"
+DATABASE_NAME = f"studiolo_upgrade_{uuid4().hex[:12]}"
 base_url = make_url(os.environ["DATABASE_URL"])
 assert base_url.drivername == "postgresql+psycopg"
 admin_engine = create_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
@@ -156,7 +156,7 @@ try:
     sys.path.insert(0, str(BACKEND))
     from test_multi_entity_upgrade import verify_upgrade
     for mode in ("local", "core"):
-        multi_database = "nexa_multi_upgrade_" + uuid4().hex[:12]
+        multi_database = "studiolo_multi_upgrade_" + uuid4().hex[:12]
         with admin_engine.connect() as connection:
             connection.execute(text(f'CREATE DATABASE "{multi_database}"'))
         try:
@@ -166,7 +166,7 @@ try:
                 connection.execute(text(f'DROP DATABASE "{multi_database}" WITH (FORCE)'))
     from test_personal_state_upgrade import verify_personal_upgrade
     for mode in ("local", "core"):
-        personal_database = "nexa_personal_upgrade_" + uuid4().hex[:12]
+        personal_database = "studiolo_personal_upgrade_" + uuid4().hex[:12]
         with admin_engine.connect() as connection:
             connection.execute(text(f'CREATE DATABASE "{personal_database}"'))
         try:

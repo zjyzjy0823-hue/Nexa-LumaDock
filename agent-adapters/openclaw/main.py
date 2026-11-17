@@ -4,13 +4,13 @@ import threading
 import time
 
 from config import load_config
-from nexa import FatalApiError, NexaClient
+from studiolo import FatalApiError, StudioloClient
 from openclaw import execute_task
 
 log = logging.getLogger(__name__)
 
 
-def process_task(api: NexaClient, config: dict, task: dict, executor=execute_task):
+def process_task(api: StudioloClient, config: dict, task: dict, executor=execute_task):
     task_id = task["id"]
     if api.claim(task_id) is None:
         return False
@@ -84,7 +84,7 @@ def process_task(api: NexaClient, config: dict, task: dict, executor=execute_tas
     return True
 
 
-def run_once(api: NexaClient, config: dict, executor=execute_task):
+def run_once(api: StudioloClient, config: dict, executor=execute_task):
     api.heartbeat("idle", config["runtimeInstance"])
     log.info("connected")
     tasks = api.tasks()
@@ -99,16 +99,16 @@ def main():
     except (ValueError, OSError) as error:
         log.error("invalid adapter config: %s", error)
         return 2
-    api = NexaClient(config)
+    api = StudioloClient(config)
     try:
         while True:
             try:
                 run_once(api, config)
             except FatalApiError as error:
-                log.error("fatal Nexa API error: %s", error)
+                log.error("fatal Studiolo API error: %s", error)
                 return 2
             except Exception as error:
-                log.warning("Nexa connection failed: %s", error)
+                log.warning("Studiolo connection failed: %s", error)
             time.sleep(config["pollIntervalSeconds"])
     except KeyboardInterrupt:
         return 0

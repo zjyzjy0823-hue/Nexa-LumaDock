@@ -35,10 +35,10 @@ const icons = {
 .ledger-stat--violet { --ledger-stat-color:#9478de; }
 .ledger-stat--amber { --ledger-stat-color:#d9a04d; }
 .ledger-stat__top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
-.ledger-stat__label { color:rgba(255,255,255,.9); font-size:12px; font-weight:650; text-shadow:0 1px 8px rgba(25,38,76,.22); }
-.ledger-stat__icon { display:grid; width:34px; height:34px; flex:none; place-items:center; color:#fff; border:1px solid rgba(255,255,255,.55); border-radius:11px; background:color-mix(in srgb,var(--ledger-stat-color) 43%,transparent); box-shadow:inset 0 1px 0 rgba(255,255,255,.25); }
-.ledger-stat__value { margin-top:8px; color:#fff; font-size:clamp(26px,2.5vw,33px); font-weight:750; line-height:1.05; letter-spacing:-.045em; text-shadow:0 3px 14px rgba(33,47,96,.22); font-variant-numeric:tabular-nums; }
-.ledger-stat__footer { display:flex; align-items:center; gap:12px; margin-top:auto; padding-top:10px; color:rgba(255,255,255,.76); font-size:11px; white-space:nowrap; text-shadow:0 1px 8px rgba(25,38,76,.22); }
+.ledger-stat__label { color:var(--workbench-muted); font-size:12px; font-weight:650; text-shadow:none; }
+.ledger-stat__icon { display:grid; width:34px; height:34px; flex:none; place-items:center; color:var(--workbench-text); border:1px solid var(--workbench-line); border-radius:11px; background:color-mix(in srgb,var(--ledger-stat-color) 43%,transparent); box-shadow:inset 0 1px 0 rgba(255,255,255,.25); }
+.ledger-stat__value { margin-top:8px; color:var(--workbench-text); font-size:clamp(26px,2.5vw,33px); font-weight:750; line-height:1.05; letter-spacing:-.045em; text-shadow:none; font-variant-numeric:tabular-nums; }
+.ledger-stat__footer { display:flex; align-items:center; gap:12px; margin-top:auto; padding-top:10px; color:var(--workbench-muted); font-size:11px; white-space:nowrap; text-shadow:none; }
 .ledger-stat__progress { display:block; width:68px; height:5px; overflow:hidden; margin-left:auto; border-radius:99px; background:rgba(255,255,255,.34); }
 .ledger-stat__progress i { display:block; height:100%; border-radius:inherit; background:#fff; }
 </style>

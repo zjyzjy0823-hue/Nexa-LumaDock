@@ -9,6 +9,7 @@ export const settingsNavigation: { id: SettingsSectionId; label: string; icon: s
   { id: 'account', label: '账户', icon: 'UserRound' },
   { id: 'appearance', label: '外观', icon: 'Palette' },
   { id: 'sync', label: '同步', icon: 'RefreshCw' },
+  { id: 'agents', label: 'Agent 与连接', icon: 'Bot' },
   { id: 'storage', label: '存储', icon: 'HardDrive' },
   { id: 'security', label: '安全', icon: 'ShieldCheck' },
   { id: 'notifications', label: '通知', icon: 'Bell' },
@@ -65,4 +66,4 @@ export const notificationChannelOptions: { id: NotificationChannel; label: strin
 ]
 
 
-export const aboutInfo: AboutInfo = { product: 'Nexa', version, build: '2026.09.30' }
+export const aboutInfo: AboutInfo = { product: 'Studiolo', version, build: '2026.09.30' }

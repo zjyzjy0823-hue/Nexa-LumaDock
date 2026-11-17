@@ -1,26 +1,50 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bell, Plus, Search, X } from 'lucide-vue-next'
-import CollectionCard from '../components/data/CollectionCard.vue'
-import DataStats from '../components/data/DataStats.vue'
-import DataTable from '../components/data/DataTable.vue'
-import ActionButton from '../components/ui/ActionButton.vue'
-import GlassCard from '../components/ui/GlassCard.vue'
+import OpusIcon from '../components/ui/OpusIcon.vue'
+import Modal from '../components/ui/Modal.vue'
 import { useDataStore } from '../stores/data'
 import { useAuthStore } from '../stores/auth'
 import { dataService } from '../services/data'
 import { parseRecordJson } from '../utils/recordJson'
 import type { CollectionSummary, CollectionRecord, RecordSummary, DataOverview } from '../types/data'
 
-const emit = defineEmits<{ action: [message: string] }>()
+defineOptions({ inheritAttrs: false })
+const props = defineProps<{ mobile?: boolean; search?: string }>()
+const emit = defineEmits<{ action: [message: string]; mobileDetail: [active: boolean] }>()
 
 const store = useDataStore()
 const auth = useAuthStore()
 const collections = computed(() => store.items)
 const selectedId = ref('')
 const query = ref('')
-const notificationsOpen = ref(false)
+const focusedRecord = ref<RecordSummary | null>(null)
+const mobileRecord = ref<RecordSummary | null>(null)
+const flashRecordId = ref<string | null>(null)
+let flashTimer: ReturnType<typeof setTimeout> | undefined
+
+function runViewTransition(update: () => Promise<void> | void, types: string[]) {
+  if (typeof document !== 'undefined' && document.startViewTransition && document.documentElement?.dataset.motion !== 'reduced') {
+    document.startViewTransition({ update, types })
+  } else {
+    void update()
+  }
+}
+
+function showMobileRecord(item: RecordSummary | null) {
+  runViewTransition(async () => {
+    mobileRecord.value = item
+    emit('mobileDetail', Boolean(item))
+    await nextTick()
+  }, [item ? 'forward' : 'backward'])
+}
+function markFlash(id: string | undefined) {
+  if (!id) return
+  flashRecordId.value = id
+  if (flashTimer) clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => { flashRecordId.value = null }, 1300)
+}
+
 const createOpen = ref(false)
 const draftName = ref('')
 const draftDescription = ref('')
@@ -44,10 +68,13 @@ const dataOverview = computed<DataOverview>(() => {
   const overview = store.overview
   const recent = overview?.recentRecords ?? []
   return { active: overview?.active ?? 0, completed: overview?.completed ?? 0,
-    recentActivity: recent.length, trend: [], trendLabels: [], activities: recent.map(record => ({ id: record.id, title: record.name, detail: record.status, time: record.updatedAt.slice(0, 10), tone: 'blue' })) }
+    recentActivity: recent.length, trend: [], trendLabels: [],
+    activities: recent.map(record => ({ id: record.id, title: record.name, detail: record.status, time: record.updatedAt.slice(0, 10), tone: 'blue' })),
+  }
 })
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 let recordSequence = 0
+watch(() => props.search, search => { query.value = search ?? '' }, { immediate: true })
 watch(query, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => { debouncedQuery.value = query.value.trim() }, 250)
@@ -55,8 +82,6 @@ watch(query, () => {
 watch([debouncedQuery, () => auth.token], ([q, token]) => {
   if (token) void store.load(token, true, q).catch(() => {})
 })
-// A keyword that matches the collection itself should not also hide its records:
-// previously the table kept every record in that case.
 const recordQuery = computed(() => {
   const q = debouncedQuery.value
   const collection = selectedCollection.value
@@ -65,6 +90,7 @@ const recordQuery = computed(() => {
 })
 watch([() => selectedCollection.value?.id, recordQuery, () => auth.token], ([id, q, token]) => {
   ++recordSequence
+  focusedRecord.value = null
   if (token && id) void store.loadRecords(token, id, { reset: true, q }).catch(() => {})
 }, { immediate: true })
 function retryLoad() {
@@ -85,13 +111,15 @@ function retryRecords() {
 async function openCreate() {
   ++recordSequence
   dialogKind.value = 'collection'; editingCollection.value = null; editingRecord.value = null; draftName.value = ''; draftDescription.value = ''
-  notificationsOpen.value = false
   formError.value = ''
   createOpen.value = true
   await nextTick()
   nameInput.value?.focus()
 }
-defineExpose({ openCreate })
+defineExpose({ openCreate, openCreateRecord: () => {
+  if (selectedCollection.value) void openRecord()
+  else void openCreate()
+} })
 
 function closeCreate() {
   ++recordSequence
@@ -110,10 +138,18 @@ async function createCollection() {
   try {
     if (dialogKind.value === 'record') {
       const payload = { name, status: draftStatus.value, category: draftCategory.value, data_json: parseRecordJson(draftJson.value) }
-      if (editingRecord.value) await store.updateRecord(auth.token, editingRecord.value.id, payload)
-      else if (selectedCollection.value) await store.createRecord(auth.token, selectedCollection.value.id, payload)
+      const before = new Set(visibleRecords.value.map(item => item.id))
+      if (editingRecord.value) {
+        await store.updateRecord(auth.token, editingRecord.value.id, payload)
+        markFlash(editingRecord.value.id)
+      } else if (selectedCollection.value) {
+        await store.createRecord(auth.token, selectedCollection.value.id, payload)
+        markFlash(visibleRecords.value.find(item => !before.has(item.id))?.id)
+      }
     } else if (editingCollection.value) await store.update(auth.token, editingCollection.value.id, { name, description })
     else { const item = await store.create(auth.token, { name, description, icon: 'custom', tone: 'blue' }); selectedId.value = item.id }
+    if (focusedRecord.value) focusedRecord.value = visibleRecords.value.find(item => item.id === focusedRecord.value?.id) ?? null
+    if (mobileRecord.value) mobileRecord.value = visibleRecords.value.find(item => item.id === mobileRecord.value?.id) ?? null
     closeCreate(); emit('action', '已保存。')
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
@@ -134,7 +170,16 @@ async function openRecord(item?: RecordSummary) {
   } catch (error) { if (current === recordSequence && token === auth.token) emit('action', error instanceof Error ? error.message : '记录加载失败') }
 }
 async function removeCollection(item: CollectionSummary) { if (!auth.token || !(await confirmAction(`删除集合「${item.name}」及其记录？`))) return; try { await store.remove(auth.token, item.id); emit('action', '集合已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
-async function removeRecord(item: RecordSummary) { if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return; try { await store.removeRecord(auth.token, item.id, item.collectionId); emit('action', '记录已删除。') } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') } }
+async function removeRecord(item: RecordSummary) {
+  if (!auth.token || !(await confirmAction(`删除记录「${item.name}」？`))) return
+  try {
+    await store.removeRecord(auth.token, item.id, item.collectionId)
+    if (focusedRecord.value?.id === item.id) focusedRecord.value = null
+    if (mobileRecord.value?.id === item.id) showMobileRecord(null)
+    if (editingRecord.value?.id === item.id) closeCreate()
+    emit('action', '记录已删除。')
+  } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
+}
 
 async function copyCollectionName(collection: CollectionSummary) {
   try {
@@ -145,128 +190,131 @@ async function copyCollectionName(collection: CollectionSummary) {
   }
 }
 
-function onDocumentPointerDown(event: PointerEvent) {
-  if (event.target instanceof Element && !event.target.closest('[data-data-notifications]')) notificationsOpen.value = false
-}
-function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    notificationsOpen.value = false
-    closeCreate()
-  }
-}
 onMounted(() => {
   if (auth.token) {
     void store.load(auth.token, false, debouncedQuery.value).catch(() => {})
     void store.loadOverview(auth.token).catch(() => {})
   }
-  document.addEventListener('pointerdown', onDocumentPointerDown)
-  document.addEventListener('keydown', onDocumentKeydown)
 })
 onUnmounted(() => {
   clearTimeout(searchTimer)
+  clearTimeout(flashTimer)
   ++recordSequence
-  document.removeEventListener('pointerdown', onDocumentPointerDown)
-  document.removeEventListener('keydown', onDocumentKeydown)
+  emit('mobileDetail', false)
 })
 </script>
 
 <template>
-  <div class="data-page">
-    <h1 class="visually-hidden">数据</h1>
-    <div class="data-page__toolbar" aria-label="数据操作">
-      <label class="data-page__search"><Search :size="16" :stroke-width="1.9" /><input v-model="query" type="search" placeholder="搜索集合或记录..." aria-label="搜索集合或记录" /><button v-if="query" type="button" aria-label="清除搜索" @click="query = ''"><X :size="14" /></button></label>
-      <div class="data-page__notification-wrap" data-data-notifications>
-        <button class="data-page__notification" type="button" aria-label="查看数据通知" :aria-expanded="notificationsOpen" @click="notificationsOpen = !notificationsOpen"><Bell :size="17" :stroke-width="1.9" /><span /></button>
-        <div v-if="notificationsOpen" class="data-page__notifications" role="region" aria-label="数据通知">
-          <strong>最近通知</strong>
-          <div v-for="activity in dataOverview.activities" :key="activity.id"><span class="data-page__notification-dot" /><span>{{ activity.title }} · {{ activity.detail }}</span><small>{{ activity.time }}</small></div>
-        </div>
-      </div>
-      <ActionButton size="md" @click="openCreate"><Plus :size="16" />新建集合</ActionButton>
-      <ActionButton v-if="selectedCollection" size="md" @click="openRecord()"><Plus :size="16" />新增记录</ActionButton>
+  <div v-if="mobile && mobileRecord" class="mpage push">
+    <div class="navbar">
+      <button class="icon-btn" type="button" aria-label="返回" @click="showMobileRecord(null)"><OpusIcon name="chevL" /></button>
+      <div class="t">{{ mobileRecord.name }}</div>
+      <button class="icon-btn" type="button" aria-label="编辑记录" @click="mobileRecord && openRecord(mobileRecord)"><OpusIcon name="pencil" /></button>
     </div>
-    <p v-if="store.loading" role="status">正在加载数据…</p>
-    <p v-if="store.error" role="alert">{{ store.error }} <button type="button" @click="retryLoad">重试</button></p>
-
-    <p v-if="store.overviewError" role="alert">{{ store.overviewError }} <button type="button" @click="retryLoad">重试</button></p>
-
-    <section v-if="store.loaded" class="data-page__collections" aria-labelledby="data-collections-heading">
-      <div class="data-page__section-heading"><div><span>COLLECTION OVERVIEW</span><h2 id="data-collections-heading">集合概览</h2></div><p>{{ visibleCollections.length }} 个集合 <span>·</span> {{ totalRecords }} 条记录</p></div>
-      <div v-if="visibleCollections.length" class="data-page__collection-grid">
-        <CollectionCard v-for="collection in visibleCollections" :key="collection.id" :collection="collection" :selected="selectedCollection?.id === collection.id" @select="selectedId = collection.id" @copy="copyCollectionName(collection)" @edit="openEditCollection(collection)" @remove="removeCollection(collection)" />
-      </div>
-      <GlassCard v-else class="data-page__no-results"><Search :size="26" /><strong>{{ query ? '没有找到匹配的集合' : '还没有集合' }}</strong><span>新建一个集合开始管理数据。</span></GlassCard>
-    </section>
-
-    <section v-if="store.loaded" class="data-page__details" aria-label="数据库与统计">
-      <DataTable :collection="selectedCollection" :records="visibleRecords" :total="selectedPage?.total ?? selectedCollection?.recordCount ?? 0" :matched-count="selectedPage?.matchedCount ?? 0" :has-more="selectedPage?.hasMore ?? false" :loading="selectedPage?.loading ?? false" :error="selectedPage?.error ?? ''" @load-more="loadMoreRecords" @retry="retryRecords" @edit="openRecord" @remove="removeRecord" />
-      <DataStats :total-records="totalRecords" :overview="dataOverview" />
-    </section>
-
-    <Teleport to="body">
-      <div v-if="createOpen" class="data-page__dialog-backdrop" @click="closeCreate">
-        <GlassCard class="data-page__dialog" role="dialog" aria-modal="true" aria-labelledby="data-create-title" @click.stop>
-          <div class="data-page__dialog-heading"><div><span>{{ dialogKind === 'record' ? 'RECORD' : 'COLLECTION' }}</span><h2 id="data-create-title">{{ editingCollection || editingRecord ? '编辑' : '新建' }}{{ dialogKind === 'record' ? '记录' : '集合' }}</h2><p>保存到当前账户。</p></div><button class="data-page__dialog-close" type="button" aria-label="关闭" @click="closeCreate"><X :size="18" /></button></div>
-          <form @submit.prevent="createCollection">
-            <label>名称<input ref="nameInput" v-model="draftName" type="text" maxlength="120" placeholder="名称" /></label>
-            <label v-if="dialogKind === 'collection'">描述<input v-model="draftDescription" type="text" maxlength="500" placeholder="描述" /></label>
-            <template v-else>
-              <label>状态<input v-model="draftStatus" type="text" maxlength="40" /></label>
-              <label>分类<input v-model="draftCategory" type="text" maxlength="80" /></label>
-              <label>记录内容（JSON）<textarea v-model="draftJson" aria-label="记录内容（JSON）" rows="4" spellcheck="false" placeholder="{}" /></label>
-            </template>
-            <p v-if="formError" class="data-page__form-error" role="alert">{{ formError }}</p>
-            <div class="data-page__dialog-actions"><ActionButton variant="secondary" @click="closeCreate">取消</ActionButton><ActionButton type="submit"><Plus :size="15" />保存</ActionButton></div>
-          </form>
-        </GlassCard>
-      </div>
-    </Teleport>
+    <div class="dhero">
+      <div class="tile-icon"><OpusIcon name="receipt" /></div>
+      <h2>{{ mobileRecord.name }}</h2>
+    </div>
+    <div class="kvl mat-solid">
+      <div><span>分类</span><span>{{ mobileRecord.category || '未分类' }}</span></div>
+      <div><span>状态</span><span>{{ mobileRecord.status }}</span></div>
+    </div>
+    <div class="kvl mat-solid">
+      <div><span>来源集合</span><span>{{ selectedCollection?.name }}</span></div>
+      <div><span>最近修改</span><span>{{ new Date(mobileRecord.updatedAt).toLocaleString('zh-CN') }}</span></div>
+    </div>
+    <div class="mbtns">
+      <button class="btn btn-ghost" type="button" @click="mobileRecord && openRecord(mobileRecord)"><OpusIcon name="pencil" />编辑记录</button>
+      <button class="btn btn-danger" type="button" @click="mobileRecord && removeRecord(mobileRecord)"><OpusIcon name="trash" />删除记录</button>
+    </div>
   </div>
+  <div v-else :class="mobile ? 'data-page' : 'page full'">
+    <div v-if="store.loading && !store.loaded" class="cleared" role="status">正在加载数据…</div>
+    <p v-if="store.error" class="notice danger" role="alert">{{ store.error }} <button class="btn btn-sm btn-ghost" type="button" @click="retryLoad">重试</button></p>
+    <template v-if="mobile">
+      <div class="sec-t" style="margin-top:4px">{{ selectedCollection?.name ?? '数据' }}<span class="spacer"></span><button v-if="selectedCollection" class="btn btn-sm btn-subtle" type="button" @click="openRecord()"><OpusIcon name="plus" />记录</button></div>
+      <div class="mlist mat-solid">
+        <button v-for="item in visibleRecords" :key="item.id" class="mrow" :class="{ enter: flashRecordId === item.id }" type="button" @click="showMobileRecord(item)"><span class="grow"><div class="title">{{ item.name }}</div><div class="sub">{{ item.category || '未分类' }} · {{ item.status }}</div></span><OpusIcon name="chevR" /></button>
+        <div v-if="!visibleRecords.length" class="mrow faint">暂无记录</div>
+        <button v-if="selectedPage?.hasMore" class="mrow" type="button" @click="loadMoreRecords">加载更多</button>
+      </div>
+      <div class="sec-t">其它集合<span class="spacer"></span><button class="btn btn-sm btn-subtle" type="button" @click="openCreate"><OpusIcon name="plus" />集合</button></div>
+      <div class="mlist mat-solid">
+        <button v-for="item in visibleCollections" :key="item.id" class="mrow" type="button" @click="selectedId = item.id"><span class="tile-icon"><OpusIcon name="layers" /></span><span class="grow"><div class="title">{{ item.name }}</div><div class="sub">{{ item.recordCount }} 条</div></span><OpusIcon name="chevR" /></button>
+      </div>
+      <div v-if="selectedCollection" class="btn-row"><button class="btn btn-sm btn-ghost" type="button" @click="openEditCollection(selectedCollection)">编辑集合</button><button class="btn btn-sm btn-danger" type="button" @click="removeCollection(selectedCollection)">删除集合</button></div>
+    </template>
+    <div v-else class="split opus-data-split">
+      <aside class="pane-side">
+        <div class="pane-h"><h2>数据</h2><span class="faint">{{ totalRecords }} 条</span><span class="spacer"></span><button type="button" class="icon-btn" aria-label="新建集合" title="新建集合" @click="openCreate"><OpusIcon name="plus" /></button></div>
+        <div class="list" style="padding:0 8px">
+          <button v-for="item in visibleCollections" :key="item.id" class="row" type="button" :class="{ 'is-selected': selectedCollection?.id === item.id }" @click="selectedId = item.id">
+            <span class="tile-icon"><OpusIcon name="layers" /></span><span class="grow"><div class="title">{{ item.name }}</div><div class="sub">{{ item.recordCount }} 条 · {{ item.updatedAt.slice(0, 10) }}</div></span>
+          </button>
+        </div>
+      </aside>
+      <section style="display:flex;flex-direction:column;min-width:0;overflow:hidden">
+        <div class="toolbar">
+          <h2 style="margin:0;font-size:16px">{{ selectedCollection?.name ?? '集合' }}</h2><span class="faint">{{ selectedCollection?.recordCount ?? 0 }} 条</span><span class="spacer"></span>
+          <div class="search"><OpusIcon name="search" /><input v-model="query" class="input" type="search" placeholder="在集合中搜索" aria-label="在集合中搜索"></div>
+          <button class="btn btn-primary" type="button" :disabled="!selectedCollection" @click="openRecord()"><OpusIcon name="plus" />新建记录</button>
+        </div>
+        <div style="overflow:auto;flex:1">
+          <table class="tbl"><thead><tr><th>名称</th><th>状态</th><th>分类</th><th>更新时间</th></tr></thead>
+            <tbody><tr v-for="item in visibleRecords" :key="item.id" :class="{ 'is-selected': focusedRecord?.id === item.id, flash: flashRecordId === item.id }" @click="focusedRecord = item">
+              <td style="font-weight:550"><button type="button" @click.stop="focusedRecord = item">{{ item.name }}</button></td><td class="muted">{{ item.status }}</td><td class="muted">{{ item.category || '未分类' }}</td><td class="muted">{{ item.updatedAt.slice(0, 10) }}</td>
+            </tr></tbody>
+          </table>
+          <div v-if="!visibleRecords.length" class="cleared"><OpusIcon name="table" />暂无记录</div>
+          <div v-if="selectedPage?.loading" class="cleared" role="status">正在加载记录…</div>
+          <div v-if="selectedPage?.error" class="notice danger" role="alert">{{ selectedPage.error }} <button class="btn btn-sm btn-ghost" type="button" @click="retryRecords">重试</button></div>
+          <div v-if="selectedCollection" class="toolbar"><span class="faint">显示 {{ visibleRecords.length }} / {{ selectedPage?.total ?? selectedCollection.recordCount }} 条记录</span><button v-if="selectedPage?.hasMore" class="btn btn-sm btn-ghost" type="button" :disabled="selectedPage.loading" @click="loadMoreRecords">加载更多</button></div>
+        </div>
+      </section>
+      <aside class="pane-inspector">
+        <div v-if="focusedRecord" :key="focusedRecord.id" class="insp enter">
+          <h3>{{ focusedRecord.name }}</h3>
+          <dl class="meta-grid"><dt>UUID</dt><dd class="mono">{{ focusedRecord.id }}</dd><dt>状态</dt><dd>{{ focusedRecord.status }}</dd><dt>分类</dt><dd>{{ focusedRecord.category || '未分类' }}</dd><dt>更新时间</dt><dd>{{ new Date(focusedRecord.updatedAt).toLocaleString('zh-CN') }}</dd></dl>
+          <div class="btn-row"><button class="btn btn-sm btn-primary" type="button" @click="focusedRecord && openRecord(focusedRecord)"><OpusIcon name="pencil" />编辑记录</button><button class="btn btn-sm btn-danger" type="button" @click="focusedRecord && removeRecord(focusedRecord)">删除记录</button></div>
+        </div>
+        <div v-else-if="selectedCollection" class="insp">
+          <h3>{{ selectedCollection.name }}</h3>
+          <p v-if="selectedCollection.description" class="muted">{{ selectedCollection.description }}</p>
+          <div class="btn-row"><button class="btn btn-sm btn-ghost" type="button" @click="copyCollectionName(selectedCollection)"><OpusIcon name="copy" />复制名称</button><button class="btn btn-sm btn-ghost" type="button" @click="openEditCollection(selectedCollection)">编辑集合</button><button class="btn btn-sm btn-danger" type="button" @click="removeCollection(selectedCollection)">删除集合</button></div>
+          <details v-if="store.overview || store.overviewError">
+            <summary class="muted" style="cursor:pointer;font-size:12.5px">数据概览</summary>
+            <ul v-if="store.overview" class="muted" style="font-size:12.5px;padding-left:18px"><li>活跃 {{ dataOverview.active }} 条 · 已完成 {{ dataOverview.completed }} 条</li><li v-for="item in dataOverview.activities" :key="item.id">{{ item.title }} · {{ item.time }}</li></ul>
+            <div v-if="store.overviewError" class="notice danger" role="alert">{{ store.overviewError }} <button class="btn btn-sm btn-ghost" type="button" @click="retryLoad">重试</button></div>
+          </details>
+        </div>
+        <div v-else class="cleared"><OpusIcon name="table" />选择一条记录查看详情</div>
+      </aside>
+    </div>
+  </div>
+
+  <Modal :open="createOpen" :title="`${editingCollection || editingRecord ? '编辑' : '新建'}${dialogKind === 'record' ? '记录' : '集合'}`" @close="closeCreate">
+    <form id="data-create-form" @submit.prevent="createCollection">
+      <div class="field"><label for="data-name">名称</label><input id="data-name" ref="nameInput" v-model="draftName" class="input" type="text" maxlength="120" placeholder="名称" data-initial-focus /></div>
+      <div v-if="dialogKind === 'collection'" class="field"><label for="data-desc">描述</label><input id="data-desc" v-model="draftDescription" class="input" type="text" maxlength="500" placeholder="描述" /></div>
+      <template v-else>
+        <div class="field-grid">
+          <div class="field"><label for="data-status">状态</label><input id="data-status" v-model="draftStatus" class="input" type="text" maxlength="40" /></div>
+          <div class="field"><label for="data-category">分类</label><input id="data-category" v-model="draftCategory" class="input" type="text" maxlength="80" /></div>
+        </div>
+        <div class="field"><label for="data-json">记录内容（JSON）</label><textarea id="data-json" v-model="draftJson" class="input mono" aria-label="记录内容（JSON）" rows="5" spellcheck="false" placeholder="{}" /></div>
+      </template>
+      <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
+    </form>
+    <template #footer>
+      <button v-if="mobile && editingRecord" class="btn btn-danger" type="button" @click="editingRecord && removeRecord(editingRecord)">删除记录</button>
+      <button type="button" class="btn btn-ghost" @click="closeCreate">取消</button>
+      <button type="submit" form="data-create-form" class="btn btn-primary"><OpusIcon name="check" />保存</button>
+    </template>
+  </Modal>
 </template>
 
 <style scoped>
-.data-page { min-width:0; padding:0 20px 36px; color:#263653; }
-.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-.data-page__toolbar { display:flex; align-items:center; justify-content:flex-end; gap:9px; min-height:39px; margin:4px 0 15px; }
-.data-page__search { display:flex; align-items:center; gap:8px; width:230px; height:39px; padding:0 11px; border:1px solid rgba(255,255,255,.63); border-radius:11px; color:#6380bb; background:rgba(255,255,255,.76); box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 5px 14px rgba(31,49,103,.08); }
-.data-page__search:focus-within { border-color:rgba(132,157,232,.85); background:rgba(255,255,255,.9); }
-.data-page__search input { width:100%; min-width:0; padding:0; border:0; outline:none; color:#30405d; background:transparent; font-size:11px; }
-.data-page__search input::placeholder { color:#8493a9; }
-.data-page__search button { display:grid; width:21px; height:21px; flex:none; place-items:center; padding:0; border:0; border-radius:6px; color:#788ba8; background:rgba(113,137,196,.1); }
-.data-page__notification-wrap { position:relative; }
-.data-page__notification { position:relative; display:grid; width:39px; height:39px; place-items:center; border:1px solid rgba(255,255,255,.58); border-radius:11px; color:#fff; background:rgba(255,255,255,.22); box-shadow:inset 0 1px 0 rgba(255,255,255,.18); backdrop-filter:blur(12px); transition:background .2s,transform .2s; }
-.data-page__notification:hover { transform:translateY(-2px); background:rgba(255,255,255,.32); }
-.data-page__notification > span { position:absolute; top:8px; right:8px; width:6px; height:6px; border:1px solid #fff; border-radius:50%; background:#f2acac; }
-.data-page__notifications { position:absolute; top:47px; right:0; z-index:20; width:280px; padding:15px; border:1px solid rgba(255,255,255,.9); border-radius:14px; color:#41516c; background:var(--glass-popover-background); box-shadow:0 18px 40px rgba(29,44,91,.22);   backdrop-filter:var(--glass-overlay-filter); -webkit-backdrop-filter:var(--glass-overlay-filter); }
-.data-page__notifications > strong { display:block; margin-bottom:7px; font-size:12px; }
-.data-page__notifications > div { display:grid; grid-template-columns:7px minmax(0,1fr) auto; align-items:center; gap:8px; min-height:37px; border-top:1px solid rgba(137,159,202,.13); font-size:10px; }
-.data-page__notification-dot { width:6px; height:6px; border-radius:50%; background:#8199ed; }
-.data-page__notifications small { color:#9aa6b7; font-size:9px; white-space:nowrap; }
-.data-page__section-heading { display:flex; align-items:end; justify-content:space-between; gap:12px; margin:5px 0 15px; color:#fff; }
-.data-page__section-heading span { color:rgba(244,248,255,.72); font-size:9px; font-weight:740; letter-spacing:.16em; }
-.data-page__section-heading h2 { margin:6px 0 0; font-size:19px; line-height:1.2; letter-spacing:-.03em; text-shadow:0 2px 10px rgba(24,37,82,.2); }
-.data-page__section-heading p { margin:0 2px 1px 0; color:rgba(248,250,255,.79); font-size:10px; white-space:nowrap; }
-.data-page__section-heading p span { margin:0 4px; font-size:10px; letter-spacing:0; }
-.data-page__collection-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
-.data-page__no-results { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; min-height:170px; color:#dbe4ff; font-size:11px; }
-.data-page__no-results strong { color:#fff; font-size:14px; }
-.data-page__details { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(280px,.9fr); align-items:start; gap:14px; margin-top:20px; }
-.data-page__dialog-backdrop { position:fixed; inset:0; z-index:100; display:grid; place-items:center; padding:20px; background:rgba(24,37,74,.4); backdrop-filter:blur(9px); }
-.data-page__dialog { width:min(100%,440px); height:auto; max-height:calc(100dvh - 40px); overflow-y:auto; padding:24px; }
-.data-page__dialog-heading { display:flex; align-items:start; justify-content:space-between; gap:12px; }
-.data-page__dialog-heading span { color:#879bda; font-size:9px; font-weight:760; letter-spacing:.17em; }
-.data-page__dialog-heading h2 { margin:6px 0 4px; color:#fff; font-size:22px; letter-spacing:-.035em; text-shadow:0 1px 8px rgba(20,33,71,.28); }
-.data-page__dialog-heading p { margin:0; color:rgba(255,255,255,.78); font-size:11px; }
-.data-page__dialog-close { display:grid; width:31px; height:31px; flex:none; place-items:center; border:1px solid rgba(255,255,255,.5); border-radius:9px; color:#fff; background:rgba(255,255,255,.2); }
-.data-page__dialog form { display:grid; gap:15px; margin-top:24px; }
-.data-page__dialog label { display:grid; gap:7px; color:rgba(255,255,255,.9); font-size:11px; font-weight:690; }
-.data-page__dialog input { height:39px; width:100%; padding:0 12px; border:1px solid rgba(130,152,197,.28); border-radius:10px; outline:none; color:#2e3f5e; background:rgba(255,255,255,.84); font-size:12px; }
-.data-page__dialog textarea { width:100%; min-height:96px; padding:10px 12px; resize:vertical; border:1px solid rgba(130,152,197,.28); border-radius:10px; outline:none; color:#2e3f5e; background:rgba(255,255,255,.84); font:12px/1.5 monospace; }
-.data-page__dialog input:focus,.data-page__dialog textarea:focus { border-color:#839fec; box-shadow:0 0 0 3px rgba(118,150,231,.13); }
-.data-page__dialog input::placeholder { color:#aebacc; }
-.data-page__form-error { margin:-5px 0 0; color:#c45d69; font-size:11px; }
-.data-page__dialog-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:8px; }
-@media (max-width:1120px) { .data-page__collection-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .data-page__details { grid-template-columns:1fr; } }
-@media (max-width:900px) { .data-page__search { width:min(100%,360px); flex:1; } }
-@media (max-width:600px) { .data-page { padding:0 2px 30px; } .data-page__collection-grid { grid-template-columns:1fr; } .data-page__toolbar { flex-wrap:wrap; justify-content:flex-start; } .data-page__search { width:100%; flex-basis:100%; } .data-page__notifications { right:auto; left:0; } .data-page__section-heading { align-items:flex-start; } .data-page__section-heading p { margin-top:7px; } }
+.opus-data-split { grid-template-columns: 220px minmax(0, 1fr) 340px; }
+@container (max-width: 900px) { .opus-data-split { grid-template-columns: 180px minmax(0, 1fr) 245px; } }
+@container (max-width: 640px) { .opus-data-split { grid-template-columns: 128px minmax(0, 1fr); height: auto; } .opus-data-split .pane-inspector { grid-column: 1 / -1; } }
 </style>

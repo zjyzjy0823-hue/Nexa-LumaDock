@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 
-export type DesktopPlatform = 'web' | 'windows' | 'macos' | 'linux'
+export type DesktopPlatform = 'web' | 'windows' | 'macos' | 'linux' | 'android'
 let platform: DesktopPlatform = 'web'
 
 export async function initializeDesktopPlatform(): Promise<DesktopPlatform> {

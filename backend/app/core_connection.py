@@ -233,7 +233,7 @@ def _persist_connection(user_id: int, metadata: CoreConnectionMetadata, credenti
 def connect(user_id: int, core_url: str, username: str, password: str,
             client_name: str, platform: str, app_version: str) -> dict:
     origin = validate_core_url(core_url)
-    installation_id = os.environ.get("NEXA_INSTALLATION_ID", "")
+    installation_id = os.environ.get("STUDIOLO_INSTALLATION_ID", "")
     try:
         installation_id = str(UUID(installation_id))
     except ValueError:
@@ -242,8 +242,8 @@ def connect(user_id: int, core_url: str, username: str, password: str,
         raise HTTPException(409, "Core connection already exists")
     with _http_client() as client:
         health = _request_or_error(client, "GET", origin, "/api/health")
-        if health.get("service") != "nexa" or health.get("status") != "ok":
-            raise HTTPException(502, "Target is not Nexa Core")
+        if health.get("service") != "studiolo" or health.get("status") != "ok":
+            raise HTTPException(502, "Target is not Studiolo Core")
         login = _request_or_error(client, "POST", origin, "/api/v1/auth/login",
                                   json={"username": username, "password": password})
         jwt = login.get("access_token")

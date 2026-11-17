@@ -1,4 +1,4 @@
-"""PyInstaller entry point for the local Nexa Desktop backend."""
+"""PyInstaller entry point for the local Studiolo Desktop backend."""
 
 import argparse
 import logging
@@ -49,14 +49,15 @@ def prepare_desktop(data_dir: Path) -> dict[str, str]:
     except (OSError, ValueError, UnicodeError):
         raise RuntimeError("Desktop installation.id is invalid") from None
     # SQLAlchemy's URL renderer handles drive letters, spaces, and backslashes.
-    database_url = URL.create("sqlite", database=str(data_dir / "nexa.db")).render_as_string()
+    database_url = URL.create("sqlite", database=str(data_dir / "studiolo.db")).render_as_string()
     config = {
-        "NEXA_MODE": "local",
+        "STUDIOLO_MODE": "local",
+        "STUDIOLO_LOCAL_WORKSTATION": "true",
         "DATABASE_URL": database_url,
         "JWT_SECRET": secret,
         "CORS_ORIGINS": DESKTOP_ORIGINS,
-        "NEXA_INSTALLATION_ID": installation_id,
-        "NEXA_DATA_DIR": str(data_dir),
+        "STUDIOLO_INSTALLATION_ID": installation_id,
+        "STUDIOLO_DATA_DIR": str(data_dir),
     }
     os.environ.update(config)
     return config
@@ -100,7 +101,7 @@ def main() -> None:
     try:
         prepare_desktop(data_dir)
         configure_logging(data_dir)
-        logging.info("Nexa Desktop backend starting")
+        logging.info("Studiolo Desktop backend starting")
         from app.main import app  # Import only after desktop environment is ready.
         import uvicorn
         shutdown_file = data_dir / "backend.shutdown"
@@ -121,9 +122,9 @@ def main() -> None:
         threading.Thread(target=watch_shutdown, daemon=True).start()
         server.run()
         shutdown_file.unlink(missing_ok=True)
-        logging.info("Nexa Desktop backend stopped")
+        logging.info("Studiolo Desktop backend stopped")
     except Exception:
-        logging.exception("Nexa Desktop backend failed")
+        logging.exception("Studiolo Desktop backend failed")
         sys.exit(1)
 
 

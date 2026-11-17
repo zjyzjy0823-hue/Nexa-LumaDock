@@ -16,7 +16,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, tok
       },
     })
   } catch {
-    throw new ApiError(0, '无法连接到 Nexa 后端')
+    throw new ApiError(0, '无法连接到 Studiolo 后端')
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { detail?: string; error?: { message?: string } }

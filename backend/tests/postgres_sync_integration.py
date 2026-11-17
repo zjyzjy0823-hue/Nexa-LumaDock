@@ -27,11 +27,11 @@ from sqlalchemy.orm import sessionmaker
 
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
-CORE_ENV = {**os.environ, "NEXA_MODE": "core", "ALLOW_REGISTRATION": "true"}
+CORE_ENV = {**os.environ, "STUDIOLO_MODE": "core", "ALLOW_REGISTRATION": "true"}
 CORE_URL = CORE_ENV["DATABASE_URL"]
 assert CORE_URL.startswith("postgresql+psycopg://"), "Integration requires PostgreSQL"
 # Local APIs run in this process; Core gets its own process and configuration.
-os.environ.update(NEXA_MODE="local", DATABASE_URL="sqlite://", JWT_SECRET=secrets.token_hex(32))
+os.environ.update(STUDIOLO_MODE="local", DATABASE_URL="sqlite://", JWT_SECRET=secrets.token_hex(32))
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -77,7 +77,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "nexa", "version": "0.6.1"}
+                            assert health.json() == {"status": "ok", "service": "studiolo", "version": "0.6.1"}
                             break
                     except httpx.RequestError:
                         pass
@@ -102,7 +102,7 @@ class Replica:
         self.workspace_id = str(uuid4())
         self.installation_id = str(uuid4())
         (self.directory / "installation.id").write_text(self.installation_id, encoding="ascii")
-        database_url = "sqlite:///" + (self.directory / "nexa.db").as_posix()
+        database_url = "sqlite:///" + (self.directory / "studiolo.db").as_posix()
         migration = subprocess.run(
             [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
             cwd=BACKEND, env={**os.environ, "DATABASE_URL": database_url}, capture_output=True)
@@ -132,7 +132,7 @@ class Replica:
         self.api.headers["Authorization"] = "Bearer " + create_access_token(user_id)
 
     def request(self, method, path, **kwargs):
-        os.environ["NEXA_DATA_DIR"] = str(self.directory)
+        os.environ["STUDIOLO_DATA_DIR"] = str(self.directory)
         return checked(self.api, method, path, **kwargs)
 
     def connect(self, core, origin, headers):
@@ -146,7 +146,7 @@ class Replica:
             "workspaceId": self.core_workspace_id, "installationId": self.installation_id,
             "clientName": self.directory.name, "platform": "windows", "appVersion": "0.6.0",
             "connectedAt": datetime.now(timezone.utc).isoformat()})
-        os.environ["NEXA_DATA_DIR"] = str(self.directory)
+        os.environ["STUDIOLO_DATA_DIR"] = str(self.directory)
         _persist_connection(self.user_id, metadata, enrolled["credential"])
         return enrolled["credential"]
 
@@ -197,12 +197,12 @@ def agent_tool_offline_creates(replica):
         f"{domain}:{effect}" for domain in ("ledger", "websites", "data") for effect in ("read", "write", "delete")]})
     token = replica.request("POST", f"/api/v1/agents/{agent['id']}/token", expected=201)["token"]
     script = BACKEND.parent / "agent-adapters/openclaw/plugin/tests/integration-client.mjs"
-    assert script.exists() and (script.parents[1] / "dist/client.js").exists(), "Build the Nexa tool plugin before PostgreSQL integration"
+    assert script.exists() and (script.parents[1] / "dist/client.js").exists(), "Build the Studiolo tool plugin before PostgreSQL integration"
     with tool_server(replica) as origin:
         def tool(action, arguments, call_id=None, drop_response=False):
             result = subprocess.run(["node", str(script)], input=json.dumps({
                 "serverUrl": origin, "action": action, "effect": "write", "arguments": arguments,
-                "toolCallId": call_id or str(uuid4()), "dropResponseOnce": drop_response}), env={**os.environ, "NEXA_AGENT_TOKEN": token},
+                "toolCallId": call_id or str(uuid4()), "dropResponseOnce": drop_response}), env={**os.environ, "STUDIOLO_AGENT_TOKEN": token},
                 text=True, capture_output=True, timeout=45)
             assert result.returncode == 0, f"Tool {action} failed safely: {result.stderr}"
             return json.loads(result.stdout)
@@ -229,7 +229,7 @@ def main(skip_agent_tools=False):
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
-    with TemporaryDirectory(prefix="nexa-http-sync-") as temporary:
+    with TemporaryDirectory(prefix="studiolo-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)
         try:
@@ -379,7 +379,7 @@ def main(skip_agent_tools=False):
             a.request("DELETE", f"/api/v1/ledger/transactions/{transient}", expected=204)
             assert a.run("error")["lastError"] == "unreachable"
             assert a.request("GET", f"/api/v1/ledger/transactions/{offline}")["description"] == "Offline edit"
-            # Core remains stopped: actual Node Nexa tool client -> Local HTTP ->
+            # Core remains stopped: actual Node Studiolo tool client -> Local HTTP ->
             # SQLite/outbox. Recovery uses the production manual sync transport.
             agent_ids, agent_category, agent_collection = ({}, None, None) if skip_agent_tools else agent_tool_offline_creates(a)
             with core_server(directory, port) as (core, _, _):

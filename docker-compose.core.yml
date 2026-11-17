@@ -3,14 +3,14 @@ services:
     image: postgres:16
     env_file: .env.core
     volumes:
-      - nexa-postgres-data:/var/lib/postgresql/data
+      - studiolo-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 3s
       retries: 12
 
-  nexa-core:
+  studiolo-core:
     build:
       context: .
       dockerfile: backend/Dockerfile.core
@@ -28,4 +28,4 @@ services:
       start_period: 30s
 
 volumes:
-  nexa-postgres-data:
+  studiolo-postgres-data:

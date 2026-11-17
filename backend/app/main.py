@@ -63,7 +63,7 @@ async def lifespan(_app: FastAPI):
             _app.state.background_sync = None
 
 
-app = FastAPI(title="Nexa API", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Studiolo API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(runtime_config.cors_origins),
@@ -82,7 +82,7 @@ for router in (
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "nexa", "version": APP_VERSION}
+    return {"status": "ok", "service": "studiolo", "version": APP_VERSION}
 
 
 @app.exception_handler(RequestValidationError)
@@ -111,7 +111,7 @@ async def websocket_entry(websocket: WebSocket):
             message = await websocket.receive_json()
             if isinstance(message, dict) and message.get("type") == "ping":
                 payload = message.get("payload")
-                event = Event(type="pong", source="nexa", timestamp=datetime.now(ZoneInfo(runtime_config.app_timezone)), payload=payload if isinstance(payload, dict) else {})
+                event = Event(type="pong", source="studiolo", timestamp=datetime.now(ZoneInfo(runtime_config.app_timezone)), payload=payload if isinstance(payload, dict) else {})
                 await websocket.send_json(event.model_dump(mode="json"))
     except WebSocketDisconnect:
         pass

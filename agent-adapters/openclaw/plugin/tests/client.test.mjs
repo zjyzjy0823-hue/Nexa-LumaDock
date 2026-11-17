@@ -8,13 +8,13 @@ import catalog from '../dist/catalog.json' with { type: 'json' }
 import entry from '../dist/index.js'
 import { getToolPluginMetadata } from 'openclaw/plugin-sdk/tool-plugin'
 
-process.env.NEXA_TEST_TOKEN = 'na_live_test-secret-must-not-be-logged'
-const config = { serverUrl: 'http://127.0.0.1:17800', agentTokenEnv: 'NEXA_TEST_TOKEN' }
+process.env.STUDIOLO_TEST_TOKEN = 'na_live_test-secret-must-not-be-logged'
+const config = { serverUrl: 'http://127.0.0.1:17800', agentTokenEnv: 'STUDIOLO_TEST_TOKEN' }
 const ok = () => Response.json({ status: 'ok', replayed: false, data: { entityId: 'entity' } })
 
 test('official SDK registers all static typed tools and safe status executes', async () => {
   const metadata = getToolPluginMetadata(entry)
-  assert.equal(metadata.id, 'nexa-tools')
+  assert.equal(metadata.id, 'studiolo-tools')
   assert.equal(metadata.tools.length, 30)
   const tools = []
   entry.register({ pluginConfig: config, registerTool: tool => tools.push(tool) })
@@ -23,10 +23,10 @@ test('official SDK registers all static typed tools and safe status executes', a
   try {
     globalThis.fetch = async (url, options) => {
       assert.ok(url.endsWith('/catalog'))
-      assert.equal(options.headers.Authorization, 'Bearer ' + process.env.NEXA_TEST_TOKEN)
+      assert.equal(options.headers.Authorization, 'Bearer ' + process.env.STUDIOLO_TEST_TOKEN)
       return Response.json({ connected: true, agentName: 'SDK Agent', dataScopes: [], version: '0.5.5' })
     }
-    const result = await tools.find(t => t.name === 'nexa_status').execute('sdk-call', {})
+    const result = await tools.find(t => t.name === 'studiolo_status').execute('sdk-call', {})
     assert.equal(result.details.agentName, 'SDK Agent')
     assert.ok(!JSON.stringify(result).includes('na_live_'))
   } finally { globalThis.fetch = original }
@@ -37,7 +37,7 @@ test('every typed tool maps to a strict static schema', () => {
   for (const tool of catalog) {
     assert.equal(tool.parameters.additionalProperties, false)
     assert.equal(tool.parameters.type, 'object')
-    assert.equal(tool.toolName, 'nexa_' + tool.action.replaceAll('.', '_'))
+    assert.equal(tool.toolName, 'studiolo_' + tool.action.replaceAll('.', '_'))
     assert.ok(!('userId' in tool.parameters.properties))
     assert.ok(!('actionId' in tool.parameters.properties))
   }
@@ -50,7 +50,7 @@ test('all tools use Agent Action endpoint, writes have UUID and reads no actionI
   for (const tool of catalog) {
     await executeTool(tool.action, tool.effect, { example: 1 }, config, tool.toolName, async (url, options) => {
       assert.equal(url, 'http://127.0.0.1:17800/api/agent/actions/execute')
-      assert.equal(options.headers.Authorization, 'Bearer ' + process.env.NEXA_TEST_TOKEN)
+      assert.equal(options.headers.Authorization, 'Bearer ' + process.env.STUDIOLO_TEST_TOKEN)
       const body = JSON.parse(options.body)
       assert.equal(body.action, tool.action)
       assert.deepEqual(body.arguments, { example: 1 })
@@ -83,10 +83,10 @@ for (const [status, code] of [[401, 'unauthorized'], [403, 'permission_denied'],
     let calls = 0
     await assert.rejects(executeTool('website.create', 'write', {}, config, undefined, async () => {
       calls++
-      return Response.json({ detail: { code, token: process.env.NEXA_TEST_TOKEN, traceback: 'secret path' } }, { status })
+      return Response.json({ detail: { code, token: process.env.STUDIOLO_TEST_TOKEN, traceback: 'secret path' } }, { status })
     }), error => {
       assert.equal(error.code, code)
-      assert.ok(!String(error).includes(process.env.NEXA_TEST_TOKEN))
+      assert.ok(!String(error).includes(process.env.STUDIOLO_TEST_TOKEN))
       assert.ok(!String(error).includes('secret path'))
       return true
     })
@@ -100,12 +100,12 @@ test('independent logical calls get independent IDs, re-entry uses same ID', () 
 })
 
 test('explicit shared adapter file reuses credentials and errors never leak secrets', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'nexa-plugin-'))
+  const directory = await mkdtemp(join(tmpdir(), 'studiolo-plugin-'))
   try {
     const path = join(directory, 'config.json')
-    await writeFile(path, JSON.stringify({ serverUrl: 'http://localhost:17800', agentToken: process.env.NEXA_TEST_TOKEN }))
+    await writeFile(path, JSON.stringify({ serverUrl: 'http://localhost:17800', agentToken: process.env.STUDIOLO_TEST_TOKEN }))
     const credential = await resolveCredential({ adapterConfigPath: path })
-    assert.equal(credential.agentToken, process.env.NEXA_TEST_TOKEN)
+    assert.equal(credential.agentToken, process.env.STUDIOLO_TEST_TOKEN)
     await writeFile(path, 'bad-secret-file')
     await assert.rejects(resolveCredential({ adapterConfigPath: path }), e => e.code === 'configuration_error' && !String(e).includes(path))
   } finally { await rm(directory, { recursive: true, force: true }) }
@@ -127,7 +127,7 @@ test('unknown server errors and terminal network failures never print credential
   let calls = 0
   await assert.rejects(executeTool('website.create', 'write', {}, config, 'failure', async () => {
     calls++
-    throw new Error(process.env.NEXA_TEST_TOKEN)
-  }), e => e.code === 'unavailable' && !String(e).includes(process.env.NEXA_TEST_TOKEN))
+    throw new Error(process.env.STUDIOLO_TEST_TOKEN)
+  }), e => e.code === 'unavailable' && !String(e).includes(process.env.STUDIOLO_TEST_TOKEN))
   assert.equal(calls, 3)
 })

@@ -2,7 +2,7 @@
 
 Run after Alembic upgrade with DATABASE_URL=postgresql+psycopg://... . Uses
 real Local processes, business/Conflict HTTP APIs and background synchronization;
-never invokes /sync/run. Set NEXA_BACKGROUND_SIDECAR to repeat with the native
+never invokes /sync/run. Set STUDIOLO_BACKGROUND_SIDECAR to repeat with the native
 packaged backend. Disconnecting B makes same-base edits and stale races precise.
 """
 
@@ -36,7 +36,7 @@ def matches(replica, entity_id, description):
 
 
 def queue(replica, entity_id):
-    with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+    with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
             "SELECT id, mutation_id, status, operation, base_revision, payload_json, "
@@ -47,7 +47,7 @@ def queue(replica, entity_id):
 
 
 def receipt(replica, snapshot, expected):
-    with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+    with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT entity_type, entity_id, status, payload_json, "
             "conflict_json, depends_on_mutation_id, last_error FROM local_mutation_queue WHERE id=?",
@@ -65,7 +65,7 @@ def receipt(replica, snapshot, expected):
 
 
 def local_row(replica, entity_id):
-    with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+    with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT description, sync_revision, deleted_at "
                          "FROM ledger_transactions WHERE id=?", (entity_id,)).fetchone()
@@ -209,9 +209,9 @@ def main():
     with engine.connect() as db:
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
     core_secret, password = secrets.token_hex(32), secrets.token_urlsafe(24)
-    with TemporaryDirectory(prefix="nexa-conflict-sync-") as temporary:
+    with TemporaryDirectory(prefix="studiolo-conflict-sync-") as temporary:
         directory = Path(temporary)
-        core = Server(directory, "core", core_env={"NEXA_MODE": "core", "DATABASE_URL": core_url,
+        core = Server(directory, "core", core_env={"STUDIOLO_MODE": "core", "DATABASE_URL": core_url,
             "JWT_SECRET": core_secret, "CORS_ORIGINS": "http://localhost:5173"})
         a, b = Server(directory, "local-a"), Server(directory, "local-b")
         secrets_to_check = [core_secret, password]
@@ -350,7 +350,7 @@ def main():
             assert all(value not in contents for value in secrets_to_check), "Secret appeared in conflict integration log"
             assert "nc_live_" not in contents and "Bearer " not in contents, "Bearer credential appeared in conflict integration log"
             assert "authorization:" not in contents.lower(), "Authorization header appeared in conflict integration log"
-        mode = "Packaged Local" if os.environ.get("NEXA_BACKGROUND_SIDECAR") else "Source Local"
+        mode = "Packaged Local" if os.environ.get("STUDIOLO_BACKGROUND_SIDECAR") else "Source Local"
         print(mode + " Conflict Center A/B HTTP/SQLite/PostgreSQL, lifecycle and credential scan: PASS", flush=True)
 
 

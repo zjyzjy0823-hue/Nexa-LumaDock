@@ -206,7 +206,7 @@ class SingletonAdapter(SyncAdapter):
         return item.sync_revision == 0
 
     def entity_id(self, item=None):
-        return str(uuid5(NAMESPACE_URL, "nexa:personal-state:" + self.entity_type))
+        return str(uuid5(NAMESPACE_URL, "studiolo:personal-state:" + self.entity_type))
 
     def identity_error(self, entity_id, operation):
         if entity_id != self.entity_id():

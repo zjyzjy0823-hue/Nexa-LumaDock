@@ -6,7 +6,7 @@ import pytest
 
 from config import load_config
 from main import process_task, run_once
-from nexa import FatalApiError, NexaClient
+from studiolo import FatalApiError, StudioloClient
 from openclaw import ExecutionResult, execute_task
 
 
@@ -97,7 +97,7 @@ def test_rejected_credentials_and_payload_fail_fast(code):
         requests.append(request)
         return httpx.Response(code, json={"detail": "rejected"})
 
-    api = NexaClient(config(), httpx.MockTransport(handler))
+    api = StudioloClient(config(), httpx.MockTransport(handler))
     with pytest.raises(FatalApiError):
         api.tasks()
     assert len(requests) == 1
@@ -105,7 +105,7 @@ def test_rejected_credentials_and_payload_fail_fast(code):
 
 
 def test_network_retry(monkeypatch):
-    monkeypatch.setattr("nexa.time.sleep", lambda _: None)
+    monkeypatch.setattr("studiolo.time.sleep", lambda _: None)
     count = 0
 
     def handler(request):
@@ -115,7 +115,7 @@ def test_network_retry(monkeypatch):
             raise httpx.ConnectError("offline")
         return httpx.Response(200, json=[])
 
-    api = NexaClient(config(), httpx.MockTransport(handler))
+    api = StudioloClient(config(), httpx.MockTransport(handler))
     assert api.tasks() == []
     assert count == 3
     api.close()

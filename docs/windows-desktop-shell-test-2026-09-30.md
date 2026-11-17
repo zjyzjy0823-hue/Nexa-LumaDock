@@ -1,4 +1,4 @@
-# Nexa 0.5.5 Desktop Shell 验证（2026-09-30）
+# Studiolo 0.5.5 Desktop Shell 验证（2026-09-30）
 
 基线：`codex/v0.5.5-agent-data-actions` / `1648c2eea092526a04a9b4b70e7ead177f63ea75`。版本保持 0.5.5。本轮仅修改桌面外壳，不修改业务 API、数据库迁移、外链 opener 或 OpenClaw 实现。
 
@@ -6,7 +6,7 @@
 
 | 项目 | 实现 / 结果 |
 | --- | --- |
-| Custom titlebar | `DesktopTitleBar.vue`，36px，Nexa 图标/名称、玻璃背景、最小化/最大化或还原/关闭到托盘；仅 `isTauri()` 显示 |
+| Custom titlebar | `DesktopTitleBar.vue`，36px，Studiolo 图标/名称、玻璃背景、最小化/最大化或还原/关闭到托盘；仅 `isTauri()` 显示 |
 | decorations | 主窗口 `decorations:false`；尺寸、最小尺寸、居中、可调整大小、启动隐藏均保留 |
 | Wallpaper black edge | 根因是 1920×1080 壁纸的底部 8px：第 1072 行为分界过渡，第 1073–1079 行近乎纯黑。Desktop 按 1920×1072 有效画面计算覆盖尺寸并顶端对齐；body、启动/错误/登录背景与卡片边缘渐隐层使用一致尺寸，排除图片黑边。普通窗口和最大化 release 截图通过；保留默认原生阴影/圆角 |
 | Permissions | 保留 `core:default`；仅新增 window allow-minimize、allow-toggle-maximize、allow-close、allow-start-dragging；is-maximized 和 internal-toggle-maximize 已在当前 schema 的默认权限中 |
@@ -19,7 +19,7 @@
 | Modal/toast | Modal backdrop 统一覆盖整个窗口（含标题栏），z-index ≥100；标题栏 z-index 90；桌面有 aria-modal 时停止主内容滚动，关闭后自动恢复；toast 仍定位于视口右下 |
 | Context menu | 桌面统一禁用全部 WebView 默认右键菜单，包含输入框；本轮没有自定义编辑右键菜单，编辑依赖原生键盘快捷键 |
 | Browser shortcuts | 阻止 F5、Ctrl+R/Ctrl+Shift+R、Ctrl+P、Ctrl+S、Ctrl+L、Ctrl+U；保留 Alt/系统组合与 IME 输入 |
-| Nexa/editing shortcuts | 保留 Ctrl+K、Ctrl+C/V/X/A/Z/Y；未对全部 Ctrl 组合做拦截 |
+| Studiolo/editing shortcuts | 保留 Ctrl+K、Ctrl+C/V/X/A/Z/Y；未对全部 Ctrl 组合做拦截 |
 | Selection | 仅 titlebar/sidebar/button/navigation/toolbar/card header 禁止选中；正文默认可选，input/textarea/contenteditable/data-selectable 显式允许文本选中 |
 | Drag | 仅 img/link/svg 默认 dragstart 被阻止；编辑区和 data-allow-drag 例外；未拦截 drop，不影响现有基于 PointerEvent 的 widget 布局调整 |
 | External opener | 保留组件显式调用共享 helper → HTTP(S) 校验 → Rust default browser opener；内部路由仍 history.pushState，未增加 document 外链拦截或 target=_blank |
@@ -59,18 +59,18 @@
 
 ## Packaged Windows 验收
 
-使用实际 release EXE + 打包 sidecar；独立标识 `com.isidel.nexa.shell-20260930`、独立数据库和测试账户 `desktop_shell_qa`。QA fixture 只预置一个测试网站与缓存天气，不操作正式数据库、secret.key 或 0.5.1 安装目录。
+使用实际 release EXE + 打包 sidecar；独立标识 `com.isidel.studiolo.shell-20260930`、独立数据库和测试账户 `desktop_shell_qa`。QA fixture 只预置一个测试网站与缓存天气，不操作正式数据库、secret.key 或 0.5.1 安装目录。
 
 | 实机项 | 结果 |
 | --- | --- |
-| 标题栏/玻璃/粗滚动条 | 已观察到无白色系统标题栏、Nexa custom titlebar 与细内容滚动条；账本内部细条修正后消失 |
+| 标题栏/玻璃/粗滚动条 | 已观察到无白色系统标题栏、Studiolo custom titlebar 与细内容滚动条；账本内部细条修正后消失 |
 | Backend error 状态 | 实际 QA 后端停止时错误面板与 titlebar/控制按钮均保留，无 document 粗滚动条 |
 | 最大化/还原 | 原生窗口尺寸变化正确；还原图标随实际状态更新；还原后恢复原先尺寸 |
 | 标题栏双击 | Tauri drag region 双击可最大化 |
 | 原生右键 | 首页空白、Sidebar、首页卡片、网站链接卡片均未出现 WebView 浏览器菜单 |
 | 原生搜索 / 快捷键 | Ctrl+K 打开并聚焦搜索；输入测试文本后 F5、Ctrl+R、Ctrl+Shift+R 均保留原搜索文本和浮层；Ctrl+P / Ctrl+S 不出现打印/保存界面 |
 | 原生剪贴板 | 搜索输入 Ctrl+A 选中文字与测试文本一致；Ctrl+C → Backspace → Ctrl+V 后再次读取确认原文本恢复 |
-| 原生外链 | 左键点击测试网站后 Edge 新增一个标签，读取标签 URL 确认完整 `https://example.com/?nexa_qa=explicit#check`；Nexa 保留网站页；随后关闭该测试标签 |
+| 原生外链 | 左键点击测试网站后 Edge 新增一个标签，读取标签 URL 确认完整 `https://example.com/?studiolo_qa=explicit#check`；Studiolo 保留网站页；随后关闭该测试标签 |
 | 最小化 | 点击自绘按钮后原生工具返回窗口已最小化，主进程与后端继续运行 |
 | 自绘 X / hide | 点击 X 后可见窗口列表中 QA 窗口消失，主进程 PID 与健康的后端仍在 |
 | Single instance | 实际再次启动 QA EXE 后恢复既有窗口，首轮主进程 PID 24976 不变；中间 release 的最小化、X 隐藏和第二次启动恢复也已回归，PID 51428 不变；最终配置保留原有 Rust 实现 |
@@ -78,7 +78,7 @@
 | 最终卡片 / 底部 | 实机滚到底后最后一排卡片完整，悬停首张卡片上缘完整、玻璃模糊保留；最终 release 普通窗口、最大化和还原后，壁纸原有的整条底部黑边均消失；状态图标同步正确 |
 | 标题栏拖动 | 用户人工验收通过；自动工具未取得可信的位置变化证据，未将工具拖拽当成证明 |
 | 边缘 / 角落 resize | 用户人工验收通过；工具遇到 user input 检测后停止，未继续干扰用户 |
-| Snap / 托盘菜单 | 用户人工验收通过：Snap、托盘“打开 Nexa”与“退出 Nexa”；工具没有可访问的系统托盘界面 |
+| Snap / 托盘菜单 | 用户人工验收通过：Snap、托盘“打开 Studiolo”与“退出 Studiolo”；工具没有可访问的系统托盘界面 |
 
 原生窗口操作使用实际打包产物；`sky.launch_app` 只激活现有窗口不算 single-instance 证明，因此该项另以确实启动第二个 EXE 的方式验证。图片和文本快照偶尔早于渲染更新，剪贴板与隐藏等结果均以随后的新快照判定。
 
@@ -86,9 +86,9 @@
 
 - 正式 NSIS：`src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Nexa_0.5.5_x64-setup.exe`，43,628,268 bytes。
 - NSIS SHA256：`A118DB3165CA8DA9CAA05EA41671525C4E8002A0F87E1E81AC72811C2980F00F`。
-- 最终隔离 QA release：`output/windows-qa-shell-wallpaper/Nexa.exe`，SHA256 `8429FA4680F8386A03EDBC1D36BCDFD05D62B01A5B8442C690906250A901A423`。
+- 最终隔离 QA release：`output/windows-qa-shell-wallpaper/Studiolo.exe`，SHA256 `8429FA4680F8386A03EDBC1D36BCDFD05D62B01A5B8442C690906250A901A423`。
 - 正式构建的 `dist` 已确认没有 `qa-fixture.js` 或测试 access-token 注入。
-- 新的实际 Windows 窗口截图：`output/nexa-desktop-shell-2026-09-30.png`，1283×803（含默认原生边框，客户区为 1280×800）；可见自绘玻璃标题栏、固定 Sidebar 和细内容滚动条，底部壁纸黑边已消失。最大化修复截图：`output/nexa-desktop-shell-max-2026-09-30.png`，1707×1067。
+- 新的实际 Windows 窗口截图：`output/studiolo-desktop-shell-2026-09-30.png`，1283×803（含默认原生边框，客户区为 1280×800）；可见自绘玻璃标题栏、固定 Sidebar 和细内容滚动条，底部壁纸黑边已消失。最大化修复截图：`output/studiolo-desktop-shell-max-2026-09-30.png`，1707×1067。
 
 修改文件共 12 个：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/capabilities/default.json`、`src/main.ts`、`src/App.vue`、`src/pages/DashboardPage.vue`、`src/components/desktop/DesktopTitleBar.vue`、`src/desktop/desktopInteractions.ts`、`src/desktop/desktop.css`、`tests/desktop-shortcuts.test.mjs`、`tests/desktop-interactions.browser.js`、本报告。
 

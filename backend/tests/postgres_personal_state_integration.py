@@ -1,6 +1,6 @@
 """Background-only real SQLite A/B and isolated PostgreSQL Personal State E2E.
 
-Repeat with NEXA_BACKGROUND_SIDECAR for the final packaged Windows backend.
+Repeat with STUDIOLO_BACKGROUND_SIDECAR for the final packaged Windows backend.
 No manual sync calls; process logs and actual PostgreSQL sync payloads are checked.
 """
 from contextlib import closing
@@ -46,7 +46,7 @@ def snapshot(replica, kind):
 
 
 def queue(replica):
-    with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+    with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
         return db.execute("SELECT mutation_id, entity_type, entity_id, base_revision, payload_json "
             "FROM local_mutation_queue WHERE status != 'resolved' ORDER BY entity_type, entity_id").fetchall()
 
@@ -59,9 +59,9 @@ def main():
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_local_automation_events"
     password, jwt = secrets.token_urlsafe(24), secrets.token_hex(32)
     credentials = [password, jwt]
-    with TemporaryDirectory(prefix="nexa-personal-state-") as temporary:
+    with TemporaryDirectory(prefix="studiolo-personal-state-") as temporary:
         directory = Path(temporary)
-        core = Server(directory, "core", core_env={"NEXA_MODE": "core", "DATABASE_URL": database_url,
+        core = Server(directory, "core", core_env={"STUDIOLO_MODE": "core", "DATABASE_URL": database_url,
             "JWT_SECRET": jwt, "CORS_ORIGINS": "http://localhost:5173"})
         a, b = Server(directory, "local-a"), Server(directory, "local-b")
         try:
@@ -152,7 +152,7 @@ def main():
                 assert forbidden not in all_payloads
             for replica in (a, b):
                 credentials.extend(((replica.directory / "secret.key").read_text(),))
-                with closing(sqlite3.connect(replica.directory / "nexa.db")) as db:
+                with closing(sqlite3.connect(replica.directory / "studiolo.db")) as db:
                     local_payloads = json.dumps(db.execute("SELECT payload_json, conflict_json FROM local_mutation_queue").fetchall())
                     for credential in credentials:
                         assert credential not in local_payloads
@@ -165,7 +165,7 @@ def main():
                 for credential in credentials:
                     assert credential not in log, "Credential appeared in process log"
             engine.dispose()
-    print(("Packaged Windows" if os.environ.get("NEXA_BACKGROUND_SIDECAR") else "Source") + " PostgreSQL Personal State E2E: PASS")
+    print(("Packaged Windows" if os.environ.get("STUDIOLO_BACKGROUND_SIDECAR") else "Source") + " PostgreSQL Personal State E2E: PASS")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,15 @@
-# Nexa 0.5.5 Windows 全面回归记录
+# Studiolo 0.5.5 Windows 全面回归记录
 
 测试日期：2026-09-30。基线：`f5f3887b5e3b14d20f5fd9196724d16b261df7f9`，分支 `codex/v0.5.5-agent-data-actions`。
 
-按用户要求跳过 OpenClaw 插件、适配器与 SDK。本轮覆盖现有 Nexa 业务功能、数据库和同步链路、Web 页面、Windows Tauri/WebView2、液态玻璃样式。已修复发现的问题，并生成新的本地安装包；尚未实现或未完成验收的功能单独列出，不能视为全部功能通过。
+按用户要求跳过 OpenClaw 插件、适配器与 SDK。本轮覆盖现有 Studiolo 业务功能、数据库和同步链路、Web 页面、Windows Tauri/WebView2、液态玻璃样式。已修复发现的问题，并生成新的本地安装包；尚未实现或未完成验收的功能单独列出，不能视为全部功能通过。
 
 ## 环境与隔离
 
 - Windows 11 x64，真实 Tauri release 程序与打包后的 Python sidecar。
 - Web 浏览器使用独立测试账户、独立 SQLite 和本地测试端口。
-- Windows 测试使用独立应用标识 `com.isidel.nexa.regression-20260930` 与独立用户数据目录，业务增删改没有使用正式数据库。
-- 原先安装的 Nexa 因固定端口 17800 需临时关闭；测试结束恢复原安装程序。
+- Windows 测试使用独立应用标识 `com.isidel.studiolo.regression-20260930` 与独立用户数据目录，业务增删改没有使用正式数据库。
+- 原先安装的 Studiolo 因固定端口 17800 需临时关闭；测试结束恢复原安装程序。
 - Windows QA 构建仅增加测试应用标识与一次性测试登录 fixture。正式安装包重新执行默认 `npm run desktop:build`，确认 `dist/index.html` 不包含测试登录注入。
 
 ## 自动检查结果

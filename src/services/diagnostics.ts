@@ -38,5 +38,5 @@ export function diagnosticsRows(value: Diagnostics) {
 
 // Copy only fields shown to the user; never serialize an entire server response.
 export function diagnosticsText(value: Diagnostics) {
-  return ['Nexa Diagnostics', ...diagnosticsRows(value).map(([label, text]) => `${label}: ${text}`)].join('\n')
+  return ['Studiolo Diagnostics', ...diagnosticsRows(value).map(([label, text]) => `${label}: ${text}`)].join('\n')
 }

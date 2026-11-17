@@ -114,12 +114,12 @@ def main() -> None:
     SIDECAR = sidecar_path(target)
     if not SIDECAR.is_file() or not os.access(SIDECAR, os.X_OK):
         parser.error(f"Build the executable sidecar first: {SIDECAR}")
-    data_dir = Path(tempfile.mkdtemp(prefix="NexaDesktopSmoke-")).resolve()
+    data_dir = Path(tempfile.mkdtemp(prefix="StudioloDesktopSmoke-")).resolve()
     try:
         smoke_password = secrets.token_urlsafe(24)
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "nexa", "version": "0.6.1"}
+            assert request("/api/health") == {"status": "ok", "service": "studiolo", "version": "0.6.1"}
             for origin in ("http://tauri.localhost", "tauri://localhost"):
                 with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                     "Origin": origin,
@@ -160,7 +160,7 @@ def main() -> None:
             assert request("/api/v1/sync/status", token=token)["pending"] == 10
         finally:
             stop(first, data_dir)
-        assert (data_dir / "nexa.db").is_file()
+        assert (data_dir / "studiolo.db").is_file()
         assert (data_dir / "secret.key").is_file()
         secret_bytes = (data_dir / "secret.key").read_bytes()
         if os.name != "nt":
@@ -168,7 +168,7 @@ def main() -> None:
         installation_id = (data_dir / "installation.id").read_text(encoding="ascii")
         assert str(UUID(installation_id)) == installation_id
         assert (data_dir / "logs" / "backend.log").is_file()
-        with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
+        with closing(sqlite3.connect(data_dir / "studiolo.db")) as connection:
             assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == expected_alembic_head()
             assert connection.execute("SELECT count(*) FROM local_mutation_queue WHERE status='pending'").fetchone()[0] == 10
             assert {row[0] for row in connection.execute("SELECT entity_type FROM local_mutation_queue WHERE status='pending'")} >= {
@@ -208,7 +208,7 @@ def main() -> None:
             assert request("/api/v1/sync/status", token=token)["pending"] == 6
         finally:
             stop(second, data_dir)
-        with closing(sqlite3.connect(data_dir / "nexa.db")) as connection:
+        with closing(sqlite3.connect(data_dir / "studiolo.db")) as connection:
             rows = connection.execute("SELECT entity_type, entity_id, base_revision, payload_json "
                                       "FROM local_mutation_queue ORDER BY entity_type").fetchall()
             assert len(rows) == 6
@@ -239,7 +239,7 @@ def main() -> None:
         print("Packaged sidecar: Agent scopes/create/replay/audit, nine-entity offline outbox, tombstones, persistence, login PASS")
     finally:
         temp_root = Path(tempfile.gettempdir()).resolve()
-        if data_dir.parent != temp_root or not data_dir.name.startswith("NexaDesktopSmoke-"):
+        if data_dir.parent != temp_root or not data_dir.name.startswith("StudioloDesktopSmoke-"):
             raise RuntimeError("Refusing to clean up unexpected smoke test directory")
         for attempt in range(15):
             try:

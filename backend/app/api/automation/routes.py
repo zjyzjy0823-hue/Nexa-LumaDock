@@ -200,7 +200,7 @@ def queue_manual(db, workflow, payload):
     if workflow.deleted_at is not None:
         raise HTTPException(404, "Workflow not found")
     try:
-        identity = str(uuid5(NAMESPACE_URL, f"nexa:manual:{workflow.id}:{payload.request_id}"))
+        identity = str(uuid5(NAMESPACE_URL, f"studiolo:manual:{workflow.id}:{payload.request_id}"))
         item = enqueue(db, workflow, "manual", identity)
         db.commit()
         return execution_out(item)

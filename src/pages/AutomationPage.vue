@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { Plus, Play, X } from 'lucide-vue-next'
-import GlassCard from '../components/ui/GlassCard.vue'
-import ActionButton from '../components/ui/ActionButton.vue'
+import OpusSegment from '../components/ui/OpusSegment.vue'
+import OpusIcon from '../components/ui/OpusIcon.vue'
+import Modal from '../components/ui/Modal.vue'
 import { useAutomationStore } from '../stores/automation'
 import { useAuthStore } from '../stores/auth'
 import { confirmAction } from '../composables/useConfirm'
 import { automationService } from '../services/automation'
 import type { AutomationAction, Execution, Workflow, WorkflowInput } from '../types/automation'
+
+const props = defineProps<{ mobile?: boolean }>()
 const emit = defineEmits<{ action: [message: string] }>()
 const store = useAutomationStore(), auth = useAuthStore()
 const open = ref(false), editingId = ref(''), selectedId = ref(''), firstField = ref<HTMLInputElement | null>(null), formError = ref('')
@@ -23,11 +25,64 @@ function actionLabel(item: Workflow) {
   return action ? actions[action.type] : '仅模拟'
 }
 const history = computed(() => store.executions.filter(item => item.workflowId === selected.value?.id))
-const counters = computed(() => ['queued', 'running', 'succeeded', 'failed'].map(status => ({ status, count: store.executions.filter(item => item.status === status || (status === 'running' && item.status === 'claimed')).length })))
+const owners = [
+  { id: 'studiolo', label: 'Studiolo', icon: 'studiolo', description: '定时、数据变化、Agent 完成后、手动' },
+  { id: 'openclaw', label: 'OpenClaw', icon: 'claw', description: '原生 Cron · 待接入' },
+  { id: 'hermes', label: 'Hermes', icon: 'hermes', description: '原生 Cron · 待接入' },
+] as const
+const filters = [
+  { id: 'running', label: '运行中', color: 'var(--accent)' }, { id: 'fail', label: '失败', color: 'var(--danger)' },
+  { id: 'unknown', label: '结果未知', color: 'var(--warn)' }, { id: 'paused', label: '已暂停', color: 'var(--text-3)' },
+] as const
+const jobFilter = ref('')
+const ownerFilter = ref('all')
+const showMobileDetail = ref(false)
+const ownerPicker = ref<HTMLDialogElement>()
+const jobState = (item: Workflow) => {
+  const last = store.runtimeExecutions.find(run => run.workflowId === item.id)?.status
+  if (!item.enabled) return 'paused'
+  if (last === 'running' || last === 'claimed') return 'running'
+  if (last === 'failed') return 'fail'
+  if (last === 'succeeded' || last === 'success') return 'ok'
+  return 'unknown'
+}
+const jobLabels = { paused: '已暂停', running: '运行中', fail: '失败', ok: '成功', unknown: '暂无结果' }
+const filtered = computed(() => (ownerFilter.value === 'all' || ownerFilter.value === 'studiolo')
+  ? store.items.filter(item => !jobFilter.value || (jobFilter.value === 'attn' ? ['fail', 'unknown'].includes(jobState(item)) : jobState(item) === jobFilter.value))
+  : [])
+function scheduleValue(item: Workflow, key: string) {
+  return String((item.triggerConfigJson.schedule as Record<string, unknown> | undefined)?.[key] ?? '—')
+}
+function runViewTransition(update: () => Promise<void> | void, types: string[]) {
+  if (props.mobile && typeof document !== 'undefined' && document.startViewTransition && document.documentElement?.dataset.motion !== 'reduced') {
+    document.startViewTransition({ update, types })
+  } else {
+    void update()
+  }
+}
+function chooseTask(item: Workflow) {
+  if (props.mobile) {
+    runViewTransition(async () => {
+      selectedId.value = item.id
+      showMobileDetail.value = true
+      await nextTick()
+    }, ['forward'])
+  } else {
+    selectedId.value = item.id
+  }
+}
+function closeMobileDetail() {
+  runViewTransition(async () => {
+    showMobileDetail.value = false
+    await nextTick()
+  }, ['backward'])
+}
+function requestCreate() { ownerPicker.value?.showModal?.() }
+function confirmOwner() { ownerPicker.value?.close?.(); openCreate() }
 const date = (value?: string | null) => value ? new Date(value).toLocaleString() : '—'
 const duration = (item: Execution) => item.finishedAt ? `${Math.max(0, (Date.parse(item.finishedAt) - Date.parse(item.startedAt)) / 1000).toFixed(1)}s` : '—'
 let poll: ReturnType<typeof setInterval> | undefined
-function openCreate() { Object.assign(form, defaults()); editingId.value = ''; formError.value = ''; open.value = true; nextTick(() => firstField.value?.focus()) }
+function openCreate() { Object.assign(form, defaults()); editingId.value = ''; formError.value = ''; open.value = true; nextTick(() => firstField.value?.focus?.()) }
 defineExpose({ openCreate })
 function edit(item: Workflow) {
   openCreate(); editingId.value = item.id; form.name = item.name; form.description = item.description; form.enabled = item.enabled; form.trigger = item.triggerType
@@ -62,42 +117,178 @@ async function save() {
     open.value = false; emit('action', '自动化定义已保存'); await store.refreshRuntime(auth.token)
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
 }
-async function remove(item: Workflow) { if (auth.token && await confirmAction('删除此自动化？Core 将取消尚未开始的执行。')) await operate(() => store.remove(auth.token!, item.id)) }
+async function remove(item: Workflow) {
+  if (auth.token && await confirmAction('删除此自动化？Core 将取消尚未开始的执行。')) {
+    await operate(async () => {
+      await store.remove(auth.token!, item.id)
+      if (props.mobile && showMobileDetail.value) closeMobileDetail()
+    })
+  }
+}
 async function showDetail(item: Execution) { if (auth.token) await operate(async () => { detail.value = await automationService.detail(auth.token!, item.workflowId, item.id) }) }
-function onKey(event: KeyboardEvent) { if (event.key === 'Escape') { open.value = false; detail.value = null } }
-onMounted(() => { if (auth.token) store.load(auth.token, true).catch(() => {}); poll = setInterval(() => { if (auth.token && store.loaded) store.refreshRuntime(auth.token).catch(() => {}) }, 5000); document.addEventListener('keydown', onKey) })
-onUnmounted(() => { clearInterval(poll); document.removeEventListener('keydown', onKey) })
+onMounted(() => { if (auth.token) store.load(auth.token, true).catch(() => {}); poll = setInterval(() => { if (auth.token && store.loaded) store.refreshRuntime(auth.token).catch(() => {}) }, 5000) })
+onUnmounted(() => { clearInterval(poll) })
 </script>
 <template>
-  <div class="automation-page">
-    <div class="heading"><div><h1>自动化</h1><p>由 Core 统一调度和执行；配置保留在本地并同步。</p></div><ActionButton @click="openCreate"><Plus :size="16" />新建自动化</ActionButton></div>
-    <p v-if="store.error" role="alert">{{ store.error }} <button @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p><p v-if="store.loading" role="status">正在加载…</p>
-    <GlassCard v-if="store.runtimeError" role="status">{{ store.runtimeError }}<ActionButton size="sm" variant="secondary" :disabled="store.refreshing" @click="auth.token && store.refreshRuntime(auth.token)">刷新</ActionButton></GlassCard>
-    <div class="counters"><GlassCard v-for="counter in counters" :key="counter.status"><span>{{ statuses[counter.status] }}</span><strong>{{ counter.count }}</strong></GlassCard></div>
-    <div class="content-grid"><section aria-label="自动化定义"><h2>我的自动化</h2><p v-if="store.loaded && !store.items.length">还没有自动化，请创建一个。</p>
-      <GlassCard v-for="item in store.items" :key="item.id" class="workflow" :class="{ selected: selected?.id === item.id }"><button class="workflow-title" @click="selectedId = item.id">{{ item.name }}</button><p>{{ item.description }}</p><p>{{ item.enabled ? '已启用' : '已停用' }} · {{ triggers[item.triggerType as keyof typeof triggers] ?? '旧版配置' }} → {{ actionLabel(item) }}</p>
-        <small>下次执行：{{ store.runtimes[item.id] ? date(store.runtimes[item.id]?.nextRunAt) : 'Core 状态不可用' }}<br />上次执行：{{ date(store.runtimes[item.id]?.lastRunAt) }} · {{ statuses[store.runtimes[item.id]?.lastResult ?? ''] ?? '—' }}</small>
-        <div class="actions"><ActionButton size="sm" :disabled="store.loading || !item.workflowJson.some(node => node.action)" @click="auth.token && operate(() => store.run(auth.token!, item.id))"><Play :size="13" />立即运行</ActionButton><ActionButton size="sm" variant="secondary" :disabled="store.loading" @click="simulate(item)">模拟测试</ActionButton><ActionButton size="sm" variant="secondary" @click="edit(item)">编辑</ActionButton><ActionButton size="sm" variant="secondary" :disabled="store.loading" @click="auth.token && operate(() => store.update(auth.token!, item.id, { enabled: !item.enabled }))">{{ item.enabled ? '停用' : '启用' }}</ActionButton><ActionButton size="sm" variant="danger" :disabled="store.loading" @click="remove(item)">删除</ActionButton></div>
-      </GlassCard></section>
-      <GlassCard class="history"><div class="heading"><h2>执行记录 · {{ selected?.name ?? '选择自动化' }}</h2><ActionButton size="sm" variant="secondary" :disabled="store.refreshing" @click="auth.token && store.refreshRuntime(auth.token)">刷新</ActionButton></div><p v-if="!history.length">{{ store.runtimeError ? '执行记录暂不可用' : '暂无执行记录' }}</p>
-        <div class="table-scroll"><table v-if="history.length"><thead><tr><th>状态 / 触发方式</th><th>开始 / 耗时</th><th>结果 / 失败原因</th><th>尝试</th></tr></thead><tbody><tr v-for="item in history" :key="item.id"><td><button @click="showDetail(item)">{{ statuses[item.status] }}</button><small>{{ triggers[item.triggerType as keyof typeof triggers] ?? '模拟' }}</small></td><td>{{ date(item.attempt ? item.startedAt : item.createdAt) }}<small>{{ duration(item) }}</small></td><td>{{ item.errorCode ?? (item.resultJson?.simulated ? '未执行任何真实动作' : JSON.stringify(item.resultSummary)) }}</td><td>{{ item.attempt }}</td></tr></tbody></table></div>
-      </GlassCard></div>
-    <Teleport to="body"><div v-if="open" class="modal-backdrop" @click.self="open = false"><GlassCard class="modal" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><div class="heading"><h2 id="automation-editor-title">{{ editingId ? '编辑' : '新建' }}自动化</h2><button aria-label="关闭" @click="open = false"><X :size="18" /></button></div>
-      <form @submit.prevent="save"><label>名称<input ref="firstField" v-model="form.name" required maxlength="120" /></label><label>描述<input v-model="form.description" maxlength="500" /></label><label class="checkbox"><input v-model="form.enabled" type="checkbox" />启用</label><label>触发器<select v-model="form.trigger"><option v-for="(label,key) in triggers" :key="key" :value="key">{{ label }}</option></select></label>
-        <template v-if="form.trigger === 'schedule'"><label>计划<select v-model="form.scheduleType"><option value="once">一次</option><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">间隔</option></select></label><label>时区<input v-model="form.timezone" required placeholder="Asia/Shanghai" /></label><label v-if="['daily','weekly'].includes(form.scheduleType)">时间<input v-model="form.time" type="time" required /></label><label v-if="form.scheduleType === 'weekly'">星期<select v-model="form.weekdays" multiple><option v-for="(label,day) in ['一','二','三','四','五','六','日']" :key="day" :value="day">星期{{ label }}</option></select></label><label v-if="['once','interval'].includes(form.scheduleType)">开始时间（含时区偏移）<input v-model="form.at" required placeholder="2026-10-03T22:00:00+08:00" /></label><label v-if="form.scheduleType === 'interval'">间隔（秒）<input v-model="form.seconds" type="number" min="10" max="31536000" required /></label><label>错过计划<select v-model="form.catchUp"><option value="catch_up_once">恢复后补执行一次</option><option value="skip">跳过</option></select></label></template>
-        <template v-if="form.trigger === 'data_changed'"><label>数据类型<select v-model="form.entityType"><option value="data.record">数据记录</option><option value="ledger.transaction">账本交易</option><option value="website">网站</option></select></label><label>变更<select v-model="form.operation"><option value="">所有变更</option><option value="upsert">创建或更新</option><option value="delete">删除</option></select></label></template><label v-if="form.trigger === 'agent_completed'">Core Agent ID（留空监听全部）<input v-model="form.agentFilter" maxlength="36" /></label>
-        <label>动作<select v-model="form.action" @change="form.extra = {}"><option v-for="(label,key) in actions" :key="key" :value="key">{{ label }}</option></select></label>
-        <template v-if="form.action === 'ledger.create'"><label>交易类型<select v-model="form.ledgerType"><option value="expense">支出</option><option value="income">收入</option></select></label><label>金额<input v-model="form.amount" type="number" min="0.01" step="0.01" required /></label><label>交易说明<input v-model="form.title" required maxlength="200" /></label><label>交易时间（含时区偏移）<input v-model="form.occurredAt" required /></label></template>
-        <template v-else-if="form.action === 'webhook.post'"><label>HTTPS URL<input v-model="form.url" type="url" required /></label><label>公开请求头（JSON）<textarea v-model="form.headers" rows="2" /></label><label>JSON 请求体<textarea v-model="form.payload" rows="4" /></label><label>超时（秒）<input v-model="form.timeout" type="number" min="1" max="30" required /></label><p>仅公网 HTTPS，不允许凭证或敏感请求头。远端须支持 Idempotency-Key 才能防止重复副作用。</p></template>
-        <template v-else><label>{{ form.action === 'agent.run' ? 'Core Agent ID' : form.action === 'data.create' ? '集合 ID' : '记录 ID' }}<input v-model="form.target" required maxlength="36" /></label><label>{{ form.action === 'agent.run' ? '任务标题' : '记录名称' }}<input v-model="form.title" required maxlength="160" /></label><template v-if="form.action !== 'agent.run'"><label>状态<input v-model="form.recordStatus" maxlength="40" /></label><label>分类<input v-model="form.category" maxlength="80" /></label><label>JSON 数据<textarea v-model="form.payload" rows="4" /></label></template><p v-else>成功创建 Core Agent 任务即视为动作成功。</p></template>
-        <p v-if="formError" role="alert">{{ formError }}</p><div class="actions"><ActionButton variant="secondary" @click="open = false">取消</ActionButton><ActionButton type="submit" :disabled="store.loading">保存</ActionButton></div>
-      </form></GlassCard></div>
-      <div v-if="detail" class="modal-backdrop" @click.self="detail = null"><GlassCard class="modal" role="dialog" aria-modal="true" aria-labelledby="execution-detail-title"><div class="heading"><h2 id="execution-detail-title">执行详情</h2><button aria-label="关闭" @click="detail = null"><X :size="18" /></button></div><dl><dt>自动化</dt><dd>{{ store.items.find(item => item.id === detail?.workflowId)?.name }}</dd><dt>Execution ID</dt><dd>{{ detail.id }}</dd><dt>触发器</dt><dd>{{ detail.triggerType }} · {{ detail.triggerInstanceId }}</dd><dt>定义版本</dt><dd>{{ detail.automationRevision }}</dd><dt>状态 / 尝试</dt><dd>{{ statuses[detail.status] }} / {{ detail.attempt }}</dd><dt>开始 / 结束</dt><dd>{{ date(detail.startedAt) }} / {{ date(detail.finishedAt) }}</dd><dt>下次重试</dt><dd>{{ date(detail.nextAttemptAt) }}</dd><dt>动作</dt><dd>{{ detail.action?.type ?? '模拟' }}</dd><dt>结果</dt><dd>{{ JSON.stringify(detail.resultSummary) }}</dd><dt>失败原因</dt><dd>{{ detail.errorCode ?? '—' }}</dd></dl></GlassCard></div>
-    </Teleport>
+  <div class="automation-page" :class="mobile ? (showMobileDetail ? 'mpage push' : 'mpage') : undefined">
+    <template v-if="!mobile">
+      <header class="ph"><div><h1>任务</h1><div class="sub">Studiolo 自动化与 Agent Cron 在这里统一管理 · 每个任务只由一个所有者调度</div></div>
+        <div class="actions"><button class="btn btn-primary" type="button" @click="requestCreate"><OpusIcon name="plus" />新建任务</button></div>
+      </header>
+      <div class="stat-strip"><button v-for="item in filters" :key="item.id" class="stat mat" type="button" :aria-pressed="jobFilter === item.id" @click="jobFilter = jobFilter === item.id ? '' : item.id"><span class="n num" :style="{ color: item.color }">{{ store.items.filter(task => jobState(task) === item.id).length }}</span><span class="l">{{ item.label }}</span></button></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <OpusSegment role="group" aria-label="按所有者筛选"><button type="button" :aria-pressed="ownerFilter === 'all'" @click="ownerFilter = 'all'">全部 <span class="faint">{{ store.items.length }}</span></button><button v-for="item in owners" :key="item.id" type="button" :aria-pressed="ownerFilter === item.id" @click="ownerFilter = item.id">{{ item.label }} <span class="faint">{{ item.id === 'studiolo' ? store.items.length : 0 }}</span></button></OpusSegment>
+      </div>
+    </template>
+    <template v-else-if="!showMobileDetail">
+      <div class="mhead"><h1>任务</h1><span class="spacer"></span><button class="icon-btn" type="button" style="width:40px;height:40px" aria-label="新建任务" @click="requestCreate"><OpusIcon name="plus" /></button></div>
+      <div class="mchips"><button class="chip" type="button" :aria-pressed="ownerFilter === 'all' && jobFilter === ''" @click="ownerFilter = 'all'; jobFilter = ''">全部</button><button class="chip" type="button" :aria-pressed="jobFilter === 'attn'" @click="ownerFilter = 'all'; jobFilter = 'attn'">需要关注</button><button class="chip" type="button" :aria-pressed="jobFilter === 'running'" @click="ownerFilter = 'all'; jobFilter = 'running'">运行中</button><button v-for="item in owners" :key="item.id" class="chip" type="button" :aria-pressed="ownerFilter === item.id" @click="ownerFilter = item.id; jobFilter = ''">{{ item.label }}</button></div>
+      <button v-for="item in filtered" :key="item.id" class="jobcard mat" type="button" @click="chooseTask(item)">
+        <div class="top"><b>{{ item.name }}</b><span class="run" :class="jobState(item)">{{ jobLabels[jobState(item)] }}</span></div>
+        <div><span class="owner o-studiolo"><span class="mark"><OpusIcon name="studiolo" /></span>Studiolo</span></div>
+        <div class="meta"><span>{{ triggers[item.triggerType as keyof typeof triggers] ?? '旧版配置' }}</span><span>下次 {{ date(store.runtimes[item.id]?.nextRunAt) }}</span></div>
+      </button>
+      <p v-if="!filtered.length" class="faint" style="text-align:center;padding:30px">没有符合条件的任务</p>
+    </template>
+    <p v-if="store.error" class="notice danger" role="alert">{{ store.error }} <button class="btn btn-sm btn-ghost" type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
+    <div v-if="store.runtimeError" class="notice" style="margin-bottom:12px"><OpusIcon name="wifiOff" /><div>{{ store.runtimeError }}</div><button class="btn btn-sm btn-ghost" type="button" :disabled="store.refreshing" @click="auth.token && store.refreshRuntime(auth.token)">刷新</button></div>
+    <div :class="mobile ? undefined : 'tasks-wrap'">
+      <div v-if="!mobile" class="tasks-table mat-solid"><table class="tbl">
+        <thead><tr><th>任务</th><th>调度所有者</th><th>计划</th><th>下次运行</th><th>最近结果</th></tr></thead>
+        <tbody>
+          <tr v-for="item in filtered" :key="item.id" :class="{ 'is-selected': selected?.id === item.id }" @click="chooseTask(item)">
+            <td><button class="task-name" type="button" style="text-align:left" @click.stop="chooseTask(item)"><b>{{ item.name }}</b><span>{{ actionLabel(item) }}</span></button></td>
+            <td><span class="owner o-studiolo"><span class="mark"><OpusIcon name="studiolo" /></span>Studiolo</span></td>
+            <td><div class="task-name"><span style="color:var(--text);font-size:13px">{{ triggers[item.triggerType as keyof typeof triggers] ?? '旧版配置' }}</span><span v-if="item.triggerType === 'schedule'">{{ scheduleValue(item, 'timezone') }}</span></div></td>
+            <td class="muted">{{ date(store.runtimes[item.id]?.nextRunAt) }}</td>
+            <td><div class="task-name"><span class="run" :class="jobState(item)">{{ jobLabels[jobState(item)] }}</span><span>{{ date(store.runtimes[item.id]?.lastRunAt) }}</span></div></td>
+          </tr>
+          <tr v-if="!filtered.length"><td colspan="5" class="faint" style="text-align:center;height:80px">{{ store.loading ? '正在加载任务…' : '没有符合条件的任务' }}</td></tr>
+        </tbody>
+      </table></div>
+      <aside v-if="!mobile || showMobileDetail" :key="selected?.id || 'empty'" :class="mobile ? undefined : 'task-detail mat-solid enter'" aria-label="任务详情">
+        <div v-if="mobile" class="navbar"><button class="icon-btn" type="button" aria-label="返回" @click="closeMobileDetail"><OpusIcon name="chevL" /></button><div class="t">任务详情</div><span style="width:40px"></span></div>
+        <template v-if="selected && (mobile || filtered.some(item => item.id === selected?.id))">
+          <template v-if="mobile">
+            <div style="padding:4px 4px 14px"><h2 style="margin:0 0 4px;font-size:22px">{{ selected.name }}</h2><span class="run" :class="jobState(selected)">{{ jobLabels[jobState(selected)] }}</span><span class="faint" style="font-size:12.5px"> · {{ triggers[selected.triggerType as keyof typeof triggers] }}</span></div>
+            <div class="owner-box oc-studiolo"><div><span class="owner o-studiolo"><span class="mark"><OpusIcon name="studiolo" /></span>Studiolo</span></div><div>由 Studiolo Core 执行，历史保存在 Core。</div></div>
+            <div class="mbtns">
+              <button class="btn btn-primary" type="button" :disabled="store.loading || !selected.workflowJson.some(node => node.action)" @click="auth.token && selected && operate(() => store.run(auth.token!, selected!.id))"><OpusIcon name="play" />立即运行</button>
+              <button class="btn btn-ghost" type="button" :disabled="store.loading" @click="auth.token && selected && operate(() => store.update(auth.token!, selected!.id, { enabled: !selected!.enabled }))"><OpusIcon :name="selected.enabled ? 'pause' : 'play'" />{{ selected.enabled ? '暂停' : '恢复' }}</button>
+            </div>
+            <div class="btn-row" style="margin-bottom:12px">
+              <button class="btn btn-sm btn-ghost" type="button" :disabled="store.loading" @click="selected && simulate(selected)">模拟测试</button>
+              <button class="btn btn-sm btn-ghost" type="button" @click="selected && edit(selected)"><OpusIcon name="pencil" />编辑</button>
+              <button class="btn btn-sm btn-danger" type="button" @click="selected && remove(selected)">删除</button>
+            </div>
+            <div class="kvl mat-solid">
+              <div><span>计划</span><span>{{ triggers[selected.triggerType as keyof typeof triggers] ?? '旧版配置' }}</span></div>
+              <div><span>原生表达</span><span class="mono">{{ scheduleValue(selected, 'time') }}</span></div>
+              <div><span>时区</span><span>{{ scheduleValue(selected, 'timezone') }}</span></div>
+              <div><span>下次运行</span><span>{{ date(store.runtimes[selected.id]?.nextRunAt) }}</span></div>
+            </div>
+            <div class="sec-t">运行历史<span class="spacer"></span><span style="font-weight:500">来自 Studiolo Core</span></div>
+            <div class="mtimeline mat-solid">
+              <button v-for="item in history" :key="item.id" class="t" type="button" style="width:100%;text-align:left" @click="showDetail(item)"><span class="run" :class="item.status === 'failed' ? 'fail' : item.status === 'succeeded' || item.status === 'success' ? 'ok' : 'unknown'">{{ statuses[item.status] }}</span><span class="faint">{{ duration(item) }}</span><span class="when">{{ date(item.startedAt) }}</span></button>
+              <div v-if="!history.length" class="t faint">暂无执行记录</div>
+            </div>
+          </template>
+          <template v-else>
+            <div style="display:flex;align-items:flex-start;gap:10px"><div class="grow"><h3 style="margin:0;font-size:17px">{{ selected.name }}</h3><div class="faint" style="font-size:12px;margin-top:2px">{{ triggers[selected.triggerType as keyof typeof triggers] }} · <span class="run" :class="jobState(selected)">{{ jobLabels[jobState(selected)] }}</span></div></div><button class="switch" type="button" role="switch" aria-label="启用任务" :aria-checked="selected.enabled" :disabled="store.loading" @click="auth.token && selected && operate(() => store.update(auth.token!, selected!.id, { enabled: !selected!.enabled }))"></button></div>
+            <div class="owner-card oc-studiolo"><div class="ttl"><span class="owner o-studiolo"><span class="mark"><OpusIcon name="studiolo" /></span>Studiolo</span></div><p>由 Studiolo Core 执行，历史保存在 Core。</p></div>
+            <dl class="sched"><dt>计划</dt><dd>{{ triggers[selected.triggerType as keyof typeof triggers] ?? '旧版配置' }}</dd><dt>原生表达</dt><dd class="mono">{{ scheduleValue(selected, 'time') }}</dd><dt>所有者时区</dt><dd>{{ scheduleValue(selected, 'timezone') }}</dd><dt>下次运行</dt><dd>{{ date(store.runtimes[selected.id]?.nextRunAt) }}</dd></dl>
+            <div class="btn-row">
+              <button class="btn btn-primary" type="button" :disabled="store.loading || !selected.workflowJson.some(node => node.action)" @click="auth.token && selected && operate(() => store.run(auth.token!, selected!.id))"><OpusIcon name="play" />立即运行</button>
+              <button class="btn btn-ghost" type="button" :disabled="store.loading" @click="selected && simulate(selected)">模拟测试</button><button class="btn btn-ghost" type="button" @click="selected && edit(selected)"><OpusIcon name="pencil" />编辑</button><button class="btn btn-danger" type="button" @click="selected && remove(selected)">删除</button>
+            </div>
+            <div><div class="card-h" style="margin-bottom:6px"><OpusIcon name="history" /> 运行历史<span class="spacer"></span><span class="chip">来源：Studiolo Core</span></div>
+              <div class="timeline" style="margin-top:10px"><button v-for="item in history" :key="item.id" class="t" type="button" style="text-align:left" @click="showDetail(item)"><span class="dot" :class="item.status === 'failed' ? 'danger' : item.status === 'succeeded' ? 'ok' : 'unknown'"></span><span>{{ statuses[item.status] }}<small v-if="item.triggerType === 'simulation'"> · 模拟</small><span class="faint"> · {{ duration(item) }}</span><div class="faint" style="font-size:12px">{{ item.resultJson?.simulated ? '未执行任何真实动作' : item.errorCode || item.message }}</div></span><span class="when">{{ date(item.startedAt) }}</span></button><div v-if="!history.length" class="faint">暂无执行记录</div></div>
+            </div>
+          </template>
+        </template>
+        <div v-else class="cleared"><OpusIcon name="tasks" />选择一个任务</div>
+      </aside>
+    </div>
+    <dialog ref="ownerPicker" class="dlg" aria-labelledby="nj-title" closedby="any">
+      <form class="dlg-body" method="dialog" @submit.prevent="confirmOwner"><h2 id="nj-title">由谁来运行这个任务？</h2><p>每个任务只有一个调度所有者。创建后由它独立执行与保存历史，Studiolo 负责统一查看和管理。</p>
+        <div class="owner-pick"><button v-for="item in owners" :key="item.id" type="button" class="owner-opt" :class="'oc-' + item.id" :aria-pressed="item.id === 'studiolo'" :disabled="item.id !== 'studiolo'"><span class="am"><OpusIcon :name="item.icon" /></span><span><div class="nm">{{ item.label }}</div><div class="ds">{{ item.description }}</div></span></button></div>
+        <div class="dlg-actions"><button class="btn btn-ghost" type="button" @click="ownerPicker?.close?.()">取消</button><button class="btn btn-primary" type="submit">继续</button></div>
+      </form>
+    </dialog>
+
+    <Modal :open="open" :title="`${editingId ? '编辑' : '新建'}自动化`" @close="open = false">
+      <form id="automation-editor-form" @submit.prevent="save">
+        <div class="field"><label for="auto-name">名称</label><input id="auto-name" ref="firstField" v-model="form.name" class="input" required maxlength="120" data-initial-focus /></div>
+        <div class="field"><label for="auto-desc">描述</label><input id="auto-desc" v-model="form.description" class="input" maxlength="500" /></div>
+        <label class="dlg-check"><input v-model="form.enabled" type="checkbox" />启用</label>
+        <div class="field"><label for="auto-trigger">触发器</label><select id="auto-trigger" v-model="form.trigger" class="input"><option v-for="(label,key) in triggers" :key="key" :value="key">{{ label }}</option></select></div>
+        <template v-if="form.trigger === 'schedule'">
+          <div class="field-grid">
+            <div class="field"><label>计划</label><select v-model="form.scheduleType" class="input"><option value="once">一次</option><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">间隔</option></select></div>
+            <div class="field"><label>时区</label><input v-model="form.timezone" class="input" required placeholder="Asia/Shanghai" /></div>
+          </div>
+          <div v-if="['daily','weekly'].includes(form.scheduleType)" class="field"><label>时间</label><input v-model="form.time" class="input" type="time" required /></div>
+          <div v-if="form.scheduleType === 'weekly'" class="field"><label>星期</label><select v-model="form.weekdays" class="input" multiple style="height:auto"><option v-for="(label,day) in ['一','二','三','四','五','六','日']" :key="day" :value="day">星期{{ label }}</option></select></div>
+          <div v-if="['once','interval'].includes(form.scheduleType)" class="field"><label>开始时间（含时区偏移）</label><input v-model="form.at" class="input" required placeholder="2026-10-03T22:00:00+08:00" /></div>
+          <div v-if="form.scheduleType === 'interval'" class="field"><label>间隔（秒）</label><input v-model="form.seconds" class="input" type="number" min="10" max="31536000" required /></div>
+          <div class="field"><label>错过计划</label><select v-model="form.catchUp" class="input"><option value="catch_up_once">恢复后补执行一次</option><option value="skip">跳过</option></select></div>
+        </template>
+        <template v-if="form.trigger === 'data_changed'">
+          <div class="field-grid">
+            <div class="field"><label>数据类型</label><select v-model="form.entityType" class="input"><option value="data.record">数据记录</option><option value="ledger.transaction">账本交易</option><option value="website">网站</option></select></div>
+            <div class="field"><label>变更</label><select v-model="form.operation" class="input"><option value="">所有变更</option><option value="upsert">创建或更新</option><option value="delete">删除</option></select></div>
+          </div>
+        </template>
+        <div v-if="form.trigger === 'agent_completed'" class="field"><label>Core Agent ID（留空监听全部）</label><input v-model="form.agentFilter" class="input" maxlength="36" /></div>
+        <div class="field"><label>动作</label><select v-model="form.action" class="input" @change="form.extra = {}"><option v-for="(label,key) in actions" :key="key" :value="key">{{ label }}</option></select></div>
+        <template v-if="form.action === 'ledger.create'">
+          <div class="field-grid">
+            <div class="field"><label>交易类型</label><select v-model="form.ledgerType" class="input"><option value="expense">支出</option><option value="income">收入</option></select></div>
+            <div class="field"><label>金额</label><input v-model="form.amount" class="input" type="number" min="0.01" step="0.01" required /></div>
+          </div>
+          <div class="field"><label>交易说明</label><input v-model="form.title" class="input" required maxlength="200" /></div>
+          <div class="field"><label>交易时间（含时区偏移）</label><input v-model="form.occurredAt" class="input" required /></div>
+        </template>
+        <template v-else-if="form.action === 'webhook.post'">
+          <div class="field"><label>HTTPS URL</label><input v-model="form.url" class="input" type="url" required /></div>
+          <div class="field"><label>公开请求头（JSON）</label><textarea v-model="form.headers" class="input mono" rows="2" /></div>
+          <div class="field"><label>JSON 请求体</label><textarea v-model="form.payload" class="input mono" rows="4" /></div>
+          <div class="field"><label>超时（秒）</label><input v-model="form.timeout" class="input" type="number" min="1" max="30" required /></div>
+          <div class="notice"><OpusIcon name="info" /><div>仅公网 HTTPS，不允许凭证或敏感请求头。远端须支持 Idempotency-Key 才能防止重复副作用。</div></div>
+        </template>
+        <template v-else>
+          <div class="field"><label>{{ form.action === 'agent.run' ? 'Core Agent ID' : form.action === 'data.create' ? '集合 ID' : '记录 ID' }}</label><input v-model="form.target" class="input" required maxlength="36" /></div>
+          <div class="field"><label>{{ form.action === 'agent.run' ? '任务标题' : '记录名称' }}</label><input v-model="form.title" class="input" required maxlength="160" /></div>
+          <template v-if="form.action !== 'agent.run'">
+            <div class="field-grid">
+              <div class="field"><label>状态</label><input v-model="form.recordStatus" class="input" maxlength="40" /></div>
+              <div class="field"><label>分类</label><input v-model="form.category" class="input" maxlength="80" /></div>
+            </div>
+            <div class="field"><label>JSON 数据</label><textarea v-model="form.payload" class="input mono" rows="4" /></div>
+          </template>
+          <p v-else class="faint" style="margin:0;font-size:12px">成功创建 Core Agent 任务即视为动作成功。</p>
+        </template>
+        <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
+      </form>
+      <template #footer>
+        <button class="btn btn-ghost" type="button" @click="open = false">取消</button>
+        <button class="btn btn-primary" type="submit" form="automation-editor-form" :disabled="store.loading">保存</button>
+      </template>
+    </Modal>
+
+    <Modal :open="!!detail" title="执行详情" @close="detail = null">
+      <dl v-if="detail" class="meta-grid">
+        <dt>自动化</dt><dd>{{ store.items.find(item => item.id === detail?.workflowId)?.name }}</dd>
+        <dt>Execution ID</dt><dd class="mono">{{ detail.id }}</dd>
+        <dt>触发器</dt><dd>{{ detail.triggerType }} · {{ detail.triggerInstanceId }}</dd>
+        <dt>定义版本</dt><dd>{{ detail.automationRevision }}</dd>
+        <dt>状态 / 尝试</dt><dd>{{ statuses[detail.status] }} / {{ detail.attempt }}</dd>
+        <dt>开始 / 结束</dt><dd>{{ date(detail.startedAt) }} / {{ date(detail.finishedAt) }}</dd>
+        <dt>下次重试</dt><dd>{{ date(detail.nextAttemptAt) }}</dd>
+        <dt>动作</dt><dd>{{ detail.action?.type ?? '模拟' }}</dd>
+        <dt>结果</dt><dd class="mono">{{ JSON.stringify(detail.resultSummary) }}</dd>
+        <dt>失败原因</dt><dd>{{ detail.errorCode ?? '—' }}</dd>
+      </dl>
+    </Modal>
   </div>
 </template>
-<style scoped>
-.workflow,.history,.modal { height:auto; } .modal { transform:none; overflow-x:hidden; } .modal:hover { transform:none; } .modal :deep(.glass-card__body) { min-width:0; flex:none; }
-.automation-page { padding-bottom:24px; color:#fff; } .heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; } h1 { font-size:25px; margin:0; } h2 { font-size:17px; margin:0 0 12px; } p { font-size:12px; line-height:1.6; } .counters { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:16px 0; } .counters strong { display:block; font-size:30px; margin-top:10px; } .content-grid { display:grid; grid-template-columns:minmax(300px,1fr) minmax(400px,1.4fr); gap:18px; align-items:start; } .workflow { margin-bottom:14px; border:var(--glass-tile-border); background:var(--glass-tile-background); color:#354665; } .selected { outline:2px solid #8a9fe6; } .workflow-title { font-weight:700; font-size:16px; border:0; background:none; color:inherit; padding:0; cursor:pointer; } .actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:15px; } small { display:block; font-size:11px; line-height:1.7; } .table-scroll { overflow:auto; } table { border-collapse:collapse; width:100%; font-size:11px; } th,td { padding:12px 8px; text-align:left; border-bottom:1px solid #ffffff35; word-break:break-word; } td button,.heading>button { background:#ffffffa0; border:0; border-radius:8px; color:#354665; padding:6px 10px; cursor:pointer; } .modal-backdrop { position:fixed; z-index:120; inset:0; display:grid; place-items:center; padding:16px; background:#18275366; backdrop-filter:blur(9px); } .modal { width:min(100%,540px); max-height:calc(100dvh - 32px); overflow:auto; color:#fff; } .modal :deep(.glass-card__body) { overflow:visible; } form { display:grid; gap:12px; } label { display:grid; gap:6px; font-size:12px; } input,textarea,select { width:100%; padding:9px 11px; border:1px solid #94abd477; border-radius:9px; color:#354665; background:#ffffffe8; font:inherit; } .checkbox { display:flex; align-items:center; } .checkbox input { width:auto; } dt { font-size:11px; opacity:.8; margin-top:14px; } dd { margin:4px 0; font-size:12px; overflow-wrap:anywhere; } @media(max-width:1000px) { .content-grid { grid-template-columns:1fr; } } @media(max-width:600px) { .counters { grid-template-columns:repeat(2,1fr); } .heading { align-items:start; } }
-.modal { overflow-x:hidden; }
-</style>

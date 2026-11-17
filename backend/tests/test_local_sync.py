@@ -292,7 +292,7 @@ def test_binding_detects_changed_core_without_reset(client, users):
 
 def test_legacy_local_seed_after_0011_upgrade(tmp_path: Path):
     database = tmp_path / "legacy-local.db"
-    env = {**os.environ, "DATABASE_URL": f"sqlite:///{database}", "NEXA_MODE": "local"}
+    env = {**os.environ, "DATABASE_URL": f"sqlite:///{database}", "STUDIOLO_MODE": "local"}
     backend = Path(__file__).parents[1]
 
     def upgrade(revision):

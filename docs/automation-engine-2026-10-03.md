@@ -11,7 +11,7 @@ upload or macOS build was performed.
 
 ## BASELINE
 
-- Repository: `D:\xiangmu\LumaDock` (Nexa-LumaDock).
+- Repository: `D:\xiangmu\LumaDock` (Studiolo).
 - Initial branch: `codex/v0.5.9-personal-state-sync`, clean working tree.
 - Initial HEAD: `3f4774203056f22a9b4a171e8384c21a38ec17dd`.
 - Initial version/migration/protocol: 0.5.9 / 0016_personal_state_sync / 3.
@@ -193,7 +193,7 @@ verified: simple trigger/action forms, schedule/timezone/catch-up controls,
 definition CRUD, enable/disable, explicit real run versus simulation, next/last
 Core status, execution states, attempt count and detail. Five-second polling
 cleans up on unmount and session changes. Core unavailable clears runtime
-authority while definitions remain editable. Native Nexa WebView2 tested through
+authority while definitions remain editable. Native Studiolo WebView2 tested through
 CDP: login, creation, real Ledger run, detail, offline edit, recovery and confirmed
 delete. Modal sizing/overflow and Dashboard terminal status display were corrected.
 
@@ -244,7 +244,7 @@ side effect; offline editing/recovery; all Local runtime tables empty.
 
 ## WINDOWS PACKAGED E2E
 
-verified: actual final Nexa.exe/packaged backend, native WebView2 UI, automatic
+verified: actual final Studiolo.exe/packaged backend, native WebView2 UI, automatic
 backend start, persisted login/database, Core proxy runtime, sidecar smoke,
 packaged Automation E2E and packaged background/conflict/personal-state sync.
 NSIS build passed: `Nexa_0.6.0_x64-setup.exe`, approximately 41.70 MiB. Installer
