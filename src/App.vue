@@ -12,6 +12,7 @@ import OpusIcon from './components/ui/OpusIcon.vue'
 import OpusSyncBadge from './components/ui/OpusSyncBadge.vue'
 import { libraryItems } from './components/layout/opusNavigation'
 import OpusModulePage from './pages/OpusModulePage.vue'
+import ChatPage from './pages/ChatPage.vue'
 import DashboardPage from './pages/DashboardPage.vue'
 import TodayPage from './pages/TodayPage.vue'
 import WebsitesPage from './pages/WebsitesPage.vue'
@@ -301,7 +302,8 @@ onUnmounted(() => {
     @navigate="navigate" @create="create" @action="showToast" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
     <template #default="{ syncStatus, syncLabel, syncKind, openSync, openAdd, inLibrary }">
       <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @add="openAdd" @sync="openSync" @ask-agent="shellRef?.openDock()" />
-      <OpusModulePage v-else-if="currentPage === 'Space' || currentPage === 'Chat'" :page="currentPage" :mobile="mobile" @navigate="navigate" @back="back" />
+      <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" />
+      <OpusModulePage v-else-if="currentPage === 'Space'" :page="currentPage" :mobile="mobile" @navigate="navigate" @back="back" />
       <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">
         <template v-if="!libraryDetailOpen">
           <div class="mhead"><h1>资料</h1><span class="spacer"></span><button class="mpill" type="button" @click="openSync"><OpusSyncBadge :kind="syncKind" :label="syncLabel" /></button></div>

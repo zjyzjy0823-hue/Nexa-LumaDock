@@ -5,8 +5,17 @@ import { desktopPlatform } from '../../desktop/platform'
 import type { WorkbenchTheme } from '../../composables/useWorkbenchTheme'
 import DesktopTitleBar from '../desktop/DesktopTitleBar.vue'
 import { useCoreSync } from '../../composables/useCoreSync'
+import {
+  readStoredWidth,
+  saveStoredWidth,
+  sharedChatOccupiedWidth,
+  startColumnDrag,
+} from '../../composables/useResizableShell'
 import { useAutomationStore } from '../../stores/automation'
 import { useAuthStore } from '../../stores/auth'
+import { useFleetStore } from '../../stores/fleet'
+import AgentChatThread from '../chat/AgentChatThread.vue'
+import { getProviderMeta } from '../chat/providerMeta'
 import { version } from '../../../package.json'
 import OpusSegment from '../ui/OpusSegment.vue'
 import OpusIcon from '../ui/OpusIcon.vue'
@@ -24,6 +33,7 @@ const props = defineProps<{ page: string; mobile: boolean; toast: string; toastK
 const emit = defineEmits<{ navigate: [page: string]; create: [kind: string]; action: [message: string]; syncSettings: []; back: []; toggleMode: []; toggleTheme: []; setTheme: [theme: WorkbenchTheme]; toggleReducedMotion: [] }>()
 const auth = useAuthStore()
 const automation = useAutomationStore()
+const fleet = useFleetStore()
 const attentionTasks = computed(() => automation.items.filter(item => {
   if (!item.enabled) return false
   const last = automation.runtimeExecutions.find(run => run.workflowId === item.id)
@@ -33,9 +43,105 @@ const { connection, syncStatus, syncError, busy, refresh, sync } = useCoreSync(m
 const platform = desktopPlatform()
 const mac = platform === 'macos' || /Mac/i.test(navigator.platform)
 const ctrl = mac ? '⌘' : 'Ctrl'
-const collapsed = ref(false)
+
+const SIDEBAR_EXPANDED_W = 232
+const DOCK_DEFAULT_W = 380
+const DOCK_MIN_W = 280
+const DOCK_MAX_W = 560
+
+function readStoredCollapsed(): boolean | null {
+  try {
+    const raw = localStorage.getItem('studiolo:sidebar-collapsed')
+    if (raw === '1') return true
+    if (raw === '0') return false
+  } catch {
+    // 忽略存储受限环境错误
+  }
+  return null
+}
+
+const windowEl = ref<HTMLElement | null>(null)
+const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
+const dockWidth = ref(readStoredWidth('studiolo:dock-width', DOCK_DEFAULT_W, DOCK_MIN_W, DOCK_MAX_W))
+const manualCollapsed = ref<boolean | null>(readStoredCollapsed())
+const autoCollapsed = ref(false)
+const isResizing = ref(false)
 const dockOpen = ref(false)
-const dockAgent = ref('Hermes')
+
+function recomputeAutoCollapse() {
+  const minMainNeeded = props.page === 'Chat' ? 460 : 560
+  const hysteresis = autoCollapsed.value ? 26 : 0
+  const extraW = (props.page === 'Chat' ? sharedChatOccupiedWidth.value : 0) + (dockOpen.value ? dockWidth.value : 0)
+  const remaining = windowWidth.value - SIDEBAR_EXPANDED_W - extraW
+  const tightWindow = windowWidth.value < (autoCollapsed.value ? 926 : 900)
+  const tightContent = remaining < (minMainNeeded + hysteresis)
+  const shouldCollapse = tightWindow || tightContent
+  autoCollapsed.value = shouldCollapse
+  // 当空间恢复充足时，清除此前为适应窄屏自动生成的临时展开/收起状态，确保空间充足时恢复正常宽度
+  if (!shouldCollapse && manualCollapsed.value === false) {
+    manualCollapsed.value = null
+  }
+}
+
+watch(
+  [windowWidth, dockWidth, dockOpen, sharedChatOccupiedWidth, () => props.page],
+  recomputeAutoCollapse,
+  { immediate: true },
+)
+
+const collapsed = computed(() =>
+  manualCollapsed.value !== null ? manualCollapsed.value : autoCollapsed.value,
+)
+
+function toggleSidebar() {
+  const next = !collapsed.value
+  // 手动点按切换后：若与当前自动判断结果一致则交回自动控制，否则持久记住点按状态
+  manualCollapsed.value = next === autoCollapsed.value ? null : next
+  try {
+    if (manualCollapsed.value === null) localStorage.removeItem('studiolo:sidebar-collapsed')
+    else localStorage.setItem('studiolo:sidebar-collapsed', manualCollapsed.value ? '1' : '0')
+  } catch {
+    // 忽略存储受限环境错误
+  }
+}
+
+function handleDockDrag(event: PointerEvent) {
+  if (event.button !== 0 || !event.isPrimary) return
+  const previousWidth = dockWidth.value
+  isResizing.value = true
+  startColumnDrag({
+    event,
+    initialWidth: dockWidth.value,
+    min: DOCK_MIN_W,
+    max: DOCK_MAX_W,
+    direction: -1,
+    onPreview(width) {
+      dockWidth.value = width
+    },
+    onCommit(width) {
+      dockWidth.value = width
+      saveStoredWidth('studiolo:dock-width', width)
+    },
+    onCancel() {
+      dockWidth.value = previousWidth
+    },
+    onEnd() {
+      isResizing.value = false
+    },
+  })
+}
+
+function resetDockWidth() {
+  dockWidth.value = DOCK_DEFAULT_W
+  saveStoredWidth('studiolo:dock-width', DOCK_DEFAULT_W)
+}
+
+watch(dockOpen, open => {
+  if (open && auth.token) {
+    void fleet.loadNodes()
+    fleet.connectSocket()
+  }
+})
 const panelOpen = ref(false)
 const palette = ref<HTMLDialogElement>()
 const query = ref('')
@@ -166,7 +272,7 @@ function keydown(event: KeyboardEvent) {
   const editable = !!target?.closest('input, textarea, select, [contenteditable="true"]')
   if (event.key.toLowerCase() === 'b' && !editable) {
     event.preventDefault()
-    collapsed.value = !collapsed.value
+    toggleSidebar()
   }
 }
 function dismissSync(event: PointerEvent) {
@@ -187,13 +293,23 @@ function logoutAccount() {
   auth.logout()
 }
 defineExpose({ openDock: () => { dockOpen.value = true } })
+let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
   document.addEventListener('keydown', keydown)
   document.addEventListener('pointerdown', dismissSync)
+  if (typeof ResizeObserver !== 'undefined' && windowEl.value) {
+    resizeObserver = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width
+      if (width && width > 0) windowWidth.value = width
+    })
+    resizeObserver.observe(windowEl.value)
+  }
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', keydown)
   document.removeEventListener('pointerdown', dismissSync)
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 </script>
 
@@ -219,7 +335,12 @@ onUnmounted(() => {
       </div>
     </template>
     <div v-else class="stage">
-      <div class="window" :class="{ 'nav-collapsed': collapsed, 'dock-open': dockOpen }">
+      <div
+        ref="windowEl"
+        class="window"
+        :class="{ 'nav-collapsed': collapsed, 'dock-open': dockOpen, 'is-resizing': isResizing }"
+        :style="{ '--dock-w': `${dockWidth}px` }"
+      >
         <div class="glass-wallpaper" aria-hidden="true"></div>
         <DesktopTitleBar
           v-if="platform !== 'macos'"
@@ -234,7 +355,7 @@ onUnmounted(() => {
           @navigate="go"
           @create="emit('create', $event)"
           @open-palette="openPalette"
-          @toggle-sidebar="collapsed = !collapsed"
+          @toggle-sidebar="toggleSidebar"
           @toggle-dock="dockOpen = !dockOpen"
           @sync="sync"
           @open-sync-settings="openSyncSettings"
@@ -248,7 +369,7 @@ onUnmounted(() => {
         />
         <div v-else class="titlebar" data-tauri-drag-region>
           <div class="tb-left opus-mac" data-tauri-drag-region>
-            <button class="icon-btn" type="button" aria-label="折叠侧栏" title="折叠侧栏" :aria-pressed="collapsed" @click="collapsed = !collapsed"><OpusIcon name="panel" /></button>
+            <button class="icon-btn" type="button" aria-label="折叠侧栏" title="折叠侧栏" :aria-pressed="collapsed" @click="toggleSidebar"><OpusIcon name="panel" /></button>
           </div>
           <div class="tb-mid" data-tauri-drag-region>
             <div class="crumbs" data-tauri-drag-region><template v-if="activeGroup?.section"><span>{{ activeGroup.section }}</span><OpusIcon name="chevR" /></template><b>{{ activeItem?.label ?? (page === 'Agents' ? 'Agent 配置' : '仪表盘') }}</b></div>
@@ -261,24 +382,77 @@ onUnmounted(() => {
         </div>
         <div class="win-body">
           <nav class="sidebar" aria-label="主导航">
-            <template v-for="group in navigation" :key="group.section">
-              <div v-if="group.section" class="nav-sec">{{ group.section }}</div>
-              <button v-for="item in group.items" :key="item.page" class="nav-item" type="button" :title="item.label" :aria-current="page === item.page ? 'page' : undefined" @click="go(item.page)">
-                <OpusIcon :name="item.icon" /><span class="label">{{ item.label }}</span>
-                <OpusIcon v-if="item.page === 'Space'" name="lock" class="lockmark" /><span v-if="item.page === 'Automation' && attentionTasks" class="count" style="color:var(--danger)">●</span>
-              </button>
-            </template>
-            <div class="nav-foot">
-              <button v-for="item in footer" :key="item.page" class="nav-item" type="button" :title="item.label" :aria-current="page === item.page ? 'page' : undefined" @click="go(item.page)"><OpusIcon :name="item.icon" /><span class="label">{{ item.label }}</span><span v-if="item.page === 'Settings' && syncStatus?.conflicts" class="count alert">{{ syncStatus.conflicts }}</span></button>
+            <div class="sidebar-scroll">
+              <template v-for="group in navigation" :key="group.section">
+                <div v-if="group.section" class="nav-sec">{{ group.section }}</div>
+                <button v-for="item in group.items" :key="item.page" class="nav-item" type="button" :title="item.label" :aria-current="page === item.page ? 'page' : undefined" @click="go(item.page)">
+                  <OpusIcon :name="item.icon" /><span class="label">{{ item.label }}</span>
+                  <span v-if="item.page === 'Chat' && fleet.pendingApprovalsList.length" class="nav-badge-dot" :title="`有 ${fleet.pendingApprovalsList.length} 项待审批命令`" />
+                  <OpusIcon v-if="item.page === 'Space'" name="lock" class="lockmark" /><span v-if="item.page === 'Automation' && attentionTasks" class="count" style="color:var(--danger)">●</span>
+                </button>
+              </template>
+              <div class="nav-foot">
+                <button v-for="item in footer" :key="item.page" class="nav-item" type="button" :title="item.label" :aria-current="page === item.page ? 'page' : undefined" @click="go(item.page)"><OpusIcon :name="item.icon" /><span class="label">{{ item.label }}</span><span v-if="item.page === 'Settings' && syncStatus?.conflicts" class="count alert">{{ syncStatus.conflicts }}</span></button>
+                <button
+                  class="nav-item nav-item--collapse"
+                  type="button"
+                  :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+                  :title="`${collapsed ? '展开侧栏' : '收起为单图标侧栏'}（${ctrl} B）`"
+                  :aria-pressed="collapsed"
+                  @click="toggleSidebar"
+                >
+                  <OpusIcon name="panel" /><span class="label">{{ collapsed ? '展开侧栏' : '收起侧栏' }}</span>
+                </button>
+              </div>
             </div>
+            <button
+              type="button"
+              class="sidebar-edge-toggle"
+              data-tauri-drag-region="false"
+              :aria-label="collapsed ? '展开左侧导航栏' : '收起为单图标侧栏'"
+              :title="`${collapsed ? '点击展开左侧导航栏' : '点击收起为单图标侧栏'}（${ctrl} B）`"
+              :aria-pressed="collapsed"
+              @click="toggleSidebar"
+            />
           </nav>
           <main id="main" class="main" tabindex="-1" data-desktop-scroll>
             <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :open-add="(kind: string) => add = kind" :in-library="false" />
           </main>
           <aside class="dock" aria-label="Agent 侧板" :inert="!dockOpen">
+            <div
+              v-if="dockOpen"
+              class="col-resizer col-resizer--left"
+              data-tauri-drag-region="false"
+              title="左右拖拽调整侧板宽度（双击还原）"
+              @pointerdown="handleDockDrag"
+              @dblclick="resetDockWidth"
+            />
             <div v-if="dockOpen" class="dock-inner">
-              <div class="dock-h"><OpusSegment role="group" aria-label="选择 Agent"><button v-for="item in ['OpenClaw', 'Hermes']" :key="item" type="button" :aria-pressed="dockAgent === item" @click="dockAgent = item">{{ item }}</button></OpusSegment><span class="spacer"></span><button class="icon-btn" type="button" aria-label="在 Agent 页打开" title="在 Agent 页打开" @click="go('Chat')"><OpusIcon name="external" /></button><button class="icon-btn" type="button" aria-label="关闭 Agent 侧板" @click="dockOpen = false"><OpusIcon name="x" /></button></div>
-              <div class="cleared"><OpusIcon name="chat" />{{ dockAgent }} 对话待接入<button class="btn btn-sm btn-ghost" type="button" @click="go('Agents')">Agent 配置</button></div>
+              <div class="dock-h">
+                <select
+                  v-if="fleet.nodes.length"
+                  class="input"
+                  style="height:28px;font-size:12px;max-width:128px;padding:0 8px"
+                  :value="fleet.selectedNode?.id || ''"
+                  aria-label="选择控制节点"
+                  @change="fleet.selectNode(($event.target as HTMLSelectElement).value)"
+                >
+                  <option v-for="n in fleet.nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                </select>
+                <OpusSegment role="group" aria-label="选择 Agent">
+                  <button
+                    v-for="prov in fleet.availableProviders.slice(0, 2)"
+                    :key="prov"
+                    type="button"
+                    :aria-pressed="fleet.selectedProvider === prov"
+                    @click="fleet.selectProvider(prov)"
+                  >{{ getProviderMeta(prov).label }}</button>
+                </OpusSegment>
+                <span class="spacer"></span>
+                <button class="icon-btn" type="button" aria-label="在 Agent 页打开" title="在 Agent 页打开" @click="go('Chat')"><OpusIcon name="external" /></button>
+                <button class="icon-btn" type="button" aria-label="关闭 Agent 侧板" @click="dockOpen = false"><OpusIcon name="x" /></button>
+              </div>
+              <AgentChatThread compact @action="emit('action', $event)" @open-handoff="go('Chat')" />
             </div>
           </aside>
         </div>

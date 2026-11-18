@@ -37,7 +37,9 @@ html[data-theme] body:has(.opus-shell) { background: #1a1b1f; }
 .opus-auth-body .glass-wallpaper { display: none; }
 .opus-shell .screen { grid-template-rows: minmax(0, 1fr); border-radius: 0; padding-top: env(safe-area-inset-top); }
 .opus-shell .mpage { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
-.opus-shell .mcomposer { padding-bottom: calc(26px + env(safe-area-inset-bottom)); }
+.opus-shell .mcomposer { padding-bottom: calc(98px + env(safe-area-inset-bottom)); }
+.opus-shell .mcomposer textarea { overflow-y: auto; scrollbar-width: none; }
+.opus-shell .oc-studiolo { --oc: var(--accent); }
 .opus-shell .tabbar { bottom: calc(14px + env(safe-area-inset-bottom)); }
 .opus-shell .sheet { padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
 .opus-shell .opus-mac { padding-left: 78px; }
@@ -184,3 +186,142 @@ dialog.dlg .dlg-check input { width: 16px; height: 16px; margin: 0; }
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 0 0 1px rgba(15, 23, 42, .09);
 }
+
+/* 左侧导航栏（点按收起保留单图标）与右侧可拖拽栏自适应布局 */
+.opus-shell .window {
+  --sidebar-w: 232px;
+  --dock-w: 380px;
+}
+.opus-shell .win-body {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0;
+}
+.opus-shell .window.dock-open .win-body {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--dock-w);
+}
+.opus-shell .window.nav-collapsed .win-body {
+  grid-template-columns: 64px minmax(0, 1fr) 0;
+}
+.opus-shell .window.nav-collapsed.dock-open .win-body {
+  grid-template-columns: 64px minmax(0, 1fr) var(--dock-w);
+}
+.opus-shell .window.is-resizing .win-body {
+  transition: none;
+}
+.opus-shell .sidebar {
+  position: relative;
+  overflow: visible;
+  padding: 0;
+}
+.opus-shell .sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 10px 12px;
+}
+.opus-shell .nav-item .i {
+  flex: none;
+}
+.opus-shell .nav-item--collapse {
+  color: var(--text-3);
+}
+.opus-shell .sidebar-edge-toggle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  z-index: 30;
+  cursor: pointer;
+  user-select: none;
+}
+.opus-shell .sidebar-edge-toggle:focus-visible {
+  outline: none;
+}
+.opus-shell .dock {
+  position: relative;
+  overflow: visible;
+}
+.opus-shell .dock-inner {
+  width: 100%;
+  overflow: hidden;
+}
+.opus-shell .nav-badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.opus-shell .window.nav-collapsed .sidebar .nav-badge-dot {
+  right: 12px;
+  top: 5px;
+}
+.col-resizer {
+  position: relative;
+  width: 7px;
+  margin-left: -3px;
+  margin-right: -3px;
+  flex: none;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.col-resizer--right,
+.col-resizer--left {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  margin: 0;
+}
+.col-resizer--right { right: -3px; }
+.col-resizer--left { left: -3px; }
+:is(.col-resizer, .sidebar-edge-toggle)::before,
+:is(.col-resizer, .sidebar-edge-toggle)::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  border-radius: 4px;
+  background: var(--accent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-2), transform var(--dur-2) var(--ease-out);
+}
+:is(.col-resizer, .sidebar-edge-toggle)::before { inset-block: 0; width: 1px; }
+:is(.col-resizer, .sidebar-edge-toggle)::after {
+  top: 50%;
+  width: 4px;
+  height: 42px;
+  transform: translate(-50%, -50%) scaleY(.45);
+}
+.col-resizer:is(:hover, .is-active)::before,
+.sidebar-edge-toggle:is(:hover, :focus-visible)::before { opacity: .28; }
+.col-resizer:is(:hover, .is-active)::after,
+.sidebar-edge-toggle:is(:hover, :focus-visible)::after { opacity: .75; transform: translate(-50%, -50%); }
+.col-resizer.is-active::after { opacity: 1; transform: translate(-50%, -50%) scaleY(1.25); }
+[data-motion="reduced"] :is(.col-resizer, .sidebar-edge-toggle)::before,
+[data-motion="reduced"] :is(.col-resizer, .sidebar-edge-toggle)::after,
+[data-motion="reduced"] .fleet-workspace > aside { transition: none; }
+
+
+.opus-shell .window.nav-collapsed .nav-sec {
+  display: block;
+  height: 1px;
+  margin: 8px 10px;
+  overflow: hidden;
+  background: var(--line);
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+  user-select: none;
+}
+.opus-shell .window.nav-collapsed .nav-sec + * { margin-top: 0; }

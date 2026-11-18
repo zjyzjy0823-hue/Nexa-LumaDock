@@ -70,4 +70,8 @@ export default {
     moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     command: '<path d="M9 6v12M15 6v12M6 9h12M6 15h12"/>',
+    clip: '<path d="m14.5 7.5-6 6a2.5 2.5 0 0 0 3.5 3.5l6.5-6.5a4.2 4.2 0 0 0-6-6l-6.5 6.5a5.8 5.8 0 0 0 8.2 8.2l5-5"/>',
+    download: '<path d="M12 4v11M7.5 11.5 12 16l4.5-4.5M4 19h16"/>',
+    branch: '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="8" r="2.2"/><path d="M7 8.2v7.6M17 10.2c0 3-2.5 4.8-10 4.8"/>',
+    terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3.5 2.5-3.5 2.5M12.5 15h4"/>',
   } as const
