@@ -1060,6 +1060,11 @@ async function retryTurn(msg: ChatMessage) {
               @click="showPanel('model', $event)"
             >
               <span class="trigger-label">{{ model?.label || '默认模型' }}</span>
+              <span
+                v-if="model?.provider && !model.label.startsWith(model.provider)"
+                class="trigger-provider"
+                :title="`provider: ${model.provider}`"
+              >{{ model.provider }}</span>
               <span v-if="triggerEffortLabel" class="trigger-effort">{{ triggerEffortLabel }}</span>
               <OpusIcon name="chevD" class="trigger-chev" />
             </button>
@@ -1373,6 +1378,11 @@ async function retryTurn(msg: ChatMessage) {
                 @click="chooseModel(entry.id)"
               >
                 <span class="option-title">{{ entry.label }}</span>
+                <span
+                  v-if="entry.provider && !entry.label.startsWith(entry.provider)"
+                  class="picker-badge picker-provider"
+                  :title="`provider: ${entry.provider}`"
+                >{{ entry.provider }}</span>
                 <span v-if="rowEffortText(entry)" class="picker-effort">{{ rowEffortText(entry) }}</span>
                 <span v-if="entry.badge" class="picker-badge">{{ entry.badge }}</span>
                 <span v-if="entry.unavailable" class="picker-warn">
@@ -1894,6 +1904,26 @@ async function retryTurn(msg: ChatMessage) {
   color: var(--text-2);
   font-size: 9.5px;
   font-weight: 500;
+  line-height: 1;
+  flex: none;
+}
+/* 模型所属 provider（opencode / opencode-go 等），同名模型靠它区分 */
+.picker-provider,
+.trigger-provider {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.trigger-provider {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9.5px;
   line-height: 1;
   flex: none;
 }

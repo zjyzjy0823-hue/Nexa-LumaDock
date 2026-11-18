@@ -38,6 +38,8 @@ export interface FleetModel {
   id: string
   label: string
   efforts: string[]
+  /** 模型所属 provider（如 opencode / opencode-go），同名模型靠它区分 */
+  provider?: string
   /** 可选徽标（如「新」「默认」） */
   badge?: string
   /** 模型默认推荐思考强度 */

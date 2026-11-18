@@ -19,6 +19,17 @@ from .base import (
 )
 
 
+def _failure_from_error(error: Any) -> tuple[str, str]:
+    """把 opencode 的 error 结构压成 (message, code)，供 Failed 事件使用。"""
+    if isinstance(error, dict):
+        raw = error.get("data")
+        data: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        message = str(data.get("message") or error.get("message") or error.get("name") or "").strip()
+        code = str(data.get("statusCode") or error.get("name") or "")
+        return message or "opencode 运行失败", code
+    return (str(error).strip() or "opencode 运行失败"), ""
+
+
 class OpenCodeAdapter(AgentAdapter):
     provider = "opencode"
 
@@ -53,10 +64,29 @@ class OpenCodeAdapter(AgentAdapter):
             response = await client.get(f"{self.serve_url}/provider")
             response.raise_for_status()
             catalog = response.json()
-            return [{"id": f"{provider['id']}/{key}", "label": model.get("name") or key,
-                     "efforts": list(model.get("variants") or {})}
-                    for provider in catalog.get("all", []) if provider["id"] in catalog.get("connected", [])
-                    for key, model in provider.get("models", {}).items()]
+            connected = [p for p in catalog.get("all", []) if p["id"] in catalog.get("connected", [])]
+            # 同一模型名可能同时挂在多个 provider 下（例如 opencode 与 opencode-go 都有
+            # deepseek-v4.1-flash），只发 label 会让客户端看到两行一模一样的名字，
+            # 选中付费通道还是订阅通道全靠运气。重名时把 provider 前缀拼进 label，
+            # 并在每项上单独带上 provider 字段供 UI 展示徽标。
+            key_counts: dict[str, int] = {}
+            for provider in connected:
+                for key in provider.get("models", {}):
+                    key_counts[key] = key_counts.get(key, 0) + 1
+            models: list[dict[str, Any]] = []
+            for provider in connected:
+                provider_id = str(provider["id"])
+                for key, model in provider.get("models", {}).items():
+                    name = model.get("name") or key
+                    models.append(
+                        {
+                            "id": f"{provider_id}/{key}",
+                            "label": f"{provider_id} · {name}" if key_counts.get(key, 0) > 1 else name,
+                            "provider": provider_id,
+                            "efforts": list(model.get("variants") or {}),
+                        }
+                    )
+            return models
 
     async def list_sessions(self, *, page: int = 1, limit: int = 30) -> list[dict[str, Any]]:
         async with self._client() as c:
@@ -81,7 +111,9 @@ class OpenCodeAdapter(AgentAdapter):
         if session_id:
             return {"sessionId": session_id, "provider": self.provider, "cwd": str(eff_cwd), "worktreePath": wt_path, "title": f"OpenCode ({eff_cwd.name})"}
         async with self._client() as c:
-            res = await c.post(f"{self.serve_url}/session", json={"directory": str(eff_cwd)})
+            # opencode 1.19.x 只认 query 参数里的 directory，放 body 会被忽略，
+            # 会话会落到 `opencode serve` 进程自身的 cwd 上。
+            res = await c.post(f"{self.serve_url}/session", params={"directory": str(eff_cwd)})
             res.raise_for_status()
             data = res.json()
             sid = str(data.get("id") or sid_seed)
@@ -153,6 +185,11 @@ class OpenCodeAdapter(AgentAdapter):
                             await emit({"type": "TextDelta", "sessionId": session_id, "runId": run_id, "text": str(props.get("delta") or part.get("text") or "")})
                     elif etype == "message.updated":
                         info = props.get("info") if isinstance(props.get("info"), dict) else props
+                        if isinstance(info, dict) and info.get("sessionID") == session_id and info.get("error"):
+                            message, code = _failure_from_error(info.get("error"))
+                            await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id,
+                                        "runId": run_id, "requestId": request_id, "code": code, "message": message})
+                            return
                         if (
                             isinstance(info, dict)
                             and info.get("sessionID") == session_id
@@ -182,9 +219,19 @@ class OpenCodeAdapter(AgentAdapter):
                         dec = await request_approval(session_id, perm_id, str(props.get("title") or props.get("type") or "tool"), "medium")
                         resp = "once" if dec == "allow_once" else "always" if dec == "allow_session" else "reject"
                         await c.post(f"{self.serve_url}/session/{session_id}/permissions/{perm_id}", json={"response": resp})
+                    elif etype == "session.error" and props.get("sessionID") == session_id:
+                        # opencode 把模型/额度/上游错误只发在这里（例如 402 Insufficient balance）。
+                        # 不转成 Failed 的话，节点会一直等 session.idle，前端就是永远空白的气泡。
+                        message, code = _failure_from_error(props.get("error"))
+                        await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id,
+                                    "runId": run_id, "requestId": request_id, "code": code, "message": message})
+                        return
                     elif etype == "session.idle" and props.get("sessionID") == session_id:
                         await emit({"type": "Completed", "sessionId": session_id, "runId": run_id, "requestId": request_id})
                         return
+            await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id, "runId": run_id,
+                        "requestId": request_id, "code": "stream_closed",
+                        "message": "opencode 事件流已关闭但未收到完成信号"})
 
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         async with self._client() as c:
