@@ -149,6 +149,90 @@ def build_token_usage_event(
     return frame
 
 
+def build_tool_call_update(
+    *,
+    session_id: str,
+    call_id: str,
+    name: str,
+    status: str = "running",
+    run_id: str | None = None,
+    request_id: str | None = None,
+    title: str | None = None,
+    tool_input: Any = None,
+    output: str | None = None,
+    delta_output: str | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+    subagent_session_id: str | None = None,
+) -> dict[str, Any]:
+    """构造标准化的 `ToolCallUpdate` 结构化工具执行事件帧。"""
+    frame: dict[str, Any] = {
+        "type": "ToolCallUpdate",
+        "sessionId": session_id,
+        "callId": call_id,
+        "name": name,
+        "status": status,
+    }
+    if run_id:
+        frame["runId"] = run_id
+    if request_id:
+        frame["requestId"] = request_id
+    if title:
+        frame["title"] = title
+    if tool_input is not None:
+        frame["input"] = tool_input
+    if output is not None:
+        frame["output"] = output
+    if delta_output:
+        frame["deltaOutput"] = delta_output
+    if error:
+        frame["error"] = error
+    if duration_ms is not None and duration_ms >= 0:
+        frame["durationMs"] = int(duration_ms)
+    if subagent_session_id:
+        frame["subagentSessionId"] = subagent_session_id
+    return frame
+
+
+def build_todo_updated_event(
+    *,
+    session_id: str,
+    items: list[dict[str, Any]],
+    run_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """构造标准化的 `TodoUpdated` 任务清单事件帧。"""
+    normalized: list[dict[str, Any]] = []
+    for idx, row in enumerate(items):
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or row.get("text") or row.get("title") or "").strip()
+        if not content:
+            continue
+        raw_status = str(row.get("status") or "pending").lower()
+        status = (
+            raw_status
+            if raw_status in ("pending", "in_progress", "completed", "cancelled")
+            else "completed"
+            if raw_status in ("done", "finished")
+            else "in_progress"
+            if raw_status in ("running", "active")
+            else "pending"
+        )
+        normalized.append({
+            "id": str(row.get("id") or f"todo-{idx + 1}"),
+            "content": content,
+            "status": status,
+            **({"priority": str(row["priority"])} if row.get("priority") else {}),
+        })
+    frame: dict[str, Any] = {"type": "TodoUpdated", "sessionId": session_id, "items": normalized}
+    if run_id:
+        frame["runId"] = run_id
+    if request_id:
+        frame["requestId"] = request_id
+    return frame
+
+
 @dataclass(frozen=True)
 class AdapterProbe:
     provider: str
@@ -236,3 +320,38 @@ class AgentAdapter(ABC):
     @abstractmethod
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         """取消当前运行中的任务或 Turn。"""
+
+    async def rename_session(self, *, session_id: str, title: str) -> dict[str, Any]:
+        """更新会话显示名称（不支持持久化重命名的代理仍返回前端可应用的元数据）。"""
+        return {"sessionId": session_id, "title": title}
+
+    async def delete_session(self, *, session_id: str) -> None:
+        """删除或清理上游会话资源。"""
+        return None
+
+    async def compact_session(self, *, session_id: str) -> dict[str, Any]:
+        """压缩上游长对话上下文（由支持的代理执行摘要压缩）。"""
+        return {"supported": False}
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        """列出当前适配器可用的原生模式 / 子代理（如 build / plan）。"""
+        return []
+
+    async def list_mcp_servers(self) -> list[dict[str, Any]]:
+        """列出当前适配器挂载的 MCP 工具服务及连接状态。"""
+        return []
+
+    async def reply_form(
+        self,
+        *,
+        session_id: str,
+        form_id: str,
+        answer: dict[str, Any] | None = None,
+        cancel: bool = False,
+    ) -> dict[str, Any]:
+        """提交或取消上游交互式提问表单（如 AskUserQuestion / OpenCode form）。"""
+        return {"sessionId": session_id, "formId": form_id, "cancelled": cancel}
+
+    async def close(self) -> None:
+        """关闭适配器托管子进程等资源。"""
+        return None

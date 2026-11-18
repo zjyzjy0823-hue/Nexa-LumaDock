@@ -70,7 +70,7 @@ def test_workstation_core_setup_rolls_back_on_failure_and_succeeds(client, monke
         "password": "wrong-password",
         "clientName": "Studiolo Windows",
         "platform": "windows",
-        "appVersion": "0.6.1",
+        "appVersion": "0.7.0",
     }
     failed = client.post("/api/v1/auth/workstation/setup", json=core_payload)
     assert failed.status_code == 401

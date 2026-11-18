@@ -12,6 +12,7 @@ from .base import (
     AgentAdapter,
     ApprovalCallback,
     EventEmitter,
+    build_tool_call_update,
     merge_prompt_with_attachments,
     prepare_session_dir,
 )
@@ -32,7 +33,7 @@ class OpenClawAdapter(AgentAdapter):
         self.token = token
 
     async def probe(self) -> AdapterProbe:
-        caps = ("chat", "history", "cron")
+        caps = ("chat", "history", "cron", "files", "diff", "checkpoints")
         try:
             async with websockets.connect(self.gateway_url, open_timeout=2.0):
                 return AdapterProbe(provider=self.provider, version="gateway-ws", status="ready", capabilities=caps)
@@ -76,6 +77,7 @@ class OpenClawAdapter(AgentAdapter):
         emit: EventEmitter,
         request_approval: ApprovalCallback,
         attachments: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> None:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else None
         async with websockets.connect(self.gateway_url, additional_headers=headers, open_timeout=5.0) as ws:
@@ -91,9 +93,25 @@ class OpenClawAdapter(AgentAdapter):
                 frame = json.loads(await ws.recv())
                 if frame.get("type") == "event":
                     payload = frame.get("payload") or {}
-                    if frame.get("event") == "chat.delta":
+                    ev_name = frame.get("event")
+                    if ev_name == "chat.delta":
                         await emit({"type": "TextDelta", "sessionId": session_id, "runId": request_id, "text": str(payload.get("delta") or "")})
-                    elif frame.get("event") == "chat.completed":
+                    elif ev_name in ("tool.started", "tool.completed", "tool.failed"):
+                        st = "error" if ev_name == "tool.failed" else "completed" if ev_name == "tool.completed" else "running"
+                        await emit(
+                            build_tool_call_update(
+                                session_id=session_id,
+                                call_id=str(payload.get("callId") or payload.get("id") or uuid4().hex[:8]),
+                                name=str(payload.get("name") or "tool"),
+                                status=st,
+                                run_id=request_id,
+                                request_id=request_id,
+                                tool_input=payload.get("input"),
+                                output=str(payload.get("output")) if payload.get("output") is not None else None,
+                                error=str(payload.get("error")) if payload.get("error") else None,
+                            )
+                        )
+                    elif ev_name == "chat.completed":
                         await emit({"type": "Completed", "sessionId": session_id, "runId": request_id, "requestId": request_id})
                         return
 

@@ -430,7 +430,20 @@ async def fleet_node_ws(websocket: WebSocket):
             await fleet_hub.broadcast_workspace(
                 workspace_id,
                 outbound,
-                target_client_id=target_client_id if evt_type in ("SessionsSnapshot", "SessionHistory", "ModelsSnapshot") else None,
+                target_client_id=target_client_id if evt_type in (
+                    "SessionsSnapshot",
+                    "SessionHistory",
+                    "SessionStreamReplay",
+                    "ModelsSnapshot",
+                    "AgentsSnapshot",
+                    "McpSnapshot",
+                    "RulesSnapshot",
+                    "FilesSnapshot",
+                    "FilesTreeSnapshot",
+                    "FileContentSnapshot",
+                    "TrustPolicySnapshot",
+                    "DiffSnapshot",
+                ) else None,
             )
     except WebSocketDisconnect:
         pass

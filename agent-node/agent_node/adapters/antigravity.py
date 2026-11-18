@@ -17,7 +17,11 @@ class AntigravityAdapter(SubprocessCliAdapter):
             sdk_ready = True
         except ImportError:
             sdk_ready = False
-        cli_probe = probe_cli_binary(self.provider, self.command, ("chat", "approval", "worktree"))
+        cli_probe = probe_cli_binary(
+            self.provider,
+            self.command,
+            ("chat", "history", "approval", "worktree", "files", "diff", "checkpoints"),
+        )
         if sdk_ready and cli_probe.status != "ready":
             return AdapterProbe(provider=self.provider, version="python-sdk", status="ready", capabilities=cli_probe.capabilities)
         return cli_probe
@@ -31,6 +35,7 @@ class AntigravityAdapter(SubprocessCliAdapter):
         emit: EventEmitter,
         request_approval: ApprovalCallback,
         attachments: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> None:
         await super().send_prompt(
             session_id=session_id,
@@ -39,4 +44,5 @@ class AntigravityAdapter(SubprocessCliAdapter):
             emit=emit,
             request_approval=request_approval,
             attachments=attachments,
+            options=options,
         )

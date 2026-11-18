@@ -37,6 +37,7 @@ export interface TurnTokenEntry {
 export interface SessionTokenState {
   cumulativeTotals: TurnTokenEntry | null
   cumulativeTurnIds: Record<string, true>
+  recordedRunKeys?: Record<string, true>
   byTurn: Record<string, TurnTokenEntry>
   lastTurn: TurnTokenEntry | null
   contextWindow?: number
@@ -75,7 +76,7 @@ export function hasRecordedTurnUsage(state: SessionTokenState | undefined, turnK
   if (!state) return false
   for (const key of turnKeys) {
     if (!key) continue
-    if (state.byTurn[key] || state.cumulativeTurnIds[key]) return true
+    if (state.byTurn[key] || state.cumulativeTurnIds[key] || state.recordedRunKeys?.[key]) return true
   }
   return false
 }
@@ -92,6 +93,7 @@ export function applyTokenUsageEvent(
     ? {
         cumulativeTotals: current.cumulativeTotals,
         cumulativeTurnIds: { ...current.cumulativeTurnIds },
+        recordedRunKeys: { ...(current.recordedRunKeys ?? {}) },
         byTurn: { ...current.byTurn },
         lastTurn: current.lastTurn,
         contextWindow: current.contextWindow,
@@ -101,6 +103,7 @@ export function applyTokenUsageEvent(
     : {
         cumulativeTotals: null,
         cumulativeTurnIds: {},
+        recordedRunKeys: {},
         byTurn: {},
         lastTurn: null,
         updatedAt: now,
@@ -160,6 +163,8 @@ export function applyTokenUsageEvent(
 
   const turnKey = resolveTurnUsageKey(event) || `turn-${Object.keys(base.byTurn).length + 1}`
   base.byTurn[turnKey] = entry
+  if (event.runId) base.recordedRunKeys![event.runId] = true
+  if (event.requestId) base.recordedRunKeys![event.requestId] = true
   base.lastTurn = entry
   return base
 }

@@ -21,6 +21,28 @@ import {
   toSessionTokenSummary,
 } from '../src/services/tokenUsage.ts'
 import { isSafeMarkdownHref, parseMarkdownBlocks, parseMarkdownInlines } from '../src/services/markdownBlocks.ts'
+import { highlightCode, inferLanguageFromPath } from '../src/services/syntaxHighlight.ts'
+import { hasAnsiSequences, parseAnsiText } from '../src/services/ansiParser.ts'
+import { parseMermaidDiagram } from '../src/services/diagramBuilder.ts'
+import {
+  computeHunkGaps,
+  extractToolMiniDiff,
+  parseDiffHunks,
+  splitDiffPath,
+  toSplitDiffRows,
+} from '../src/services/diffHelpers.ts'
+import { deleteCustomPrompt, loadCustomPrompts, saveCustomPrompt } from '../src/services/customPrompts.ts'
+import { buildSessionHtmlReport } from '../src/services/htmlExport.ts'
+import { resolveSavedModelPref, saveAgentModelPref } from '../src/services/modelPrefs.ts'
+import {
+  appendMessagePart,
+  branchFromUserMessage,
+  buildSessionMarkdown,
+  extractMessageParts,
+  mergeToolCallUpdate,
+  searchSessionsAndMessages,
+  switchMessageBranch,
+} from '../src/services/chatHelpers.ts'
 
 test('AES-256-GCM 分块加解密、Base64URL 编解码与防篡改校验', async () => {
   const key = generateFileKey()
@@ -195,6 +217,8 @@ test('Token 用量累加支持按轮次幂等更新、累计快照防重以及�
   assert.equal(turnSummary.lastTurnTokens, 820)
   assert.equal(turnSummary.contextWindow, 128000)
   assert.equal(turnSummary.source, 'exact')
+  assert.equal(hasRecordedTurnUsage(turnState, ['run-1']), true)
+  assert.equal(hasRecordedTurnUsage(turnState, ['run-2']), true)
 
   // 2. Codex cumulative 快照：同一会话多次更新不叠加，仅按最近一轮算上下文占用，并防止 Completed 重复回退
   let codexState = applyTokenUsageEvent(undefined, {
@@ -280,4 +304,238 @@ test('Markdown 块级与行内 AST 解析支持代码围栏、表格及危险协
     assert.equal(blocks[3].streamingOpen, true)
     assert.equal(blocks[3].code, 'const ok = true')
   }
+})
+
+test('工具调用增量合并、对话编辑分叉切换、跨消息搜索与 Markdown 导出', () => {
+  // 1. ToolCallUpdate 按 callId 原地合并增量输出与完成时长
+  let tools = mergeToolCallUpdate(undefined, {
+    callId: 'tc-1',
+    name: 'shell',
+    title: 'pytest -q',
+    status: 'running',
+    input: { command: 'pytest -q' },
+  })
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0].status, 'running')
+
+  tools = mergeToolCallUpdate(tools, {
+    callId: 'tc-1',
+    name: 'shell',
+    status: 'running',
+    deltaOutput: 'line 1\n',
+  })
+  tools = mergeToolCallUpdate(tools, {
+    callId: 'tc-1',
+    name: 'shell',
+    status: 'completed',
+    deltaOutput: 'line 2\n',
+    durationMs: 42,
+  })
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0].status, 'completed')
+  assert.equal(tools[0].output, 'line 1\nline 2\n')
+  assert.equal(tools[0].durationMs, 42)
+  assert.deepEqual(tools[0].input, { command: 'pytest -q' })
+
+  // 2. 用户编辑重发形成分支并可无损切回原分支
+  const baseMsgs = [
+    { id: 'u-1', role: 'user', nodeId: 'n1', provider: 'mock', text: '第一问', createdAt: 1 },
+    { id: 'a-1', role: 'assistant', nodeId: 'n1', provider: 'mock', text: '第一答', createdAt: 2 },
+  ]
+  const branched = branchFromUserMessage(baseMsgs, 0, '改问角度 B', 3)
+  assert.equal(branched.length, 1)
+  assert.equal(branched[0].text, '改问角度 B')
+  assert.equal(branched[0].activeBranchIndex, 1)
+  assert.equal(branched[0].branches?.length, 2)
+
+  const branchBWithReply = [
+    ...branched,
+    { id: 'a-2', role: 'assistant', nodeId: 'n1', provider: 'mock', text: '角度 B 回复', createdAt: 4 },
+  ]
+  const restoredA = switchMessageBranch(branchBWithReply, 0, 0)
+  assert.equal(restoredA[0].text, '第一问')
+  assert.equal(restoredA[1].text, '第一答')
+  const restoredB = switchMessageBranch(restoredA, 0, 1)
+  assert.equal(restoredB[0].text, '改问角度 B')
+  assert.equal(restoredB[1].text, '角度 B 回复')
+
+  // 3. 跨会话标题/正文搜寻 + Markdown 导出
+  const sess = { sessionId: 's1', nodeId: 'n1', provider: 'mock', title: '重构认证模块', cwd: '/repo' }
+  const hits = searchSessionsAndMessages(
+    [{ key: 'n1::mock::s1', session: sess, nodeName: 'Mac-Mini' }],
+    { 'n1::mock::s1': branchBWithReply },
+    '角度 B',
+  )
+  assert.equal(hits.get('n1::mock::s1')?.matchedIn, 'message')
+  assert.ok(hits.get('n1::mock::s1')?.snippet?.includes('角度 B'))
+
+  const md = buildSessionMarkdown(sess, [
+    baseMsgs[0],
+    { ...baseMsgs[1], thought: '核对鉴权边界', toolCalls: tools, diffSummary: { filesChanged: 1, additions: 3, deletions: 1 } },
+  ], 'Mac-Mini')
+  assert.ok(md.includes('# 重构认证模块'))
+  assert.ok(md.includes('核对鉴权边界'))
+  assert.ok(md.includes('Tool** `shell` [OK] (42ms)'))
+  assert.ok(md.includes('+3 / -1'))
+})
+
+test('有序消息时间轴 parts、语法高亮、ANSI 解析与 Mermaid 矢量布局生成', () => {
+  // 1. 有序时间轴 parts 归并与回退兼容
+  let parts = appendMessagePart(undefined, { type: 'thought', text: '先检查 ' })
+  parts = appendMessagePart(parts, { type: 'thought', text: '日志' })
+  parts = appendMessagePart(parts, { type: 'tool', callId: 'c1' })
+  parts = appendMessagePart(parts, { type: 'tool', callId: 'c1' })
+  parts = appendMessagePart(parts, { type: 'text', text: '第一段总结 ' })
+  parts = appendMessagePart(parts, { type: 'thought', text: '继续验证' })
+  parts = appendMessagePart(parts, { type: 'text', text: '最终结论' })
+
+  assert.deepEqual(
+    parts.map(p => p.type),
+    ['thought', 'tool', 'text', 'thought', 'text'],
+  )
+  assert.equal(parts[0].type === 'thought' && parts[0].text, '先检查 日志')
+  assert.equal(parts[2].type === 'text' && parts[2].text, '第一段总结 ')
+
+  const legacyFallback = extractMessageParts({ thought: 't', text: 'hi', toolCalls: [{ id: 't1', callId: 't1', name: 'read' }] })
+  assert.deepEqual(legacyFallback.map(p => p.type), ['thought', 'tool', 'text'])
+
+  // 2. 零依赖语法高亮（支持跨行块注释与后缀推断）
+  assert.equal(inferLanguageFromPath('src/components/App.vue'), 'vue')
+  const hl = highlightCode('/* multi\nline */\nexport const count = 42', 'ts')
+  assert.equal(hl[0][0].kind, 'comment')
+  assert.equal(hl[1][0].kind, 'comment')
+  assert.equal(hl[2][0].kind, 'keyword')
+  assert.ok(hl[2].some(s => s.kind === 'number' && s.text === '42'))
+
+  // 3. ANSI 终端颜色解析
+  const rawAnsi = '\u001b[1;32mPASS\u001b[0m \u001b[31mERR\u001b[0m'
+  assert.equal(hasAnsiSequences(rawAnsi), true)
+  const spans = parseAnsiText(rawAnsi)
+  assert.equal(spans[0].text, 'PASS')
+  assert.equal(spans[0].bold, true)
+  assert.equal(spans[0].fg, '#16a34a')
+  assert.equal(spans[2].text, 'ERR')
+  assert.equal(spans[2].fg, '#dc2626')
+
+  // 4. Mermaid 流程图与时序图安全 SVG 模型解析（含单行链式语法）
+  const flow = parseMermaidDiagram('flowchart LR\nA[Read] --> B[Analyze] -->|ok| C(Done)')
+  assert.ok(flow && flow.kind === 'flowchart')
+  assert.equal(flow.nodes.length, 3)
+  assert.deepEqual(flow.nodes.map(n => n.label), ['Read', 'Analyze', 'Done'])
+  assert.equal(flow.edges.length, 2)
+  assert.equal(flow.edges[1].label, 'ok')
+
+  const seq = parseMermaidDiagram('sequenceDiagram\nClient->>Server: prompt')
+  assert.ok(seq && seq.kind === 'sequence')
+  assert.equal(seq.lifelines?.length, 2)
+  assert.equal(seq.messages?.[0].label, 'prompt')
+
+  assert.equal(parseMermaidDiagram('pie title Pets\n"Dogs": 30'), null)
+})
+
+test('按 Agent 保存模型与思考强度偏好并支持新对话自动延续及重置', () => {
+  const mem = new Map()
+  const storage = {
+    getItem: k => mem.get(k) ?? null,
+    setItem: (k, v) => { mem.set(k, v) },
+  }
+
+  assert.equal(resolveSavedModelPref('node-1', 'opencode', storage), null)
+
+  saveAgentModelPref(
+    { nodeId: 'node-1', provider: 'opencode', model: 'opencode-go/deepseek-v4.1-flash', effort: 'high', now: 1000 },
+    storage,
+  )
+  assert.deepEqual(resolveSavedModelPref('node-1', 'opencode', storage), {
+    model: 'opencode-go/deepseek-v4.1-flash',
+    effort: 'high',
+    updatedAt: 1000,
+  })
+  // 同 Agent 新节点（或新建其他对话）可按 provider 兜底复用上一次模型
+  assert.equal(resolveSavedModelPref('node-2', 'opencode', storage)?.model, 'opencode-go/deepseek-v4.1-flash')
+  // 不同 Agent 互不串台
+  assert.equal(resolveSavedModelPref('node-1', 'codex', storage), null)
+
+  // 选择不同节点上的同 Agent 新模型后，新节点优先采用精确节点偏好
+  saveAgentModelPref(
+    { nodeId: 'node-2', provider: 'opencode', model: 'opencode/gpt-5', now: 2000 },
+    storage,
+  )
+  assert.equal(resolveSavedModelPref('node-1', 'opencode', storage)?.model, 'opencode-go/deepseek-v4.1-flash')
+  assert.equal(resolveSavedModelPref('node-2', 'opencode', storage)?.model, 'opencode/gpt-5')
+
+  // 切回“节点默认模型”（空字符串）应清除保存偏好
+  saveAgentModelPref({ nodeId: 'node-2', provider: 'opencode', model: '' }, storage)
+  assert.equal(resolveSavedModelPref('node-2', 'opencode', storage), null)
+})
+
+test('Split Diff 拆分对齐、工具局部 Diff 提取、自定义模板管理与 XSS 安全 HTML 导出', () => {
+  // 1. Diff Hunk & Split 对齐
+  const patch = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,3 @@',
+    ' const a = 1',
+    '-const b = 2',
+    '+const b = 3',
+    ' export { a, b }',
+  ].join('\n')
+  const hunks = parseDiffHunks(patch)
+  assert.equal(hunks.length, 1)
+  const rows = toSplitDiffRows(hunks[0])
+  assert.equal(rows[1].leftKind, 'del')
+  assert.equal(rows[1].leftText, 'const b = 2')
+  assert.equal(rows[1].rightKind, 'add')
+  assert.equal(rows[1].rightText, 'const b = 3')
+
+  // 2. 工具卡片局部 Diff 提取
+  const mini = extractToolMiniDiff('edit', { filePath: 'src/a.ts', oldString: 'old()', newString: 'new()' })
+  assert.ok(mini && mini.filePath === 'src/a.ts')
+  assert.equal(mini.lines[0].kind, 'del')
+  assert.equal(mini.lines[1].kind, 'add')
+
+  // 3. 自定义斜杠模板 CRUD
+  const mem = new Map()
+  const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v) } }
+  const saved = saveCustomPrompt({ trigger: 'audit', title: '安全审计', template: '审计 {{file}}' }, storage)
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].trigger, '/audit')
+  assert.equal(loadCustomPrompts(storage).length, 1)
+  assert.equal(deleteCustomPrompt(saved[0].id, storage).length, 0)
+
+  // 4. HTML 报告导出严格转义恶意脚本
+  const html = buildSessionHtmlReport(
+    { sessionId: 's1', nodeId: 'n1', provider: 'mock', title: '<script>alert(1)</script>', cwd: '/repo' },
+    [{ id: 'm1', role: 'assistant', nodeId: 'n1', provider: 'mock', text: '<img src=x onerror=alert(1)>', createdAt: 1 }],
+    'Mac-Mini',
+  )
+  assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
+  assert.equal(html.includes('<img src=x onerror='), false)
+
+  // 5. 路径语言徽章拆分与 Hunk 上下文间隙计算
+  const meta = splitDiffPath('agent-node/agent_node/daemon.py')
+  assert.equal(meta.fileName, 'daemon.py')
+  assert.equal(meta.dirName, 'agent-node/agent_node')
+  assert.equal(meta.badge, 'PY')
+
+  const multiPatch = [
+    '@@ -18,4 +18,5 @@',
+    ' from a import b',
+    '+from c import d',
+    ' e()',
+    '@@ -28,3 +29,4 @@',
+    ' f()',
+    '+g()',
+    ' h()',
+  ].join('\n')
+  const mh = parseDiffHunks(multiPatch)
+  const gaps = computeHunkGaps(mh, 40)
+  assert.equal(gaps.beforeFirst?.startNewLine, 1)
+  assert.equal(gaps.beforeFirst?.endNewLine, 17)
+  assert.equal(gaps.between[0]?.startNewLine, 23)
+  assert.equal(gaps.between[0]?.endNewLine, 28)
+  assert.equal(gaps.between[0]?.oldDelta, -1)
+  assert.equal(gaps.afterLast?.startNewLine, 33)
+  assert.equal(gaps.afterLast?.endNewLine, 40)
 })

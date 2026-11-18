@@ -14,6 +14,7 @@ const riskText: Record<string, string> = {
 const decisionLabel: Record<ApprovalDecision, string> = {
   allow_once: '已允许本次执行',
   allow_session: '已在当前会话放行',
+  allow_trust: '已允许并加入信任白名单',
   deny: '已拒绝执行',
 }
 </script>
@@ -29,6 +30,13 @@ const decisionLabel: Record<ApprovalDecision, string> = {
     <div v-if="card.decision === 'pending'" class="perm-actions">
       <button type="button" class="btn btn-primary btn-sm" @click="emit('respond', card.callId, 'allow_once')">允许一次</button>
       <button type="button" class="btn btn-ghost btn-sm" @click="emit('respond', card.callId, 'allow_session')">本会话允许</button>
+      <button
+        v-if="card.command && card.risk !== 'high'"
+        type="button"
+        class="btn btn-ghost btn-sm"
+        title="将同类命令前缀写入节点可信白名单，后续低中风险自动放行"
+        @click="emit('respond', card.callId, 'allow_trust')"
+      >始终信任此类命令</button>
       <button type="button" class="btn btn-danger btn-sm" @click="emit('respond', card.callId, 'deny')">拒绝</button>
     </div>
     <div v-else class="perm-done">

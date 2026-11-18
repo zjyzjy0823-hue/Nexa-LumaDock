@@ -1,8 +1,8 @@
-# Studiolo Desktop（当前 0.6.1；本文原始基线 v0.5.7）
+# Studiolo Desktop（当前 0.7.0；本文原始基线 v0.5.7）
 
 ## 安装与首次启动
 
-使用本地构建或正式发布后的 Windows 10/11 x64 的 `Studiolo_<版本>_x64-setup.exe`（当前 0.6.1） 安装包并安装。从开始菜单启动 Studiolo。桌面程序会自动启动随安装包提供的 FastAPI Backend，创建用户数据目录，生成随机密钥，执行 Alembic 迁移，并在 Backend 就绪后打开现有 Vue 登录/注册页面。用户无需配置 `.env`，也无需安装 Python、Node.js 或 Rust。
+使用本地构建或正式发布后的 Windows 10/11 x64 的 `Studiolo_<版本>_x64-setup.exe`（当前 0.7.0） 安装包并安装。从开始菜单启动 Studiolo。桌面程序会自动启动随安装包提供的 FastAPI Backend，创建用户数据目录，生成随机密钥，执行 Alembic 迁移，并在 Backend 就绪后打开现有 Vue 登录/注册页面。用户无需配置 `.env`，也无需安装 Python、Node.js 或 Rust。
 
 Windows 数据目录由 Tauri `app_data_dir()` 和稳定标识 `com.isidel.studiolo` 决定，通常为 `%APPDATA%\com.isidel.studiolo\`。可在资源管理器地址栏输入 `%APPDATA%\com.isidel.studiolo` 查找。安装目录与数据目录分离，更新或重新安装程序不会覆盖数据库。目录内容：
 
@@ -30,7 +30,7 @@ com.isidel.studiolo/
 
 Windows 10/11 x64：点击窗口右上角 X 会隐藏窗口，Backend 继续运行。从系统托盘的 Studiolo 图标选择“打开 Studiolo”可以恢复；选择“退出 Studiolo”才会退出桌面程序并停止 Backend。再次从开始菜单启动 Studiolo 时只会聚焦已有窗口，不会启动第二个 Backend。
 
-Backend 固定监听 `http://127.0.0.1:17800`，仅可从本机访问。`GET /api/health` 返回产品版本 `0.6.1`。远程 Device Client 和原有 OpenClaw Runtime Adapter 可连接可访问的 Core Runtime；OpenClaw Data Tools 必须连接对应 Studiolo Local（本机插件可连接 127.0.0.1:17800）。Desktop 的 Local Backend 不直接暴露到局域网。
+Backend 固定监听 `http://127.0.0.1:17800`，仅可从本机访问。`GET /api/health` 返回产品版本 `0.7.0`。远程 Device Client 和原有 OpenClaw Runtime Adapter 可连接可访问的 Core Runtime；OpenClaw Data Tools 必须连接对应 Studiolo Local（本机插件可连接 127.0.0.1:17800）。Desktop 的 Local Backend 不直接暴露到局域网。
 
 macOS Intel x86_64：目标为原生 traffic lights、红色关闭后保留本地 Backend、Dock 点击恢复窗口、Cmd+Q 或“退出 Studiolo”停止 Backend。实机验证状态以 [macOS QA 报告](macos-local-client-2026-10-01.md) 为准；完成前不声明 macOS 支持验收通过。Apple Silicon 与 Universal Binary 尚未验证。
 

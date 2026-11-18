@@ -12,7 +12,9 @@ from .base import (
     AgentAdapter,
     ApprovalCallback,
     EventEmitter,
+    build_todo_updated_event,
     build_token_usage_event,
+    build_tool_call_update,
     estimate_tokens,
 )
 
@@ -42,9 +44,21 @@ class MockAdapter(AgentAdapter):
     async def probe(self) -> AdapterProbe:
         return AdapterProbe(
             provider=self.provider,
-            version="mock-1.0",
+            version="mock-1.1",
             status="ready",
-            capabilities=("chat", "history", "approval", "worktree", "artifacts", "models", "read-only"),
+            capabilities=(
+                "chat",
+                "history",
+                "approval",
+                "worktree",
+                "artifacts",
+                "models",
+                "read-only",
+                "files",
+                "diff",
+                "checkpoints",
+                "todos",
+            ),
         )
 
     async def list_models(self) -> list[dict[str, Any]]:
@@ -116,12 +130,21 @@ class MockAdapter(AgentAdapter):
             ctx_win = MOCK_CONTEXT_WINDOWS.get(model_id, 128000)
 
             self._histories.setdefault(session_id, []).append({"role": "user", "text": text, "requestId": request_id})
+            history_tools: list[dict[str, Any]] = []
             await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
             await emit({"type": "ThoughtDelta", "sessionId": session_id, "runId": run_id, "text": thought_text})
 
             async def _finish_with_reply(reply_text: str) -> None:
                 out_tokens = max(8, estimate_tokens(reply_text)) + reasoning_tokens
-                self._histories[session_id].append({"role": "assistant", "text": reply_text, "runId": run_id})
+                entry: dict[str, Any] = {
+                    "role": "assistant",
+                    "text": reply_text,
+                    "thought": thought_text,
+                    "runId": run_id,
+                }
+                if history_tools:
+                    entry["toolCalls"] = history_tools
+                self._histories[session_id].append(entry)
                 await emit({"type": "TextDelta", "sessionId": session_id, "runId": run_id, "text": reply_text})
                 await emit(
                     build_token_usage_event(
@@ -140,13 +163,168 @@ class MockAdapter(AgentAdapter):
                 )
                 await emit({"type": "Completed", "sessionId": session_id, "runId": run_id, "requestId": request_id})
 
+            if text.lstrip().startswith("/plan") or "TODO" in text or "TOOL_DEMO" in text:
+                plan_items = [
+                    {"id": "step-1", "content": "梳理工作区上下文与变更范围", "status": "completed"},
+                    {"id": "step-2", "content": "验证核心逻辑与边界条件", "status": "in_progress"},
+                    {"id": "step-3", "content": "输出结论与可复用建议", "status": "pending"},
+                ]
+                await emit(build_todo_updated_event(session_id=session_id, items=plan_items, run_id=run_id, request_id=request_id))
+                inspect_id = f"tool-{uuid4().hex[:6]}"
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=inspect_id,
+                        name="workspace_scan",
+                        status="running",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="扫描工作区文件结构",
+                        tool_input={"query": "*.md, src/", "limit": 20},
+                    )
+                )
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=inspect_id,
+                        name="workspace_scan",
+                        status="completed",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="扫描工作区文件结构",
+                        tool_input={"query": "*.md, src/", "limit": 20},
+                        output="Scanned workspace files successfully (0 errors).",
+                        duration_ms=24,
+                    )
+                )
+                history_tools.append(
+                    {
+                        "callId": inspect_id,
+                        "name": "workspace_scan",
+                        "title": "扫描工作区文件结构",
+                        "status": "completed",
+                        "input": {"query": "*.md, src/", "limit": 20},
+                        "output": "Scanned workspace files successfully (0 errors).",
+                        "durationMs": 24,
+                    }
+                )
+                if "TOOL_DEMO" not in text:
+                    plan_items[1]["status"] = "completed"
+                    plan_items[2]["status"] = "completed"
+                    await emit(build_todo_updated_event(session_id=session_id, items=plan_items, run_id=run_id, request_id=request_id))
+
+            if "MOCK_EDIT" in text and not settings.get("readOnly"):
+                sess_cwd = (self._sessions.get(session_id) or {}).get("cwd") or str(self.allowed_roots[0])
+                safe_dir = ensure_allowed_path(sess_cwd, self.allowed_roots)
+                target_file = ensure_allowed_path(safe_dir / "mock_demo.txt", self.allowed_roots)
+                edit_id = f"edit-{uuid4().hex[:6]}"
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=edit_id,
+                        name="edit_file",
+                        status="running",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="写入 mock_demo.txt",
+                        tool_input={"path": "mock_demo.txt", "mode": "append"},
+                    )
+                )
+                prev = target_file.read_text(encoding="utf-8") if target_file.is_file() else ""
+                updated = prev + f"# Edit by {run_id}\n{text}\n"
+                target_file.write_text(updated, encoding="utf-8")
+                out_msg = f"Updated {target_file.name} ({len(updated)} bytes)"
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=edit_id,
+                        name="edit_file",
+                        status="completed",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="写入 mock_demo.txt",
+                        tool_input={"path": "mock_demo.txt", "mode": "append"},
+                        output=out_msg,
+                        duration_ms=16,
+                    )
+                )
+                history_tools.append(
+                    {
+                        "callId": edit_id,
+                        "name": "edit_file",
+                        "title": "写入 mock_demo.txt",
+                        "status": "completed",
+                        "input": {"path": "mock_demo.txt", "mode": "append"},
+                        "output": out_msg,
+                        "durationMs": 16,
+                    }
+                )
+
             if "RUN_CMD" in text:
                 call_id = f"call-{uuid4().hex[:6]}"
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=call_id,
+                        name="shell",
+                        status="running",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="git status && pytest -q",
+                        tool_input={"command": "git status && pytest -q"},
+                    )
+                )
                 decision = await request_approval(session_id, call_id, "git status && pytest -q", "medium")
                 await emit({"type": "ToolCall", "sessionId": session_id, "runId": run_id, "callId": call_id, "name": "shell", "decision": decision})
                 if decision == "deny":
+                    await emit(
+                        build_tool_call_update(
+                            session_id=session_id,
+                            call_id=call_id,
+                            name="shell",
+                            status="error",
+                            run_id=run_id,
+                            request_id=request_id,
+                            title="git status && pytest -q",
+                            error="用户拒绝执行该命令",
+                        )
+                    )
+                    history_tools.append(
+                        {
+                            "callId": call_id,
+                            "name": "shell",
+                            "title": "git status && pytest -q",
+                            "status": "error",
+                            "input": {"command": "git status && pytest -q"},
+                            "error": "用户拒绝执行该命令",
+                        }
+                    )
                     await _finish_with_reply("已按指令拒绝执行命令。")
                     return
+                await emit(
+                    build_tool_call_update(
+                        session_id=session_id,
+                        call_id=call_id,
+                        name="shell",
+                        status="completed",
+                        run_id=run_id,
+                        request_id=request_id,
+                        title="git status && pytest -q",
+                        output="On branch main\n12 passed in 0.42s",
+                        duration_ms=42,
+                    )
+                )
+                history_tools.append(
+                    {
+                        "callId": call_id,
+                        "name": "shell",
+                        "title": "git status && pytest -q",
+                        "status": "completed",
+                        "input": {"command": "git status && pytest -q"},
+                        "output": "On branch main\n12 passed in 0.42s",
+                        "durationMs": 42,
+                    }
+                )
 
             if cancel_ev.is_set():
                 await emit({"type": "Failed", "sessionId": session_id, "runId": run_id, "code": "cancelled", "message": "Cancelled by user"})
@@ -168,3 +346,24 @@ class MockAdapter(AgentAdapter):
         else:
             for ev in self._active_runs.values():
                 ev.set()
+
+    async def rename_session(self, *, session_id: str, title: str) -> dict[str, Any]:
+        if session_id in self._sessions:
+            self._sessions[session_id]["title"] = title
+        return {"sessionId": session_id, "title": title}
+
+    async def delete_session(self, *, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+        self._histories.pop(session_id, None)
+
+    async def compact_session(self, *, session_id: str) -> dict[str, Any]:
+        hist = self._histories.get(session_id, [])
+        if len(hist) <= 4:
+            return {"supported": True, "message": "上下文已保持精简，无需进一步压缩"}
+        kept = hist[-2:]
+        summarized_count = len(hist) - len(kept)
+        self._histories[session_id] = [
+            {"role": "assistant", "text": f"[上下文压缩摘要] 已合并早先 {summarized_count} 条历史交互要点。"},
+            *kept,
+        ]
+        return {"supported": True, "message": f"已压缩早先 {summarized_count} 条消息并保留最近上下文"}

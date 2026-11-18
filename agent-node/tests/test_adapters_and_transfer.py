@@ -40,13 +40,24 @@ for line in sys.stdin:
         assert any(p.get('type') == 'localImage' and str(p.get('path', '')).endswith('shot.png') for p in msg['params']['input'])
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'turn': {'id': 'turn-1'}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'item/reasoning/summaryTextDelta', 'params': {'threadId': 'thr-1', 'delta': 'checking files'}}) + '\\n')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'turn/plan/updated', 'params': {'threadId': 'thr-1', 'plan': [{'step': 'Inspect code', 'status': 'completed'}, {'step': 'Run tests', 'status': 'inProgress'}]}}) + '\\n')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'item/started', 'params': {'threadId': 'thr-1', 'item': {'id': 'call-1', 'type': 'commandExecution', 'command': 'pytest -q'}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 9001, 'method': 'item/commandExecution/requestApproval', 'params': {'threadId': 'thr-1', 'itemId': 'call-1', 'command': 'pytest -q'}}) + '\\n')
         sys.stdout.flush()
         reply = json.loads(sys.stdin.readline())
         dec = reply.get('result', {}).get('decision', '')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'item/commandExecution/outputDelta', 'params': {'threadId': 'thr-1', 'itemId': 'call-1', 'delta': '12 passed\\n'}}) + '\\n')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'item/completed', 'params': {'threadId': 'thr-1', 'item': {'id': 'call-1', 'type': 'commandExecution', 'command': 'pytest -q', 'status': 'completed', 'exitCode': 0, 'aggregatedOutput': '12 passed\\n'}}}) + '\\n')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'turn/diff/updated', 'params': {'threadId': 'thr-1', 'diff': 'diff --git a/app.py b/app.py\\n--- a/app.py\\n+++ b/app.py\\n@@ -1 +1 @@\\n-old\\n+new\\n'}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'item/agentMessage/delta', 'params': {'threadId': 'thr-1', 'delta': f'approved:{dec}'}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'thread/tokenUsage/updated', 'params': {'threadId': 'thr-1', 'turnId': 'turn-1', 'tokenUsage': {'modelContextWindow': 200000, 'total': {'inputTokens': 600, 'cachedInputTokens': 150, 'outputTokens': 90, 'reasoningOutputTokens': 20, 'totalTokens': 690}, 'last': {'inputTokens': 600, 'cachedInputTokens': 150, 'outputTokens': 90, 'reasoningOutputTokens': 20, 'totalTokens': 690}}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'turn/completed', 'params': {'threadId': 'thr-1', 'turn': {'id': 'turn-1'}}}) + '\\n')
+    elif m == 'thread/read':
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'thread': {'id': 'thr-1', 'turns': [{'items': [{'type': 'userMessage', 'content': [{'text': 'run'}]}, {'type': 'reasoning', 'summary': ['checking files']}, {'type': 'commandExecution', 'id': 'call-1', 'command': 'pytest -q', 'status': 'completed', 'aggregatedOutput': '12 passed'}, {'type': 'agentMessage', 'text': 'approved:accept'}]}]}}}) + '\\n')
+    elif m == 'thread/name/set':
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}) + '\\n')
+    elif m == 'thread/compact/start':
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}) + '\\n')
     elif m == 'thread/list':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'data': [{'id': 'thr-1', 'preview': 'Fix bug', 'cwd': '.'}]}}) + '\\n')
     sys.stdout.flush()
@@ -113,6 +124,23 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
         )
         assert any(e["type"] == "ThoughtDelta" and e["text"] == "checking files" for e in events)
         assert any(e["type"] == "TextDelta" and e["text"] == "approved:accept" for e in events)
+        assert any(e["type"] == "ToolCallUpdate" and e.get("callId") == "call-1" and e.get("status") == "running" for e in events)
+        assert any(e["type"] == "ToolCallUpdate" and e.get("callId") == "call-1" and e.get("deltaOutput") == "12 passed\n" for e in events)
+        done_tool = next(e for e in events if e["type"] == "ToolCallUpdate" and e.get("status") == "completed")
+        assert done_tool["output"] == "12 passed\n" and isinstance(done_tool["durationMs"], int)
+        todo_ev = next(e for e in events if e["type"] == "TodoUpdated")
+        assert todo_ev["items"] == [
+            {"id": "0", "content": "Inspect code", "status": "completed"},
+            {"id": "1", "content": "Run tests", "status": "in_progress"},
+        ]
+        diff_ev = next(e for e in events if e["type"] == "DiffSnapshot")
+        assert diff_ev["perTurn"] is True and diff_ev["summary"] == {"filesChanged": 1, "additions": 1, "deletions": 1}
+        assert diff_ev["files"][0]["path"] == "app.py" and "+new" in diff_ev["files"][0]["patch"]
+        hist = await codex.get_history(session_id="thr-1")
+        assert len(hist) == 2 and hist[1]["thought"] == "checking files"
+        assert hist[1]["toolCalls"][0]["callId"] == "call-1"
+        assert (await codex.rename_session(session_id="thr-1", title="New Title"))["title"] == "New Title"
+        assert (await codex.compact_session(session_id="thr-1"))["supported"] is True
         codex_usage = next(e for e in events if e["type"] == "TokenUsage")
         assert codex_usage["scope"] == "cumulative"
         assert codex_usage["totalTokens"] == 690
@@ -324,3 +352,331 @@ def test_e2e_publish_and_download_against_backend_app(tmp_path, monkeypatch):
             assert out.read_bytes() == raw_payload
 
     asyncio.run(_transfer())
+
+
+def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
+    async def _run():
+        roots = canonicalize_roots([str(tmp_path)])
+        fake_oc = FastAPI()
+        renamed_titles: list[str] = []
+        deleted_ids: list[str] = []
+
+        @fake_oc.post("/session")
+        def _create():
+            return {"id": "oc-rich", "title": "OC Rich"}
+
+        @fake_oc.post("/session/{sid}/prompt_async")
+        async def _prompt(sid: str):
+            return {"accepted": True}
+
+        @fake_oc.patch("/session/{sid}")
+        async def _rename(sid: str, request: Request):
+            body = await request.json()
+            renamed_titles.append(body.get("title", ""))
+            return {"id": sid, "title": body.get("title", "")}
+
+        @fake_oc.delete("/session/{sid}")
+        async def _delete(sid: str):
+            deleted_ids.append(sid)
+            return {"ok": True}
+
+        @fake_oc.post("/session/{sid}/summarize")
+        async def _compact(sid: str):
+            return {"ok": True}
+
+        @fake_oc.get("/session/{sid}/message")
+        async def _messages(sid: str):
+            return [
+                {"info": {"id": "m-u", "role": "user"}, "parts": [{"type": "text", "text": "fix tests"}]},
+                {
+                    "info": {"id": "m-a", "role": "assistant"},
+                    "parts": [
+                        {"type": "reasoning", "text": "check logs"},
+                        {
+                            "type": "tool",
+                            "callID": "tc-1",
+                            "tool": "bash",
+                            "state": {
+                                "status": "completed",
+                                "title": "Run pytest",
+                                "input": {"command": "pytest"},
+                                "output": "ok",
+                            },
+                        },
+                        {"type": "text", "text": "All fixed."},
+                    ],
+                },
+            ]
+
+        @fake_oc.get("/event")
+        async def _sse():
+            async def gen():
+                # 1. user 回显应被 role 与正文去重过滤
+                yield f"data: {json.dumps({'type': 'message.updated', 'properties': {'info': {'id': 'm-user-1', 'sessionID': 'oc-rich', 'role': 'user'}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-u1', 'messageID': 'm-user-1', 'sessionID': 'oc-rich', 'type': 'text', 'text': 'fix tests'}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-u2', 'messageID': 'm-u-unknown', 'sessionID': 'oc-rich', 'type': 'text', 'text': 'fix tests'}}})}\n\n"
+                # 2. reasoning & text 混用累计快照和增量 delta 时不得重复
+                yield f"data: {json.dumps({'type': 'message.updated', 'properties': {'info': {'id': 'm-asst-1', 'sessionID': 'oc-rich', 'role': 'assistant'}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-r1', 'messageID': 'm-asst-1', 'sessionID': 'oc-rich', 'type': 'reasoning', 'text': 'Think '}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-r1', 'messageID': 'm-asst-1', 'sessionID': 'oc-rich', 'type': 'reasoning', 'text': 'Think hard'}}})}\n\n"
+                # 3. tool part & todowrite -> ToolCallUpdate + TodoUpdated
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-t1', 'messageID': 'm-asst-1', 'sessionID': 'oc-rich', 'type': 'tool', 'callID': 'call-todo', 'tool': 'todowrite', 'state': {'status': 'completed', 'input': {'todos': [{'id': '1', 'content': 'Run suite', 'status': 'in_progress'}]}, 'output': 'saved'}}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-tx1', 'messageID': 'm-asst-1', 'sessionID': 'oc-rich', 'type': 'text', 'text': 'Hello '}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'message.part.updated', 'properties': {'part': {'id': 'p-tx1', 'messageID': 'm-asst-1', 'sessionID': 'oc-rich', 'type': 'text', 'text': 'Hello world'}, 'delta': 'world'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.idle', 'properties': {'sessionID': 'oc-rich'}})}\n\n"
+
+            return StreamingResponse(gen(), media_type="text/event-stream")
+
+        adapter = OpenCodeAdapter(roots, serve_url="http://opencode.local")
+        adapter._client = lambda: httpx.AsyncClient(  # type: ignore[method-assign]
+            transport=httpx.ASGITransport(app=fake_oc),
+            base_url="http://opencode.local",
+        )
+        await adapter.open_session(cwd=str(tmp_path))
+        events: list[dict] = []
+        await adapter.send_prompt(
+            session_id="oc-rich",
+            text="fix tests",
+            request_id="r-rich",
+            emit=lambda ev: events.append(ev) or asyncio.sleep(0),
+            request_approval=lambda *_: asyncio.sleep(0, result="allow_once"),
+        )
+        combined_text = "".join(e["text"] for e in events if e["type"] == "TextDelta")
+        combined_thought = "".join(e["text"] for e in events if e["type"] == "ThoughtDelta")
+        assert combined_text == "Hello world"
+        assert combined_thought == "Think hard"
+        assert any(e["type"] == "ToolCallUpdate" and e["callId"] == "call-todo" and e["status"] == "completed" for e in events)
+        assert any(e["type"] == "TodoUpdated" and e["items"][0]["content"] == "Run suite" for e in events)
+
+        hist = await adapter.get_history(session_id="oc-rich")
+        assert hist[0] == {"role": "user", "text": "fix tests"}
+        assert hist[1]["thought"] == "check logs"
+        assert hist[1]["toolCalls"][0]["name"] == "bash"
+        assert hist[1]["text"] == "All fixed."
+
+        assert (await adapter.rename_session(session_id="oc-rich", title="Renamed OC"))["title"] == "Renamed OC"
+        assert renamed_titles == ["Renamed OC"]
+        assert (await adapter.compact_session(session_id="oc-rich"))["supported"] is True
+        await adapter.delete_session(session_id="oc-rich")
+        assert deleted_ids == ["oc-rich"]
+
+    asyncio.run(_run())
+
+
+def test_opencode_v2_protocol_adapter(tmp_path):
+    async def _run():
+        roots = canonicalize_roots([str(tmp_path)])
+        fake_v2 = FastAPI()
+        selected_models: list[dict] = []
+        perm_decisions: list[str] = []
+
+        @fake_v2.get("/api/session")
+        def _v2_list():
+            return {"data": [{"id": "ses-v2", "title": "V2 Demo", "location": {"directory": str(tmp_path)}}]}
+
+        @fake_v2.post("/api/session")
+        async def _v2_create(request: Request):
+            body = await request.json()
+            assert body["location"]["directory"] == str(tmp_path.resolve())
+            return {"data": {"id": "ses-v2", "title": "New V2"}}
+
+        @fake_v2.get("/api/model")
+        def _v2_models():
+            return {
+                "data": [
+                    {
+                        "id": "deepseek-v4.1-flash",
+                        "modelID": "deepseek-v4.1-flash",
+                        "providerID": "opencode-go",
+                        "type": "chat",
+                        "name": "DeepSeek V4.1 Flash 1017",
+                        "enabled": True,
+                        "variants": [{"id": "low"}, {"id": "high"}],
+                        "limit": {"context": 1000000},
+                    }
+                ]
+            }
+
+        @fake_v2.post("/api/session/{sid}/model")
+        async def _v2_set_model(sid: str, request: Request):
+            selected_models.append(await request.json())
+            return {}
+
+        @fake_v2.post("/api/session/{sid}/prompt")
+        async def _v2_prompt(sid: str, request: Request):
+            body = await request.json()
+            assert "text" in body
+            return {"data": {"id": "msg-u1", "sessionID": sid, "type": "user"}}
+
+        @fake_v2.post("/api/session/{sid}/permission/{rid}/reply")
+        async def _v2_perm(sid: str, rid: str, request: Request):
+            perm_decisions.append((await request.json()).get("decision", ""))
+            return {}
+
+        @fake_v2.get("/api/event")
+        async def _v2_sse():
+            async def gen():
+                yield f"data: {json.dumps({'type': 'server.connected', 'data': {}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.reasoning.delta', 'data': {'sessionID': 'ses-v2', 'delta': 'checking'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.tool.input.started', 'data': {'sessionID': 'ses-v2', 'id': 'c1', 'name': 'read'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.tool.called', 'data': {'sessionID': 'ses-v2', 'id': 'c1', 'name': 'read', 'input': {'path': 'README.md'}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'permission.asked', 'data': {'sessionID': 'ses-v2', 'id': 'p-v2', 'title': 'Run bash'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.tool.success', 'data': {'sessionID': 'ses-v2', 'id': 'c1', 'content': [{'type': 'text', 'text': 'hello'}]}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.text.started', 'data': {'sessionID': 'ses-v2'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.text.delta', 'data': {'sessionID': 'ses-v2', 'delta': 'done!'}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.step.ended', 'data': {'sessionID': 'ses-v2', 'assistantMessageID': 'a1', 'tokens': {'input': 500, 'output': 80, 'reasoning': 10, 'cache': {'read': 100}}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.execution.succeeded', 'data': {'sessionID': 'ses-v2'}})}\n\n"
+
+            return StreamingResponse(gen(), media_type="text/event-stream")
+
+        @fake_v2.get("/api/session/{sid}/message")
+        def _v2_history(sid: str):
+            return {
+                "data": [
+                    {"id": "u1", "type": "user", "text": "hi"},
+                    {
+                        "id": "a1",
+                        "type": "assistant",
+                        "content": [
+                            {"type": "reasoning", "text": "checking"},
+                            {"type": "tool", "id": "c1", "name": "read", "state": {"status": "completed", "input": {"path": "README.md"}, "content": [{"type": "text", "text": "hello"}]}},
+                            {"type": "text", "text": "done!"},
+                        ],
+                    },
+                    {"id": "idle1", "type": "idle", "outcome": "succeeded"},
+                ]
+            }
+
+        adapter = OpenCodeAdapter(roots, serve_url="http://opencode-v2.local")
+        adapter._client = lambda: httpx.AsyncClient(  # type: ignore[method-assign]
+            transport=httpx.ASGITransport(app=fake_v2),
+            base_url="http://opencode-v2.local",
+        )
+        probe = await adapter.probe()
+        assert probe.status == "ready" and probe.version == "serve-v2"
+        models = await adapter.list_models()
+        assert models[0]["id"] == "opencode-go/deepseek-v4.1-flash" and models[0]["label"] == "DeepSeek V4.1 Flash 1017"
+        assert models[0]["efforts"] == ["low", "high"]
+        sess = await adapter.open_session(cwd=str(tmp_path))
+        assert sess["sessionId"] == "ses-v2"
+
+        events: list[dict] = []
+        await adapter.send_prompt(
+            session_id="ses-v2",
+            text="hi",
+            request_id="r-v2",
+            options={"model": "opencode-go/deepseek-v4.1-flash", "effort": "high"},
+            emit=lambda ev: events.append(ev) or asyncio.sleep(0),
+            request_approval=lambda *_: asyncio.sleep(0, result="allow_session"),
+        )
+        assert selected_models == [{"model": {"providerID": "opencode-go", "id": "deepseek-v4.1-flash", "variant": "high"}}]
+        assert perm_decisions == ["always"]
+        assert any(e["type"] == "ToolCallUpdate" and e["status"] == "completed" and e["output"] == "hello" for e in events)
+        assert "".join(e["text"] for e in events if e["type"] == "TextDelta") == "done!"
+        usage = next(e for e in events if e["type"] == "TokenUsage")
+        assert usage["contextWindow"] == 1000000 and usage["totalTokens"] == 590
+        assert any(e["type"] == "Completed" for e in events)
+
+        hist = await adapter.get_history(session_id="ses-v2")
+        assert len(hist) == 2 and hist[1]["thought"] == "checking" and hist[1]["toolCalls"][0]["output"] == "hello"
+
+    asyncio.run(_run())
+
+
+def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
+    async def _run():
+        roots = canonicalize_roots([str(tmp_path)])
+        fake_v2 = FastAPI()
+        selected_agents: list[str] = []
+        form_replies: list[dict] = []
+        uploaded_files: list[dict] = []
+
+        @fake_v2.get("/api/session")
+        def _v2_sessions():
+            return {"data": []}
+
+        @fake_v2.get("/api/agent")
+        def _v2_agents():
+            return {"data": [{"name": "build", "description": "Default builder", "mode": "primary"}, {"name": "plan", "description": "Planner"}]}
+
+        @fake_v2.get("/api/mcp")
+        def _v2_mcp():
+            return {"data": [{"name": "context7", "status": "connected", "tools": ["resolve-library-id"]}]}
+
+        @fake_v2.post("/api/session/{sid}/agent")
+        async def _v2_set_agent(sid: str, request: Request):
+            selected_agents.append(str((await request.json()).get("agent") or ""))
+            return {}
+
+        @fake_v2.post("/api/session/{sid}/prompt")
+        async def _v2_prompt(sid: str, request: Request):
+            body = await request.json()
+            if isinstance(body.get("files"), list):
+                uploaded_files.extend(body["files"])
+            return {"data": {"id": "u1"}}
+
+        @fake_v2.post("/api/session/{sid}/form/{fid}/reply")
+        async def _v2_form_reply(sid: str, fid: str, request: Request):
+            form_replies.append({"sid": sid, "fid": fid, "body": await request.json()})
+            return {"ok": True}
+
+        @fake_v2.get("/api/event")
+        async def _v2_sse():
+            async def gen():
+                yield f"data: {json.dumps({'type': 'server.connected', 'data': {}})}\n\n"
+                yield f"data: {json.dumps({'type': 'form.created', 'data': {'sessionID': 'ses-f', 'form': {'id': 'frm-1', 'title': 'Choose target', 'fields': [{'key': 'env', 'type': 'string', 'options': [{'value': 'prod', 'label': 'Prod'}]}]}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.tool.called', 'data': {'sessionID': 'ses-f', 'id': 'call-sub', 'name': 'task', 'input': {'subagent': 'research', 'sessionID': 'ses-child-99'}}})}\n\n"
+                yield f"data: {json.dumps({'type': 'session.execution.succeeded', 'data': {'sessionID': 'ses-f'}})}\n\n"
+
+            return StreamingResponse(gen(), media_type="text/event-stream")
+
+        att_file = tmp_path / "note.txt"
+        att_file.write_text("hello attachment", encoding="utf-8")
+        adapter = OpenCodeAdapter(roots, serve_url="http://opencode-v2.local")
+        adapter._client = lambda: httpx.AsyncClient(  # type: ignore[method-assign]
+            transport=httpx.ASGITransport(app=fake_v2),
+            base_url="http://opencode-v2.local",
+        )
+        assert [a["id"] for a in await adapter.list_agents()] == ["build", "plan"]
+        assert (await adapter.list_mcp_servers())[0]["name"] == "context7"
+
+        events: list[dict] = []
+        await adapter.send_prompt(
+            session_id="ses-f",
+            text="check form",
+            request_id="r-form",
+            options={"agent": "plan"},
+            attachments=[{"fileName": "note.txt", "mime": "text/plain", "localPath": str(att_file)}],
+            emit=lambda ev: events.append(ev) or asyncio.sleep(0),
+            request_approval=lambda *_: asyncio.sleep(0, result="allow_once"),
+        )
+        assert selected_agents == ["plan"]
+        assert uploaded_files and uploaded_files[0]["name"] == "note.txt" and uploaded_files[0]["mime"] == "text/plain"
+        form_evt = next(e for e in events if e["type"] == "FormRequest")
+        assert form_evt["formId"] == "frm-1" and form_evt["title"] == "Choose target"
+        sub_evt = next(e for e in events if e["type"] == "ToolCallUpdate" and e["callId"] == "call-sub")
+        assert sub_evt["subagentSessionId"] == "ses-child-99"
+        rep = await adapter.reply_form(session_id="ses-f", form_id="frm-1", answer={"env": "prod"})
+        assert rep["cancelled"] is False and form_replies[0]["body"] == {"answer": {"env": "prod"}}
+
+        from agent_node.adapters.antigravity import AntigravityAdapter
+        from agent_node.adapters.hermes import HermesAdapter
+
+        ag_probe = await AntigravityAdapter(roots, command="definitely-missing-agy-binary").probe()
+        assert ag_probe.provider == "antigravity" and ag_probe.status == "unavailable"
+        hermes = HermesAdapter(roots)
+        h_evts: list[dict] = []
+        hermes._emit = lambda ev: h_evts.append(ev) or asyncio.sleep(0)
+        await hermes._on_acp_update(
+            "session/update",
+            {
+                "sessionId": "h1",
+                "update": {
+                    "sessionUpdate": "plan",
+                    "entries": [{"content": "Inspect diff", "status": "in_progress"}],
+                },
+            },
+        )
+        assert h_evts[0]["type"] == "TodoUpdated" and h_evts[0]["items"][0]["content"] == "Inspect diff"
+
+    asyncio.run(_run())

@@ -119,7 +119,7 @@ def main() -> None:
         smoke_password = secrets.token_urlsafe(24)
         first = launch(data_dir)
         try:
-            assert request("/api/health") == {"status": "ok", "service": "studiolo", "version": "0.6.1"}
+            assert request("/api/health") == {"status": "ok", "service": "studiolo", "version": "0.7.0"}
             for origin in ("http://tauri.localhost", "tauri://localhost"):
                 with urllib.request.urlopen(urllib.request.Request(BASE + "/api/health", headers={
                     "Origin": origin,

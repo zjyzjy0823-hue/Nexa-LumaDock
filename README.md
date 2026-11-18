@@ -1,283 +1,200 @@
 # Studiolo
 
-> 原仓库名 `Nexa-LumaDock` 已更名为 **`Studiolo`**；[v0.6.0](https://github.com/zjyzjy0823-hue/Studiolo/releases/tag/v0.6.0) 及更早版本的历史安装包保留原文件名，GitHub 链接已同步至本仓库。
+> **当前版本：`v0.7.0`** · 本地优先（Local-first）的个人数字控制中心 & 多设备 AI Agent 协同工作台。
 
-最新正式发布：**[v0.6.0 — Real Automation Engine](https://github.com/zjyzjy0823-hue/Studiolo/releases/tag/v0.6.0)**。
+Studiolo 将个人的日常数据管理（账本、网站、结构化数据、设备监控、自动化）与跨设备的 **AI Coding Agent 远程协同工作台** 合二为一：你可以在一台电脑、平板或手机浏览器上，安全调度家里或云端多台 Mac / Windows / Linux 宿主机上的编程智能体，且聊天正文与代码不在中心服务器数据库落盘。
 
-Studiolo 是面向 **Windows 10/11 x64 和 macOS Intel x86_64** 的桌面个人控制中心。应用启动时自动启动 FastAPI Backend 和本地 SQLite，普通用户无需安装 Python、Node.js 或 Rust。支持 Dashboard、Websites、Devices、Agents、API Keys、Settings、Data、Automation 和 Ledger；连接独立的 PostgreSQL Studiolo Core 后，可使用跨设备同步和真实自动化执行。
+---
 
-## 下载与安装
+## 核心能力
 
-| 平台 | v0.6.0 安装包 |
-| --- | --- |
-| Windows 10/11 x64 | [Nexa_0.6.0_x64-setup.exe](https://github.com/zjyzjy0823-hue/Studiolo/releases/download/v0.6.0/Nexa_0.6.0_x64-setup.exe) |
-| macOS Intel x86_64 | [Nexa_0.6.0_x64.dmg](https://github.com/zjyzjy0823-hue/Studiolo/releases/download/v0.6.0/Nexa_0.6.0_x64.dmg) |
+### 1. 多设备 Agent Fleet 协同工作台（`/chat` 与 `/agents`）
+- **单控制台管多台机器**：每台宿主机运行轻量守护进程 [agent-node](agent-node/) 并通过反向 WebSocket 主动连回 Core，无需公网 IP 或手动配置端口映射。
+- **多引擎统一驱动**：自动探测并接入宿主机上的 **OpenCode**（HTTP+SSE）、**Codex**（`app-server` stdio JSON-RPC）、**Hermes**（ACP / Gateway）、**OpenClaw**（WebSocket）、**Antigravity**、**DSH** 以及联调 Mock 运行时。
+- **IDE 级代码审查与终端体验**：
+  - **变更汇总条 & 高亮 Diff**：输入框上方实时汇总变更文件，工作台内提供保留完整 `--tok-*` 语法高亮的双行号 Diff、并排对比（Split）、Hunk 上下文按需展开（`+N more lines`）、行号 `+` 发起单行批注追问、逐块撤销及快捷 Git Commit。
+  - **工作区浏览与终端**：支持 `allowedRoots` 沙箱目录树懒加载、行号引用与语法高亮代码预览，以及受控交互式 Shell 终端。
+  - **安全执行与隐私边界**：Git Worktree 会话级隔离、高危工具人工审批、持久信任命令白名单（防拼接注入）、按 Agent 记忆模型偏好、支持导出 XSS 安全的独立 HTML / Markdown 报告。
+- **端到端加密附件总线**：图片与文件附件在发送端按 2 MiB 分块执行 **AES-256-GCM 本地加密**（密钥不进 Core DB），接收端按 `LAN 局域网直传 → xtcp (frp) → VPS Edge Relay → Core 密文分块` 顺序自动降级拉取。
 
-安装包 SHA-256：
+### 2. 本地优先个人控制中心
+- **全套个人模块**：Dashboard 概览、Ledger 账本（兼容部署时区与多币种/分类统计）、Websites 收藏、Data 自定义集合（有界分页）、Devices 硬件状态（[device-client](device-client/)）、Agent Data Actions（`na_live_`）以及 Core 权威调度 Automation。
+- **离线可写 + Sync Protocol v3**：支持 SQLite 离线编辑与 Outbox 持久化，接入 PostgreSQL Core 后自动双向同步，通过 Conflict Center 显式裁决冲突；当前 Alembic Schema Head 为 **`0020_fleet_nodes_and_blobs`**。
+
+---
+
+## 系统架构概览
 
 ```text
-Nexa_0.6.0_x64-setup.exe
-3d8c8a48fcfa898de3ed3d03bb918605fe59540d52ad7a12320014c60b61d1aa
-
-Nexa_0.6.0_x64.dmg
-b943e7b7163156e06e90c7035b2e111d0ba351db95608fc3cc6d6a297d1155aa
+浏览器 / Tauri Desktop / 手机 Web
+   ├── HTTP REST & /ws/fleet/client (JWT 首帧鉴权，纯内存指令透传)
+   ▼
+Studiolo Core (FastAPI · SQLite Local 或 PostgreSQL Core)
+   ▲
+   │  /ws/fleet/node (sn_live_ 反向出站长连接 · 每 30 秒心跳自报引擎与目录)
+   │
+宿主机 AgentNodeDaemon (allowedRoots 本地沙箱护栏)
+   ├── OpenCode (REST+SSE) / Codex & Hermes (stdio JSON-RPC) / OpenClaw (WS) / CLI
+   └── 可选 LAN 密文直传服务 (:18910) ──(公网跨网降级)──▶ VPS Edge Blob Relay / Core 分块
 ```
 
-macOS 安装包目前**未签名、未经过 Apple 公证**，首次打开可能出现 Gatekeeper 提示。当前发布和实机验收覆盖 Intel x86_64；Apple Silicon 原生构建与 Universal Binary 尚未验证。
+---
 
-## v0.6.0 主要功能
+## 快速开始
 
-- **Core 权威自动化**：支持 Manual、Schedule、Data Changed、Agent Task Completed 触发器，以及 Ledger、Data、Agent、公开 HTTPS Webhook 动作。Core 统一调度和执行，Local 转发立即运行请求并读取 Core 执行历史。
-- **持久化运行状态**：自动化执行与事件持久化，包含重试、lease/fencing 和幂等保护；Local 不运行真实自动化 scheduler 或 worker。
-- **本地优先与后台同步**：Ledger、Websites、Data 可离线读写；修改持久保存在 outbox，连接恢复后自动同步。
-- **Conflict Center**：支持 Keep Local / Keep Remote，保留真实冲突及远端快照，显式决定最终值。
-- **个人状态同步**：同步安全个人偏好、Dashboard 布局和 Automation 定义；设备状态、执行历史、运行时表和凭证不参与 replica 同步。
-- **桌面可靠性**：改进 sidecar 启停与恢复，打包 IANA 时区数据，支持干净 Windows 环境中的设置与时区校验。
+### 一、本地 Web 开发启动
 
-当前版本使用 **Sync Protocol 3**、personal-state **generation 3**，Alembic head 为 **`0018_data_record_tenancy`**。请同时升级 Core 和所有桌面客户端。同步边界见 [数据归属与同步边界](docs/sync-scopes.md)，实现细节见 [开发阶段实现与验证记录](docs/automation-engine-2026-10-03.md)。
+环境要求：**Node.js 22+**、**Python 3.12+**。
 
-Windows ↔ Core ↔ macOS 实机验收已完成：Schedule、离线/重启/恢复、Keep Local、Keep Remote 和凭证日志安全检查通过。[正式发布源码的 main CI](https://github.com/zjyzjy0823-hue/Studiolo/actions/runs/37304312269) 八项 required jobs（validation-impact、frontend、contracts、backend、backend-postgres、device-client、openclaw-adapter、desktop-windows）全部成功；发布源码提交为 `f59b60de688a5a5b35471e2a47a4a31dd1baaabf`。
-
-## 版本演进
-
-v0.5.2 Phase 1 提供独立的 PostgreSQL Studiolo Core；Phase 2 增加 Personal Workspace 和 Client 安装身份；Phase 3 加入 Core Client Enrollment 与 `nc_live_` 凭证，见 [Core 开发说明](docs/core.md)。Client Identity 与 Client Credential 不同；Client、Device、Agent 也是不同实体。v0.5.3 Phase 3 已支持手动双向同步 Ledger 分类和账单。v0.5.4 将手动同步扩展到 Websites 和 Data，统一使用 Adapter Registry 与 Sync Protocol v2。v0.5.5 新增 Local-only Agent Data Actions、显式 dataScopes、原子审计/幂等 receipt 和 OpenClaw 原生 typed Tool Plugin；已有 Agent 默认无数据权限，write 不包含 delete。详见 [Agent Data Actions](docs/agent-data-actions.md)。
-
-## Studiolo Desktop
-
-个人用户可直接安装上方对应平台的安装包。首次启动会在用户数据目录中创建数据库和密钥，随后显示登录/注册页。Windows 点击窗口右上角 X 会隐藏窗口；从托盘选择“打开 Studiolo”恢复，选择“退出 Studiolo”会同时停止 Backend。macOS 关闭窗口后 Backend 保持运行，使用 Cmd+Q 完整退出。安装、数据位置、故障排查与已有 Web 数据迁移见 [Desktop 使用说明](docs/desktop.md)。Desktop 的本地 Backend 只监听 `127.0.0.1:17800`，通过保存的 Client 凭证与 Core 自动同步业务数据及安全个人状态；Settings → Sync 提供同步状态、立即同步和 Conflict Center。
-
-开发者在 Windows x64 上安装 Node.js 22、Python 3.12、Rust stable 与 MSVC 工具链后，可运行：
-
-```powershell
-npm ci
-python -m pip install -r backend/requirements.txt 'pyinstaller>=6,<7'
-npm run desktop:build
-```
-
-安装包位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`。该命令自动打包 Python sidecar、构建 Vue UI 和生成 NSIS 安装包。`npm run desktop:dev` 启动 Tauri 开发窗口；详情见 Desktop 使用说明。
-
-## Web Development
-
-现有 Web 开发模式仍受支持。前端使用 Vue 3、TypeScript、Pinia 和 Vite；后端使用 FastAPI、SQLAlchemy 2、Alembic 和 JWT。
-
-### 开发启动
-
-需要 Node.js 22 与 Python 3.12。在 `backend` 目录复制 `.env.example` 为 `.env`，将 `JWT_SECRET` 改为随机长字符串。`.env` 已被 Git 忽略。
+**1. 启动 FastAPI 后端**
 
 ```powershell
 cd backend
+Copy-Item .env.example .env
+# 编辑 backend/.env，务必将 JWT_SECRET 改为随机长字符串
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-在另一终端从仓库根目录运行：
+**2. 启动 Vue + Vite 前端**
 
 ```powershell
+# 在仓库根目录打开第二个终端
 npm ci
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173/`。首次进入会显示登录与注册页，只需设置用户名和密码。登录后可从侧边栏头像菜单退出；首页问候语使用当前用户名。网站、设备、智能体、设置、数据集合、工作流和账本的更改在刷新浏览器后仍会保留。前端将 `/api` 代理到本地后端。接口文档位于 `http://127.0.0.1:8000/docs`。
+打开 `http://127.0.0.1:5173/`，首次进入按引导设置用户名与密码登录；接口文档位于 `http://127.0.0.1:8000/docs`。
 
-### 连接 Studiolo Core（Web 模式必读）
+---
 
-Web 开发模式要连 Core，必须先给后端两个环境变量；缺任一个，`POST /api/v1/core/connect` 会返回 409：
+### 二、接入一台宿主机节点（`agent-node`）
 
-| 变量 | 作用 | 缺省后果 |
-| --- | --- | --- |
-| `STUDIOLO_INSTALLATION_ID` | 本机安装身份（UUID） | `409 Local installation ID is not configured` |
-| `STUDIOLO_DATA_DIR` | 存放 Client 凭证的目录 | `409 Local data directory is not configured` |
+1. 在页面右上角或左侧进入 **`/agents`**（或 **「设置 → Agent 与连接」**），点击 **「新增控制节点」**，复制生成的一次性 `sn_live_` Token（服务端仅保留哈希，关闭弹窗无法找回）。
+2. 在目标工作机复制配置文件并填入 Core 地址与允许 AI 访问的目录白名单：
 
-```bash
-export STUDIOLO_INSTALLATION_ID="11111111-2222-4333-8444-555555555555"
-export STUDIOLO_DATA_DIR="$HOME/.studiolo-data"
-mkdir -p "$STUDIOLO_DATA_DIR"
+```powershell
+cd agent-node
+pip install -r requirements.txt
+Copy-Item config.example.json config.json
+# 编辑 config.json 中的 coreUrl 与 allowedRoots（只能访问白名单内路径）
 ```
 
-Desktop 安装包由 sidecar 自动注入这两个变量（`backend/desktop_entry.py`），无需手工设置。
+3. 注入 Token 并启动节点守护进程：
 
-## 项目结构
+```powershell
+$env:STUDIOLO_NODE_TOKEN = "sn_live_你的节点令牌"
+python -m agent_node --config config.json
+```
+
+守护进程上线后会自动探测该机器已安装的智能体与能力并同步到前端列表，进入 `/chat` 即可开始协同对话。
+
+---
+
+### 三、桌面端开发与安装包构建（Windows / macOS）
+
+桌面端使用 **Tauri 2** 封装并将 Python 后端作为本地 Sidecar（监听 `127.0.0.1:17800`）随包启动，普通用户使用安装包无需额外配置 Python / Node 环境。
+
+```powershell
+# 启动 Tauri 桌面开发窗口
+npm run desktop:dev
+
+# Windows x64 构建原生 Sidecar + NSIS 安装包
+# 需预先安装 Rust toolchain + PyInstaller (`pip install -r backend/requirements.txt 'pyinstaller>=6,<7'`)
+npm run desktop:build
+```
+
+打包产物位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`。桌面数据目录（数据库、日志与密钥）说明见 [Desktop 使用说明](docs/desktop.md)。
+
+---
+
+### 四、公网自托管与多机部署
+
+- **Mac Core + PostgreSQL 部署**：参考根目录 [.env.core.example](.env.core.example) 与 [docker-compose.core.yml](docker-compose.core.yml)，详细步骤见 [Core 部署文档](docs/core.md)。
+- **公网 VPS TLS / frps / Edge Relay**：使用 [deploy/vps-edge/README.md](deploy/vps-edge/README.md) 一键拉起 Caddy HTTPS/WSS 终结、frp XTCP 隧道及无明文盲盒密文中继 [deploy/edge-relay/edge_relay.py](deploy/edge-relay/edge_relay.py)，突破家庭上行带宽瓶颈。
+- **跨平台常驻启动模板**：参考 [deploy/mac-core](deploy/mac-core)、[deploy/linux-node](deploy/linux-node) 与 [deploy/windows-node](deploy/windows-node)。
+
+> **Web 模式接入 Core 注意事项**：若以非桌面版独立 Web 后端连接远程 Core（`POST /api/v1/core/connect`），需在后端进程中配置 `STUDIOLO_INSTALLATION_ID`（本机 UUID）与 `STUDIOLO_DATA_DIR`（凭证存储目录）。
+
+---
+
+## 仓库目录结构
 
 ```text
 Studiolo/
-├─ src/
-│  ├─ pages/           各业务页面
-│  ├─ components/      通用 UI、布局和首页组件
-│  ├─ stores/          Pinia 状态与页面操作
-│  ├─ services/        前端业务 API 封装
-│  ├─ api/             HTTP 客户端
-│  ├─ types/           TypeScript 数据类型
-│  ├─ mock/            静态选项与触发器模板
-│  └─ styles/          全局样式与设计变量
-├─ backend/
-│  ├─ app/
-│  │  ├─ api/          FastAPI 路由
-│  │  ├─ models.py     SQLAlchemy 数据模型
-│  │  ├─ database.py   数据库连接
-│  │  ├─ security.py   密码与认证
-│  │  └─ realtime/     现有 WebSocket ping/pong 事件类型
-│  ├─ migrations/      Alembic 数据库迁移
-│  └─ tests/           后端接口测试
-├─ device-client/      Windows Python 指标采集与心跳
-├─ agent-adapters/openclaw/  OpenClaw Agent Runtime Adapter
-├─ public/             图片与静态资源
-└─ README.md
+├─ src/                         Vue 3 + TypeScript + Pinia 前端控制台
+├─ backend/                     FastAPI 后端（SQLAlchemy 2 + Alembic + Fleet Hub Relay）
+│  ├─ app/fleet/                Fleet 控制节点管理、WSS 透传中心与加密 Blob 接口
+│  └─ migrations/versions/      Alembic 迁移链（当前 head: 0020_fleet_nodes_and_blobs）
+├─ agent-node/                  多设备宿主机守护进程（7 类 Agent 适配器、受控终端、Worktree/Diff）
+├─ deploy/                      Core / Edge Relay / frps / Mac-Linux-Windows 常驻部署模板
+├─ device-client/               Windows 硬件运行指标采集端（nd_live_）
+├─ agent-adapters/openclaw/     OpenClaw 原生 Data Actions Tool 插件（na_live_）
+├─ packages/contracts/          Sync Protocol v3 跨语言契约用例与 Rust 校验crate
+├─ src-tauri/                   Tauri 2 桌面端外壳与 Sidecar 封装
+├─ scripts/                     契约校验、Sidecar 构建冒烟与 Release 校验脚本
+├─ docs/                        设计文档、同步协议说明与阶段验收记录
+└─ tests/                       前端集成/工具单元测试集
 ```
 
-## 数据与认证
+---
 
-Web 开发模式默认数据库为从 `backend` 目录启动时的 `backend/studiolo.db`。默认 SQLite 路径相对后端进程的工作目录；请从 `backend` 目录启动，以便重启后继续使用同一文件。Desktop 模式使用 Tauri AppData 中的绝对路径 SQLite 数据库。`STUDIOLO_MODE=local` 使用 SQLite；独立的 `STUDIOLO_MODE=core` 使用 PostgreSQL，额外安装 `requirements-postgres.txt`，并要求 `postgresql+psycopg://...` 连接串。启动后端或创建管理员时会执行 Alembic 迁移，已有数据库可升级。切换数据库前请备份原数据库。
+## 凭证隔离与安全说明
 
-`.env` 支持 `DATABASE_URL`、`JWT_SECRET`、`APP_TIMEZONE` 和 `CORS_ORIGINS`。缺少 `JWT_SECRET` 时后端拒绝启动。密码以 PBKDF2 哈希保存，登录返回 JWT，业务资源按用户隔离。注册默认开放；自托管实例如需关闭后续注册，可设置 `ALLOW_REGISTRATION=false`。管理员也可在 `backend` 目录运行 `python -m app.create_admin`，通过终端设置用户名和密码。数据库保留内部邮箱字段以兼容旧数据，但用户无需填写邮箱。
-
-前端数据链路：`页面 → Pinia store → service → /api/v1 → SQLAlchemy → 数据库`。四个新后端化页面通过服务层调用 API，不直接请求网络。
-
-| 页面 | 状态 |
-| --- | --- |
-| Dashboard | Persistent user-scoped widgets and layout |
-| Websites | Persistent |
-| Devices | Persistent |
-| Agents | Persistent |
-| Data | Persistent |
-| Automation | Synced definitions, Core scheduler / durable execution / authoritative history |
-| Ledger | Persistent local ledger |
-| API Keys | Persistent |
-| Settings | Persistent |
-
-Automation 的真实运行需要连接 Core，并配置一个支持的触发器和类型化动作。旧工作流保留，模拟 `test-run` 不产生业务副作用。Webhook 仅允许公开 HTTPS 目标，不支持凭据或秘密；远端应识别 `Idempotency-Key`。Ledger 是轻量本地账本，不提供银行同步、OCR 或 AI 记账。
-
-Settings 中的安全个人偏好（theme、language、timezone、appearance、notifications）支持后台同步；全局主题切换、存储用量统计和双重身份验证尚未提供。Dashboard 的快捷网站、设备、智能体、数据集、最近记录、工作流、账本均读取当前用户持久化数据；无数据或请求失败时显示相应状态。系统卡片仅显示在线设备实际心跳指标，不提供设备端心跳时不显示 CPU、内存或磁盘值。通知尚无统一事件来源，保持空状态。
-
-## Agent Runtime
-
-```text
-Studiolo → Agent Task → Agent Runtime API → OpenClaw Adapter → OpenClaw → result/events → Studiolo
-```
-
-OpenClaw is the first adapter. Studiolo Agent Runtime protocol is adapter-independent. 创建 Agent 后在 Agents 页面生成 `na_live_` Token，复制到 `agent-adapters/openclaw/config.json`。参考 [Adapter 配置和启动说明](agent-adapters/openclaw/README.md)。Adapter 每次只处理一个 queued 任务：先 claim 为 running，调用 OpenClaw 后写入结果和 completed，或写入错误和 failed；任务日志写入现有 AgentEvent。心跳每 10–30 秒发送，超过 120 秒未收到时 Agents 页面派生 offline 状态。页面每 20 秒刷新，无 WebSocket 依赖。
-
-Agent Token 是 bearer credential；仅生成时返回明文，数据库只存 SHA-256 hash 和末四位。重新生成或撤销后旧 Token 立即失效，删除 Agent 时凭证随之失效。请安全保存 Token，远程部署使用 HTTPS，不要提交 `config.json`。Agent Token 仅能控制其对应 Agent 的 Runtime 资源，不能作为用户 JWT 使用。
-
-本版未实现 WebSocket realtime streaming、远程 shell、multi-agent orchestration、distributed/priority queue、Agent memory synchronization、file upload protocol、tool/live token streaming、Agent marketplace 或 Codex Adapter。Automation 只消费 Core 确认的 Agent Task Completed 事件，不消费任意 Agent 日志。
-
-## API
-
-| 方法 | 路径 | 功能 |
+| 凭证前缀 | 作用域 | 说明 |
 | --- | --- | --- |
-| POST | `/api/v1/auth/login` | 登录 |
-| POST | `/api/v1/auth/register` | 注册 |
-| GET | `/api/v1/auth/me` | 当前用户 |
-| GET、POST | `/api/v1/websites` | 查询、创建网站 |
-| GET、PATCH、DELETE | `/api/v1/websites/{id}` | 读取、修改、删除网站 |
-| POST | `/api/v1/websites/{id}/visit` | 记录最近访问时间 |
-| GET、POST | `/api/v1/website-categories` | 分类列表、新建分类 |
-| PATCH、DELETE | `/api/v1/website-categories/{id}` | 修改、删除分类 |
-| GET、POST | `/api/v1/devices` | 设备列表、新建设备 |
-| GET、PATCH、DELETE | `/api/v1/devices/{id}` | 读取、修改、删除设备 |
-| POST | `/api/v1/devices/{id}/heartbeat` | 更新在线时间和 CPU、内存、磁盘、电量指标 |
-| POST、DELETE | `/api/v1/devices/{id}/token` | JWT 用户生成或撤销专属 Device Token |
-| POST | `/api/device/heartbeat` | Device Token 上报 Windows 运行指标 |
-| GET、POST | `/api/v1/agents` | 智能体列表、新建智能体 |
-| GET、PATCH、DELETE | `/api/v1/agents/{id}` | 读取、修改、删除智能体；PATCH 可设置 `enabled` |
-| POST | `/api/v1/agents/{id}/heartbeat` | 更新运行时状态与在线时间 |
-| POST、DELETE | `/api/v1/agents/{id}/token` | JWT 用户生成或撤销专属 Agent Token |
-| POST | `/api/v1/agents/{id}/tasks` | 创建任务 |
-| PATCH、DELETE | `/api/v1/agents/{id}/tasks/{taskId}` | 更新任务文本或删除非运行任务；状态由 Runtime 控制 |
-| POST | `/api/agent/heartbeat` | Agent Token 上报 idle/running/error 及 Runtime 信息 |
-| GET | `/api/agent/tasks` | Agent Token 查询自己 queued 任务 |
-| POST | `/api/agent/tasks/{id}/claim` | 原子 claim queued → running |
-| POST | `/api/agent/tasks/{id}/events` | 写入自己的任务事件和日志 |
-| POST | `/api/agent/tasks/{id}/complete` | running → completed，保存结果 |
-| POST | `/api/agent/tasks/{id}/fail` | running → failed，保存错误 |
-| GET、POST | `/api/api-keys` | 列出、创建当前账户的 API Key（仅 JWT） |
-| PUT | `/api/api-keys/{id}/status` | 启用或停用 API Key（仅 JWT） |
-| GET | `/api/devices`、`/api/agents`、`/api/data`、`/api/automation` | JWT 或具有对应 scope 的 API Key 读取 |
-| GET、PATCH | `/api/v1/settings` | 读取与保存当前用户设置 |
-| PATCH | `/api/v1/account` | 修改当前用户名称与头像 URL |
-| POST | `/api/v1/account/password` | 验证原密码后修改密码 |
-| GET、POST | `/api/v1/data/collections` | 集合列表与创建 |
-| GET、PATCH、DELETE | `/api/v1/data/collections/{id}` | 集合读取、修改、删除 |
-| GET、POST | `/api/v1/data/collections/{id}/records` | 集合记录列表与创建 |
-| GET、PATCH、DELETE | `/api/v1/data/records/{id}` | 记录读取、修改、删除 |
-| GET、POST | `/api/v1/automations` | 工作流列表与创建 |
-| GET、PATCH、DELETE | `/api/v1/automations/{id}` | 工作流读取、修改、删除 |
-| POST | `/api/v1/automations/{id}/run` | 请求 Core 创建真实手动执行；Local 转发请求 |
-| GET | `/api/v1/automations/{id}/executions?runtime=true` | Core 执行历史；Local 转发查询 |
-| GET | `/api/v1/automations/{id}/executions/{execution_id}` | 真实执行详情 |
-| GET | `/api/v1/automations/{id}/runtime` | Core 自动化运行状态 |
-| POST | `/api/v1/automations/{id}/test-run` | 写入模拟成功的执行记录，不运行真实动作 |
-| GET | `/api/v1/sync/status` | Local 队列计数和后台同步状态 |
-| POST | `/api/v1/sync/run` | 手动运行与后台同步共用的同步引擎 |
-| GET | `/api/v1/sync/conflicts`、`/api/v1/sync/conflicts/{conflict_id}` | Local 冲突列表与详情 |
-| POST | `/api/v1/sync/conflicts/{conflict_id}/resolve` | 显式 Keep Local / Keep Remote |
-| GET、POST | `/api/v1/ledger/categories`、`/api/v1/ledger/transactions` | 分类与交易列表、创建 |
-| GET、PATCH、DELETE | `/api/v1/ledger/categories/{id}`、`/api/v1/ledger/transactions/{id}` | 分类与交易读取、修改、删除 |
-| GET | `/api/v1/ledger/summary?month=YYYY-MM` | 月度收支、趋势与分类统计 |
-| WebSocket | `/ws` | 基础 ping/pong 连接 |
+| 用户 **JWT** | 账户与控制台 | 访问个人工作区 REST API 及 `/ws/fleet/client`（严禁放入 URL Query） |
+| **`sn_live_`** | Fleet 控制节点 | 绑定到单台物理/虚拟主机节点 `/ws/fleet/node` 与产物分块通道 |
+| **`nc_live_`** | Core 同步客户端 | 桌面 Local Backend 与 Core 之间的 Sync v3 双向同步身份凭证 |
+| **`na_live_`** | Data Actions 智能体 | 独立智能体对 Ledger / Websites / Data 的受限 Scopes API 调用 |
+| **`nd_live_`** | Device 硬件监控 | 仅用于 `device-client` 上报 CPU/内存/磁盘/电量遥测 |
+| **`sk_live_`** | 个人 API Key | 在 API 页签发、按 Scope 限制的只读/指定模块集成秘钥 |
 
-网站列表支持 `categoryId`、`search`、`favorite` 和 `sort=order|name|createdAt|updatedAt|recent`。打开网站会写入最近访问时间，首页快捷访问展示最近打开的网站。添加网站时浏览器会尝试读取该站点的 `/favicon.ico` 或 `/apple-touch-icon.png`，也可手动指定图标。受保护接口须发送 `Authorization: Bearer <token>`。错误响应包含 FastAPI 风格的 `detail`，并保留现有客户端使用的 `error` 字段。旧 `/api/auth` 和 `/api/dashboard` 路径为现有 Dashboard 保留。
+---
 
-API Key 在 API 页面创建；请求体为 `{"name":"Production App","scopes":["Devices"],"expires_in_days":90}`。名称去首尾空白后须为 1–48 个字符；可用 scope 为 `Devices`、`Agents`、`Data`、`Automation`、`Read`，期限为 30、90、365 天或 `null`（永不过期）。`Read` 允许读取上述四个 GET 接口，其他 scope 只允许相应模块。Key 的明文仅在创建成功响应和当次页面弹窗中出现；请立即复制保存，关闭或刷新后无法找回。列表仅显示掩码。停用或过期的 Key 无法调用接口，过期 Key 无法重新启用。Key 不能访问账户、Dashboard、Key 管理或其他写入接口；这些接口仍须使用 JWT。API 页面中的请求日志、用量统计和 Webhook 暂不可用。
+## 测试与发版门禁
 
-设备添加后默认离线。旧 `POST /api/v1/devices/{id}/heartbeat` 仍接受用户 JWT，供兼容与开发调试；真实 Windows Client 使用下方 Device Token 接口。最近 120 秒内收到心跳才显示在线。智能体可以管理资料、启停设置与任务，并记录操作日志；运行时可向 `POST /api/v1/agents/{id}/heartbeat` 发送 `{"status":"running"}` 或 `{"status":"idle"}`。AI 任务通过已配置的 Agent Runtime Adapter 执行，页面不会伪造指标、模型调用或任务完成结果。
+```powershell
+# 1. 前端类型检查与生产构建
+npm run build
+npm run build:desktop
 
-## Device Runtime
+# 2. 前端与桌面单元测试
+npm run test:fleet
+npm run test:desktop
+npm run test:automation
+npm run test:local-time
+npm run test:core-sync
+npm run test:data-bounded-reads
+node --test tests/diagnostics.test.mjs
 
-Studiolo can receive runtime metrics from the Windows Device Client. 数据链路：`Windows Client → Device Token → POST /api/device/heartbeat → FastAPI → Device DB → Devices Store / Dashboard`。客户端默认每 30 秒上报 CPU、内存、系统盘、可选电量、主机名、Windows 版本、架构、CPU 名称、开机时长和局域网 IP。服务器按最近一次心跳动态计算在线状态，超过 120 秒变为离线。页面和 Dashboard 约每 30 秒刷新，无 WebSocket 实时推送。
+# 3. 跨语言 Sync v3 契约校验三件套
+python scripts/check-contracts.py
+node scripts/check-contracts.mjs
+cargo test --manifest-path packages/contracts/rust/Cargo.toml
 
-1. 在 Devices 页面添加设备。
-2. 在设备详情生成 Device Token，立即复制；明文仅显示一次。重新生成会立即使旧 Token 失效。
-3. 在 `device-client` 目录复制 `config.example.json` 为 `config.json`，填入 `serverUrl` 与 `deviceToken`。
-4. 运行 `python -m pip install -r requirements.txt`。
-5. 运行 `python main.py`，按 Ctrl+C 停止；`python main.py --once` 可发送一次心跳用于检查。
+# 4. Python 服务与工具测试
+python -m unittest discover -s tests -p test_validation_tooling.py
+cd backend && python -m pytest -q
+cd ..\agent-node && python -m pytest -q
+cd ..\deploy\edge-relay && python -m pytest -q
+```
 
-Device Token should be treated as a secret. `config.json` contains a secret. Do not commit it. 服务器仅保存 SHA-256 hash 和末四位；Token 只可调用自己的设备心跳，不能访问用户资源。客户端仅支持 Windows，第一版只统计 Windows 系统盘；无电池或无法取得局域网 IP 时字段为 `null`。没有远程控制、命令执行、进程管理、Agent Runtime、Automation Engine，也没有 WebSocket 实时推送。
+- 完整 CI 检查清单见 [.github/workflows/ci.yml](.github/workflows/ci.yml) 与 [scripts/ci-local.sh](scripts/ci-local.sh)；发布前验证入口见 [scripts/validate-release.py](scripts/validate-release.py)。
 
-## Security Notes
+---
 
-Device Token is a long-lived bearer credential. It can be intercepted over HTTP. Use HTTPS for production and cross-machine deployments. The Windows client permits HTTP only for `localhost` and `127.0.0.1` by default. Trusted LAN development can explicitly set `"allowInsecureHttp": true` in `config.json`; the token is then exposed to network eavesdropping. Device Token can be revoked in the Devices dialog, immediately stopping the current client from reporting.
+## 延伸文档
 
-## Migration Policy
-
-Alembic revisions are immutable after merge. Revisions 0001–0006 are frozen after this v0.4.1 repair. Every future schema change requires a new revision (0007, 0008, and so on); historical migrations must never import current ORM models or `Base.metadata`.
-
-## CI
-
-当前同步覆盖 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`、`user.preferences`、`dashboard.layout` 和 `automation.definition`。Core 分配权威 revision；Local 离线编辑持久化，后台同步处理重试、恢复与冲突，Conflict Center 提供显式解决入口。Local SQLite 和 Core PostgreSQL 升级至 `0018_data_record_tenancy`，Client 与 Core 使用 Protocol 3。Device、Agent、凭证和真实自动化运行时状态不参与 replica 同步。详见 [同步协议](docs/sync.md) 和 [同步边界](docs/sync-scopes.md)。
-
-GitHub Actions 在 push 和 pull request 上运行 `validation-impact`、`frontend`、`contracts`、`backend`、`backend-postgres`、`device-client`、`openclaw-adapter` 和 `desktop-windows`。Windows desktop job 包含原生构建、packaged sidecar smoke、安装包校验和 CI artifact 上传；PostgreSQL job 包含真实同步、后台恢复、冲突、个人状态和自动化集成测试。macOS 原生构建及跨设备验收在实机执行，不由 Windows job 替代。
-
-契约变更由新增的 `contracts` job 把关：依次运行 `python3 scripts/check-contracts.py`、`node scripts/check-contracts.mjs` 和 `cargo test --manifest-path packages/contracts/rust/Cargo.toml`（契约校验三件套，共用 `packages/contracts/cases.json`，任一失败即拒绝合并）。
-
-本地复现：`bash scripts/ci-local.sh` 依次跑后端全量 pytest 与契约三件套（后端优先用仓库根 `.venv`，其次 `backend/.venv`；两者都没有时报错退出）；`--contracts-only` 只跑契约部分，`--with-frontend` 附带前端构建。
+- [开发路线图（v0.6.2–v1.0.0）](docs/Studiolo_Development_Roadmap_v0.6.2-v1.0.md)
+- [Core 服务配置与节点认证说明](docs/core.md)
+- [桌面端使用、数据目录与排障](docs/desktop.md)
+- [Sync Protocol v3 与同步范围边界](docs/sync-scopes.md)
+- [Agent Data Actions 工具规范](docs/agent-data-actions.md)
+- [发布校验流程](docs/validation-workflow.md)
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
-
-首页天气卡片在浏览器允许定位后，从 [BigDataCloud](https://www.bigdatacloud.com/geocoding-apis/free-reverse-geocode-to-city-api) 获取城市，并从 [Open-Meteo](https://open-meteo.com/en/docs) 获取该位置的天气。拒绝定位时会尝试按 IP 显示大致城市，卡片标注“约”。位置请求由浏览器直接发出，成功结果和失败状态均缓存 30 分钟，避免每次进入首页重复请求；点击卡片中的位置可手动重试。
-
-## 检查
-
-```powershell
-npm run build
-cd backend
-python -m pytest -q
-```
-
-## 历史版本：v0.5.5 Agent Data Actions
-
-v0.5.5 introduced the native OpenClaw plugin with 29 typed Ledger/Website/Data tools plus `studiolo_status`. Agent tokens retain the `na_live_` identity model; data scopes default to none, deletion requires explicit permission, and all data tools use Studiolo Local's Action API. Mutations commit business data, outbox and idempotent safe receipts together; response-loss retries replay without duplication. That release used Alembic head `0015_agent_data_actions` and Sync Protocol v2. Settings and other management resources are excluded from Agent Data Actions. See [architecture and installation](docs/agent-data-actions.md).
-
-## v0.6.1 工程验证（开发分支）
-
-本地针对性验证、v0.6.0 实机验收继承及报告命令见
-[Validation workflow](docs/validation-workflow.md)。设置 → 关于增加 Studiolo Diagnostics
-与安全复制功能。0.6.1 已打 tag（`v0.6.1`）并包含本页 CI 段所述的契约与 PostgreSQL 门禁；后续补丁仍按 Release Validation 流程验证。
-
-## 后续路线图（v0.6.2–v1.0.0）
-
-- [开发路线图（v0.6.2–v1.0.0）](docs/Studiolo_Development_Roadmap_v0.6.2-v1.0.md)：以**核心能力先行**顺序推进——先上线 **Mac Core 常驻 + 多设备 Agent Fleet Chat（`/chat`：Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw）** 与 **Shared Space（`/space`）按次密码端到端加密共享 / Theme Engine**，随后落地 **统一 Cron 管理** 与 **Android 原生 Rust/SQLite 离线同步闭环**。
-- [架构审计与目标设计](docs/architecture-plan-v0.6.2.md)：安全信任边界、七端拓扑（Mac Core + Windows + 双手机 + OCI / 腾讯云节点）、迁移兼容与 TBD 决策矩阵。
+[MIT License](LICENSE)

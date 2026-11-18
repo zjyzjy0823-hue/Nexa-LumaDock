@@ -11,7 +11,7 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 | 版本 | 主要交付 | 依赖与主要风险 | 建议工作量 |
 | --- | --- | --- | --- |
 | **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
-| **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw 与远程审批 | 非回环 HTTPS/WSS 证书、`Node Token`、不可越权 `allowedRoots`、零正文落盘验收 | 14–22 人日 |
+| **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审与受控终端 | 非回环 HTTPS/WSS 证书、`Node Token`、不可越权 `allowedRoots`、零正文落盘与多端 CI 门禁验收 | ⏳ 代码已落地，待 CI 与多端收口 |
 | **v0.7.1** | **Shared Space（`/space`）加密共享首版 & Theme Engine 标准化**：Argon2id/AEAD 密文、每读重输密码与 Epoch 轮换、Mac/桌面/手机 Web 可用；共用 Theme Registry 与可选 Liquid Glass | TBD-01–04/08/09 参数冻结、密码学跨语言向量、旧 v3 外观严格字段兼容 | 15–24 人日 |
 | **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 12–20 人日 |
 | **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 12–20 人日 |

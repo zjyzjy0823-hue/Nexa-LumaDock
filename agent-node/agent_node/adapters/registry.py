@@ -25,6 +25,8 @@ def build_adapter_registry(config: NodeConfig) -> dict[str, AgentAdapter]:
             serve_url=str(oc.get("serveUrl") or "http://127.0.0.1:4096"),
             username=oc.get("username"),
             password=oc.get("password"),
+            command=str(oc.get("command") or "opencode"),
+            auto_start=bool(oc.get("autoStart", False)),
         )
     if p.get("hermes", {}).get("enabled", True):
         hm = p.get("hermes", {})

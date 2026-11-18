@@ -1,6 +1,7 @@
 """Hermes Agent 适配器：本机优先走 `hermes acp` 标准 ACP 协议，亦支持远端授权 `hermes serve` Gateway。"""
 
 from pathlib import Path
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -11,7 +12,9 @@ from .base import (
     AgentAdapter,
     ApprovalCallback,
     EventEmitter,
+    build_todo_updated_event,
     build_token_usage_event,
+    build_tool_call_update,
     extract_usage_counts,
     merge_prompt_with_attachments,
     prepare_session_dir,
@@ -41,6 +44,7 @@ class HermesAdapter(AgentAdapter):
         self._initialized = False
         self._emit: EventEmitter | None = None
         self._approvals: dict[str, ApprovalCallback] = {}
+        self._tool_starts: dict[str, float] = {}
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
         if self._proc is None:
@@ -57,7 +61,7 @@ class HermesAdapter(AgentAdapter):
         return self._proc
 
     async def probe(self) -> AdapterProbe:
-        caps = ("chat", "history", "approval", "worktree", "cron")
+        caps = ("chat", "history", "approval", "worktree", "cron", "files", "diff", "checkpoints", "todos")
         if self.mode == "gateway" and self.serve_url:
             try:
                 headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -122,6 +126,7 @@ class HermesAdapter(AgentAdapter):
         emit: EventEmitter,
         request_approval: ApprovalCallback,
         attachments: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> None:
         self._emit = emit
         proc = await self._ensure_acp()
@@ -168,7 +173,44 @@ class HermesAdapter(AgentAdapter):
         elif kind == "agent_message_chunk":
             await self._emit({"type": "TextDelta", "sessionId": sid, "text": str((upd.get("content") or {}).get("text") or "")})
         elif kind == "tool_call":
-            await self._emit({"type": "ToolCall", "sessionId": sid, "name": str(upd.get("title") or "tool")})
+            call_id = str(upd.get("toolCallId") or uuid4().hex[:8])
+            title = str(upd.get("title") or "tool")
+            self._tool_starts[call_id] = time.monotonic()
+            await self._emit({"type": "ToolCall", "sessionId": sid, "callId": call_id, "name": title})
+            await self._emit(
+                build_tool_call_update(
+                    session_id=sid,
+                    call_id=call_id,
+                    name=title,
+                    status="running",
+                    title=str(upd.get("rawInput") or title),
+                    tool_input=upd.get("rawInput"),
+                )
+            )
+        elif kind == "tool_call_update":
+            call_id = str(upd.get("toolCallId") or "")
+            raw_status = str(upd.get("status") or "").lower()
+            st = "error" if raw_status in ("failed", "error") else "completed" if raw_status == "completed" else "running"
+            started = self._tool_starts.pop(call_id, None) if st != "running" else None
+            dur = int((time.monotonic() - started) * 1000) if isinstance(started, (int, float)) else None
+            out_content = upd.get("content")
+            out_text = (
+                "\n".join(str(c.get("content", {}).get("text") or c.get("text") or "") for c in out_content if isinstance(c, dict))
+                if isinstance(out_content, list)
+                else str(out_content) if out_content else None
+            )
+            await self._emit(
+                build_tool_call_update(
+                    session_id=sid,
+                    call_id=call_id or uuid4().hex[:8],
+                    name=str(upd.get("title") or "tool"),
+                    status=st,
+                    output=out_text,
+                    duration_ms=dur,
+                )
+            )
+        elif kind == "plan" and isinstance(upd.get("entries"), list):
+            await self._emit(build_todo_updated_event(session_id=sid, items=upd["entries"]))
 
     async def _on_acp_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         sid = str(params.get("sessionId") or "")

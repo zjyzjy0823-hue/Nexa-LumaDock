@@ -14,7 +14,7 @@ export type AdapterProvider =
   | 'mock'
 
 export type EndpointKind = 'lan' | 'xtcp' | 'edge_relay' | 'core'
-export type ApprovalDecision = 'allow_once' | 'allow_session' | 'deny'
+export type ApprovalDecision = 'allow_once' | 'allow_session' | 'allow_trust' | 'deny'
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type TokenUsageSource = 'exact' | 'estimated'
 
@@ -53,10 +53,62 @@ export interface FleetModel {
 export interface RunOptions {
   model?: string
   effort?: string
+  agent?: string
   readOnly?: boolean
   denyRequests?: boolean
   /** 极速模式：自动放行代理工具审批请求，无需人工确认 */
   autoApprove?: boolean
+}
+
+export interface AgentModeOption {
+  id: string
+  name: string
+  description?: string
+  mode?: string
+}
+
+export interface McpServerInfo {
+  name: string
+  status?: string
+  tools?: string[]
+  error?: string
+}
+
+export interface WorkspaceRule {
+  id: string
+  title: string
+  source: string
+  content: string
+}
+
+export interface WorkspaceTreeEntry {
+  path: string
+  name: string
+  isDir: boolean
+  sizeBytes: number
+}
+
+export interface TerminalSessionState {
+  terminalId: string
+  sessionId: string
+  cwd: string
+  output: string
+  closed?: boolean
+  exitCode?: number
+}
+
+export interface FilePreviewState {
+  path: string
+  language: string
+  content: string
+  lineCount: number
+  truncated: boolean
+  sizeBytes: number
+  isBinary: boolean
+  loading?: boolean
+  error?: string
+  highlightLine?: number
+  updatedAt: number
 }
 
 export interface TransferEndpoint {
@@ -146,12 +198,130 @@ export interface ChatSession {
   title: string
   cwd: string
   worktreePath?: string | null
+  hasDiff?: boolean
+  todoCount?: number
 }
+
+export type ToolCallStatus = 'running' | 'completed' | 'error'
 
 export interface ToolCallBadge {
   id: string
+  callId?: string
   name: string
+  title?: string
   detail?: string
+  status?: ToolCallStatus
+  input?: unknown
+  output?: string
+  error?: string
+  durationMs?: number
+  startedAt?: number
+  subagentSessionId?: string
+}
+
+export interface FormFieldOption {
+  value: string
+  label: string
+  description?: string
+}
+
+export interface FormFieldWhen {
+  key: string
+  op: 'eq' | 'neq'
+  value: unknown
+}
+
+export interface FormFieldSchema {
+  key: string
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'multiselect' | 'external'
+  title?: string
+  description?: string
+  required?: boolean
+  hidden?: boolean
+  default?: unknown
+  placeholder?: string
+  format?: string
+  custom?: boolean
+  minimum?: number
+  maximum?: number
+  minItems?: number
+  maxItems?: number
+  options?: FormFieldOption[]
+  url?: string
+  when?: FormFieldWhen
+}
+
+export interface MessageFormRequest {
+  formId: string
+  nodeId: string
+  sessionId: string
+  provider: AdapterProvider
+  title: string
+  fields: FormFieldSchema[]
+  status: 'pending' | 'submitted' | 'cancelled'
+  answer?: Record<string, unknown>
+  createdAt: number
+}
+
+export type MessagePart =
+  | { type: 'thought'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'tool'; callId: string }
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+
+export interface TodoItem {
+  id: string
+  content: string
+  status: TodoStatus
+  priority?: string
+}
+
+export interface DiffFileEntry {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  patch: string
+}
+
+export interface DiffSummary {
+  filesChanged: number
+  additions: number
+  deletions: number
+}
+
+export interface SessionDiffState {
+  files: DiffFileEntry[]
+  summary: DiffSummary
+  isGitRepo?: boolean
+  cwd?: string
+  perTurn?: boolean
+  updatedAt: number
+}
+
+export interface CheckpointInfo {
+  checkpointId: string
+  sessionId: string
+  runId?: string
+  requestId?: string
+  summary: DiffSummary
+  reverted?: boolean
+  createdAt: number
+}
+
+export interface QueuedPromptItem {
+  id: string
+  text: string
+  files?: File[]
+  options?: RunOptions
+  createdAt: number
+}
+
+export interface MessageBranch {
+  userText: string
+  tailMessages: ChatMessage[]
+  createdAt: number
 }
 
 export interface PermissionRequestCard {
@@ -178,8 +348,14 @@ export interface ChatMessage {
   streaming?: boolean
   error?: string
   toolCalls?: ToolCallBadge[]
+  parts?: MessagePart[]
+  forms?: MessageFormRequest[]
   approvals?: PermissionRequestCard[]
   artifacts?: ArtifactRef[]
+  checkpointId?: string
+  diffSummary?: DiffSummary
+  branches?: MessageBranch[]
+  activeBranchIndex?: number
   createdAt: number
 }
 
@@ -203,10 +379,55 @@ export interface FleetWsEvent {
   artifact?: ArtifactRef
   code?: string
   message?: string
+  status?: ToolCallStatus | string
+  input?: unknown
+  output?: string
+  deltaOutput?: string
+  error?: string
+  durationMs?: number
+  subagentSessionId?: string
+  items?: TodoItem[]
+  files?: string[] | DiffFileEntry[]
+  summary?: DiffSummary
+  isGitRepo?: boolean
+  perTurn?: boolean
+  checkpointId?: string
+  restoredFiles?: string[]
+  supported?: boolean
   models?: FleetModel[]
+  agents?: AgentModeOption[]
+  servers?: McpServerInfo[]
+  rules?: WorkspaceRule[]
+  formId?: string
+  fields?: FormFieldSchema[]
+  cancelled?: boolean
+  path?: string
+  language?: string
+  content?: string
+  lineCount?: number
+  truncated?: boolean
+  sizeBytes?: number
+  isBinary?: boolean
+  mergedFiles?: string[]
+  active?: boolean
+  events?: FleetWsEvent[]
+  relDir?: string
+  entries?: WorkspaceTreeEntry[]
+  patterns?: string[]
+  commitHash?: string
+  filesCommitted?: string[]
+  terminalId?: string
+  data?: string
+  exitCode?: number
   nodes?: AgentNode[]
   sessions?: Array<{ sessionId: string; provider: AdapterProvider; title?: string; cwd?: string }>
-  messages?: Array<{ role: string; text: string }>
+  messages?: Array<{
+    role: string
+    text: string
+    thought?: string
+    toolCalls?: ToolCallBadge[]
+    parts?: Array<{ type: string; text?: string; callId?: string; id?: string }>
+  }>
   cwd?: string
   worktreePath?: string | null
   messageId?: string

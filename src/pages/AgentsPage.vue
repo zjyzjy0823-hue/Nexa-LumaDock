@@ -6,8 +6,10 @@ import { AudioLines, BarChart3, CalendarDays, Code2, Database, FileText, Globe2,
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import OpusSegment from '../components/ui/OpusSegment.vue'
 import Modal from '../components/ui/Modal.vue'
+import FleetNodesSection from '../components/chat/FleetNodesSection.vue'
 import { useAuthStore } from '../stores/auth'
 import { useAgentsStore } from '../stores/agents'
+import { useFleetStore } from '../stores/fleet'
 import type { Agent, AgentCapabilityIcon, AgentStatus, AgentTask, AgentTaskStatus } from '../types/agent'
 
 type AgentTab = 'overview' | 'tasks' | 'logs' | 'capabilities' | 'api' | 'usage'
@@ -19,6 +21,8 @@ const props = defineProps<{ mobile?: boolean }>()
 const emit = defineEmits<{ action: [message: string]; navigate: [page: string]; back: [] }>()
 const auth = useAuthStore()
 const store = useAgentsStore()
+const fleet = useFleetStore()
+const fleetSectionRef = ref<InstanceType<typeof FleetNodesSection> | null>(null)
 const agents = computed(() => store.agents)
 const searchQuery = ref('')
 const directoryFilter = ref<DirectoryFilter>('all')
@@ -83,6 +87,10 @@ const selectedAgent = computed<Agent | undefined>(() => agents.value.find(agent 
 const currentTask = computed(() => selectedAgent.value?.tasks.find(task => task.status === 'running') ?? selectedAgent.value?.tasks.find(task => task.status === 'queued'))
 const visibleTasks = computed(() => (selectedAgent.value?.tasks ?? []).filter(task => taskFilter.value === 'all' || task.status === taskFilter.value))
 const runningCount = computed(() => agents.value.filter(agent => agent.status === 'running').length)
+const onlineNodesCount = computed(() => fleet.nodes.filter(n => n.status === 'online').length)
+const readyEnginesCount = computed(() =>
+  fleet.nodes.reduce((sum, n) => sum + n.adapters.filter(a => a.status === 'ready').length, 0),
+)
 const todayTasks = computed(() => agents.value.reduce((total, agent) => total + agent.tasksToday, 0))
 const completedCount = computed(() => agents.value.reduce((total, agent) => total + agent.tasks.filter(task => task.status === 'completed').length, 0))
 const activityByDay = computed(() => {
@@ -260,6 +268,9 @@ async function copyApiPath(path: string) {
       <button class="icon-btn" type="button" aria-label="添加智能体" @click="openCreate"><OpusIcon name="plus" /></button>
     </div>
     <div class="msearch"><OpusIcon name="search" /><input v-model="searchQuery" placeholder="搜索智能体…" aria-label="搜索智能体"></div>
+    <div style="padding:0 12px 10px">
+      <FleetNodesSection :mobile="true" @navigate="emit('navigate', $event)" @action="notify" />
+    </div>
     <div v-if="store.loading" class="cleared" role="status">正在加载智能体…</div>
     <div v-else-if="store.error" class="notice danger" role="alert">{{ store.error }}<button class="btn btn-sm btn-ghost" type="button" @click="auth.token && store.load(auth.token)">重试</button></div>
     <div v-else class="mlist mat-solid">
@@ -275,23 +286,33 @@ async function copyApiPath(path: string) {
 
   <div v-else class="agents-page">
     <header class="ph">
-      <div><h1>Agent 配置</h1><div class="sub">管理已绑定的智能体身份、数据权限与任务运行时状态</div></div>
+      <div><h1>Agent 与节点配置</h1><div class="sub">管理已接入的控制节点、对话智能体（Codex / OpenCode / Hermes 等）与本地数据代理</div></div>
       <div class="actions">
         <button class="btn btn-ghost" type="button" @click="emit('navigate', 'Chat')"><OpusIcon name="chat" />前往对话</button>
+        <button class="btn btn-ghost" type="button" @click="fleetSectionRef?.openCreateModal()"><OpusIcon name="server" />新增控制节点</button>
         <button class="btn btn-ghost" type="button" :disabled="!selectedAgent" @click="formError = ''; createTaskOpen = true"><OpusIcon name="zap" />新建任务</button>
-        <button class="btn btn-primary" type="button" @click="openCreate"><OpusIcon name="plus" />添加智能体</button>
+        <button class="btn btn-primary" type="button" @click="openCreate"><OpusIcon name="plus" />添加数据智能体</button>
       </div>
     </header>
 
     <div class="stat-strip">
-      <div class="stat mat"><span class="n num" style="color:var(--accent)">{{ String(agents.length).padStart(2, '0') }}</span><span class="l">智能体总数</span></div>
-      <div class="stat mat"><span class="n num" style="color:var(--ok)">{{ String(runningCount).padStart(2, '0') }}</span><span class="l">运行中</span></div>
-      <div class="stat mat"><span class="n num">{{ todayTasks }}</span><span class="l">今日任务</span></div>
-      <div class="stat mat"><span class="n num">{{ completedCount }}</span><span class="l">已完成任务</span></div>
+      <div class="stat mat"><span class="n num" style="color:var(--accent)">{{ String(fleet.nodes.length).padStart(2, '0') }}</span><span class="l">控制节点（{{ onlineNodesCount }} 在线）</span></div>
+      <div class="stat mat"><span class="n num" style="color:var(--ok)">{{ String(readyEnginesCount).padStart(2, '0') }}</span><span class="l">已接入对话引擎</span></div>
+      <div class="stat mat"><span class="n num">{{ String(agents.length).padStart(2, '0') }}</span><span class="l">本地数据智能体（{{ runningCount }} 运行中）</span></div>
+      <div class="stat mat"><span class="n num">{{ todayTasks }} / {{ completedCount }}</span><span class="l">今日 / 完成任务</span></div>
     </div>
 
-    <div v-if="store.loading" class="cleared" role="status">正在加载智能体…</div>
+    <FleetNodesSection ref="fleetSectionRef" @navigate="emit('navigate', $event)" @action="notify" />
+
+    <div v-if="store.loading" class="cleared" role="status">正在加载本地数据智能体…</div>
     <div v-else-if="store.error" class="notice danger" role="alert">{{ store.error }} <button class="btn btn-sm btn-ghost" type="button" @click="auth.token && store.load(auth.token)">重试</button></div>
+    <div v-else-if="!agents.length && fleet.nodes.length" class="card mat agents-compact-na">
+      <div>
+        <strong>本地 Data Actions 智能体（na_live_）</strong>
+        <div class="faint" style="font-size:12.5px">尚未添加通过 API 读写个人账本/资料库的独立数据智能体；上方已为您展示当前对话中所有可用的控制节点与引擎。</div>
+      </div>
+      <button class="btn btn-subtle btn-sm" type="button" @click="openCreate"><OpusIcon name="plus" />添加数据智能体</button>
+    </div>
     <div v-else class="agents-split">
       <aside class="card mat agents-side">
         <div class="agents-side__head">
@@ -464,5 +485,6 @@ async function copyApiPath(path: string) {
 .agents-token-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 14px; border-radius: var(--r-md); }
 .agents-scope-grid { display: grid; gap: 8px; padding: 10px; border-radius: var(--r-sm); background: var(--surface-3); }
 .agents-scope-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.agents-compact-na { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; }
 @media (max-width: 980px) { .agents-split, .agents-overview__grid { grid-template-columns: 1fr; } }
 </style>

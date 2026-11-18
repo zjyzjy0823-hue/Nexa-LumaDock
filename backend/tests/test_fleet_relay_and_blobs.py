@@ -253,6 +253,27 @@ def test_websocket_relay_idempotency_security_and_zero_persistence(tmp_path):
                     assert usage_evt["type"] == "TokenUsage" and usage_evt["nodeId"] == node_id
                     assert usage_evt["totalTokens"] == 165
 
+                    ui_ws.send_json({"type": "files.list", "nodeId": node_id, "cwd": "/srv/projects", "query": "main", "requestId": "fl-1"})
+                    fl_req = node_ws.receive_json()
+                    assert fl_req["type"] == "files.list" and fl_req["query"] == "main"
+                    node_ws.send_json({"type": "FilesSnapshot", "files": ["src/main.py"], "cwd": "/srv/projects", "requestId": "fl-1", "_clientConnId": fl_req["_clientConnId"]})
+                    fl_resp = ui_ws.receive_json()
+                    assert fl_resp["type"] == "FilesSnapshot" and fl_resp["files"] == ["src/main.py"]
+
+                    ui_ws.send_json({"type": "file.read", "nodeId": node_id, "path": "src/main.py", "requestId": "fr-1"})
+                    fr_req = node_ws.receive_json()
+                    assert fr_req["type"] == "file.read" and fr_req["path"] == "src/main.py"
+                    node_ws.send_json({"type": "FileContentSnapshot", "path": "src/main.py", "content": "print(1)", "requestId": "fr-1", "_clientConnId": fr_req["_clientConnId"]})
+                    fr_resp = ui_ws.receive_json()
+                    assert fr_resp["type"] == "FileContentSnapshot" and fr_resp["content"] == "print(1)"
+
+                    ui_ws.send_json({"type": "files.tree", "nodeId": node_id, "relDir": "src", "requestId": "ft-1"})
+                    ft_req = node_ws.receive_json()
+                    assert ft_req["type"] == "files.tree" and ft_req["relDir"] == "src"
+                    node_ws.send_json({"type": "FilesTreeSnapshot", "relDir": "src", "entries": [{"path": "src/main.py", "name": "main.py", "isDir": False, "sizeBytes": 8}], "requestId": "ft-1", "_clientConnId": ft_req["_clientConnId"]})
+                    ft_resp = ui_ws.receive_json()
+                    assert ft_resp["type"] == "FilesTreeSnapshot" and ft_resp["entries"][0]["name"] == "main.py"
+
                 # 验证在线状态与吊销立即踢下线
                 assert client.get("/api/v1/fleet/nodes", headers=headers).json()[0]["status"] == "online"
                 assert client.post(f"/api/v1/fleet/nodes/{node_id}/revoke", headers=headers).status_code == 200

@@ -1,4 +1,4 @@
-# Studiolo Core（当前 0.6.1；本文原始基线 v0.5.5）
+# Studiolo Core（当前 0.7.0；本文原始基线 v0.5.5）
 
 Studiolo 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U studiolo -d studiolo -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`、产品版本 `0.6.1`，迁移版本为 `0018_data_record_tenancy`。PostgreSQL 使用 `studiolo-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok`、产品版本 `0.7.0`，迁移版本为 `0020_fleet_nodes_and_blobs`。PostgreSQL 使用 `studiolo-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 

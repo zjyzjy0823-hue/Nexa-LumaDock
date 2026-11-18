@@ -4,12 +4,24 @@ import { useAuthStore } from '../../stores/auth'
 import { useDataStore } from '../../stores/data'
 import { sessionKey as buildSessionKey, useFleetStore } from '../../stores/fleet'
 import { useWebsitesStore } from '../../stores/websites'
+import { extractMessageParts } from '../../services/chatHelpers'
+import {
+  deleteCustomPrompt,
+  loadCustomPrompts,
+  saveCustomPrompt,
+  type CustomPromptTemplate,
+} from '../../services/customPrompts'
 import { formatTokenCount } from '../../services/tokenUsage'
-import type { ApprovalDecision, ArtifactRef, ChatMessage, FleetModel } from '../../types/fleet'
+import type { ApprovalDecision, ArtifactRef, ChatMessage, FleetModel, ToolCallBadge } from '../../types/fleet'
 import OpusIcon from '../ui/OpusIcon.vue'
 import ArtifactPill from './ArtifactPill.vue'
+import ChangedFilesSummaryBar from './ChangedFilesSummaryBar.vue'
+import FormQuestionCard from './FormQuestionCard.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
+import PromptLibraryModal from './PromptLibraryModal.vue'
+import SessionTodoBar from './SessionTodoBar.vue'
+import ToolCallCard from './ToolCallCard.vue'
 import { formatBytes, getProviderMeta, type OpusIconName } from './providerMeta'
 
 const props = defineProps<{
@@ -21,6 +33,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   action: [message: string]
   openHandoff: [payload: { summary: string; artifact?: ArtifactRef }]
+  openDiff: [focusFile?: string]
+  openFile: [path: string, line?: number]
+  openSubagent: [sessionId: string]
+  clearSession: []
 }>()
 
 const auth = useAuthStore()
@@ -57,6 +73,11 @@ const adapter = computed(() => effectiveNode.value?.adapters.find(a => a.provide
 const caps = computed(() => adapter.value?.capabilities ?? [])
 const target = computed(() => `${effectiveNode.value?.id}::${effectiveProvider.value}`)
 const catalog = computed(() => fleet.catalogs[target.value])
+const mcpList = computed(() => fleet.mcpByTarget[target.value] ?? [])
+const mcpConnectedCount = computed(() => mcpList.value.filter(s => s.status === 'connected' || s.status === 'ready').length)
+const rulesList = computed(
+  () => (effectiveKey.value ? fleet.rulesByTarget[effectiveKey.value] : undefined) ?? fleet.rulesByTarget[target.value] ?? [],
+)
 const settingsKey = computed(() => effectiveKey.value || target.value)
 const buffer = computed(() => {
   const key = settingsKey.value
@@ -177,7 +198,7 @@ function rowEffortText(entry: FleetModel): string {
 }
 
 // Antigravity 风格级联二级浮层（模型思考强度 & 「+」上下文扩展共用）
-type AttachSubKey = 'dirs' | 'data' | 'sessions' | 'commands'
+type AttachSubKey = 'dirs' | 'data' | 'sessions' | 'commands' | 'rules' | 'mcp'
 type ContextKind = 'dir' | 'data' | 'website' | 'session'
 interface ComposerContextItem {
   id: string
@@ -431,7 +452,7 @@ function chooseModel(modelId: string) {
   if (nextEntry?.unavailable) return
   const keepingSame = (options.value.model ?? '') === modelId
   if (!keepingSame) {
-    fleet.runSettings[settingsKey.value] = { ...options.value, model: modelId, effort: undefined }
+    fleet.setModelPreference(effectiveNode.value?.id, effectiveProvider.value, modelId, undefined, settingsKey.value)
   }
   if (nextEntry?.efforts.length && shouldUseInlineSubmenu()) {
     if (inlineEffortModelId.value === modelId && keepingSame) {
@@ -447,11 +468,7 @@ function chooseModel(modelId: string) {
 function chooseModelEffort(modelId: string, effort: string) {
   const entry = catalog.value?.models.find(m => m.id === modelId)
   if (entry?.unavailable) return
-  fleet.runSettings[settingsKey.value] = {
-    ...options.value,
-    model: modelId,
-    effort: effort || undefined,
-  }
+  fleet.setModelPreference(effectiveNode.value?.id, effectiveProvider.value, modelId, effort || undefined, settingsKey.value)
   closeSettings()
 }
 
@@ -522,8 +539,16 @@ function togglePanelWithButton(next: 'model' | 'permissions' | 'attach', trigger
   }
   if (next === 'model' && caps.value.includes('models') && effectiveNode.value?.status === 'online') {
     fleet.requestModels(effectiveNode.value.id, effectiveProvider.value)
+  } else if (next === 'permissions' && effectiveNode.value?.status === 'online') {
+    fleet.requestTrustPolicies(effectiveNode.value.id)
   } else if (next === 'attach') {
     ensurePersonalStoresLoaded()
+    if (effectiveNode.value?.status === 'online') {
+      fleet.requestRules(effectiveKey.value || undefined)
+      if (caps.value.includes('mcp')) {
+        fleet.requestMcpServers(effectiveNode.value.id, effectiveProvider.value)
+      }
+    }
   }
 }
 
@@ -542,14 +567,98 @@ function handleThreadKeydown(ev: KeyboardEvent) {
     ev.stopPropagation()
     dismissedBySelfTrigger = null
     togglePanelWithButton('model', modelTriggerRef.value ?? null)
+    return
+  }
+  if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && ev.key.toLowerCase() === 'f') {
+    ev.preventDefault()
+    ev.stopPropagation()
+    openThreadSearch()
+  }
+}
+
+function refreshMcp() {
+  if (caps.value.includes('mcp') && effectiveNode.value?.status === 'online') {
+    fleet.requestMcpServers(effectiveNode.value.id, effectiveProvider.value)
+  }
+}
+
+function findToolCall(msg: ChatMessage, callId: string): ToolCallBadge | undefined {
+  return msg.toolCalls?.find(t => (t.callId || t.id) === callId)
+}
+
+// Web Speech API 语音输入（可选浏览器原生能力，不依赖后端）
+type SpeechRecognitionLike = {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  onresult: ((ev: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+  start: () => void
+  stop: () => void
+}
+const SpeechCtor = typeof window !== 'undefined'
+  ? ((window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike }).SpeechRecognition
+    || (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition)
+  : undefined
+const speechSupported = Boolean(SpeechCtor)
+const speechActive = ref(false)
+let speechInst: SpeechRecognitionLike | null = null
+
+function toggleVoiceDictation() {
+  if (!SpeechCtor) return
+  if (speechActive.value && speechInst) {
+    speechInst.stop()
+    speechActive.value = false
+    return
+  }
+  try {
+    const rec = new SpeechCtor()
+    rec.lang = 'zh-CN'
+    rec.continuous = false
+    rec.interimResults = false
+    rec.onresult = (ev) => {
+      const chunks: string[] = []
+      for (let i = 0; i < ev.results.length; i++) {
+        const alt = ev.results[i]?.[0]?.transcript
+        if (alt) chunks.push(alt)
+      }
+      const spoken = chunks.join(' ').trim()
+      if (spoken) {
+        draft.value = draft.value.trim() ? `${draft.value.trim()} ${spoken}` : spoken
+      }
+    }
+    rec.onend = () => { speechActive.value = false }
+    rec.onerror = () => { speechActive.value = false }
+    speechInst = rec
+    speechActive.value = true
+    rec.start()
+  } catch {
+    speechActive.value = false
   }
 }
 
 watch(
-  () => [target.value, effectiveNode.value?.status, caps.value.includes('models')] as const,
-  ([key, status, supportsModels]) => {
-    if (status === 'online' && supportsModels && effectiveNode.value && !fleet.catalogs[key]) {
+  () => [settingsKey.value, effectiveNode.value?.id, effectiveProvider.value] as const,
+  ([sKey, nid, prov]) => {
+    if (nid) fleet.applyDefaultModelPref(sKey, nid, prov)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [target.value, effectiveKey.value, effectiveNode.value?.status, caps.value.join(',')] as const,
+  ([key, , status, capsStr]) => {
+    if (status !== 'online' || !effectiveNode.value) return
+    const capSet = new Set(capsStr.split(',').filter(Boolean))
+    if (capSet.has('models') && !fleet.catalogs[key]) {
       fleet.requestModels(effectiveNode.value.id, effectiveProvider.value)
+    }
+    if (capSet.has('mcp') && !fleet.mcpByTarget[key]) {
+      fleet.requestMcpServers(effectiveNode.value.id, effectiveProvider.value)
+    }
+    if (!fleet.rulesByTarget[key]) {
+      fleet.requestRules(effectiveKey.value || undefined)
     }
   },
   { immediate: true },
@@ -609,6 +718,527 @@ const effectiveMessages = computed<ChatMessage[]>(() =>
 const isStreaming = computed(() =>
   Boolean(effectiveKey.value && fleet.runningBySession[effectiveKey.value]),
 )
+const effectiveTodos = computed(() =>
+  effectiveKey.value ? fleet.todosBySession[effectiveKey.value] ?? [] : [],
+)
+const effectiveQueue = computed(() =>
+  effectiveKey.value ? fleet.queuedPromptsBySession[effectiveKey.value] ?? [] : [],
+)
+const effectiveCheckpoints = computed(() =>
+  effectiveKey.value ? fleet.checkpointsBySession[effectiveKey.value] ?? [] : [],
+)
+const effectiveDiff = computed(() =>
+  effectiveKey.value ? fleet.diffBySession[effectiveKey.value] ?? null : null,
+)
+const cachedNodeFiles = computed(() =>
+  (effectiveKey.value ? fleet.filesCacheByTarget[effectiveKey.value] : undefined)
+  ?? fleet.filesCacheByTarget[target.value]
+  ?? [],
+)
+
+// 自定义 Prompt 模板与节点信任命令白名单
+const customPrompts = ref<CustomPromptTemplate[]>(loadCustomPrompts())
+const promptLibraryOpen = ref(false)
+const nodeTrustPatterns = computed(() =>
+  effectiveNode.value ? fleet.trustPatternsByNode[effectiveNode.value.id] ?? [] : [],
+)
+const newTrustPattern = ref('')
+
+function handleSaveCustomPrompt(payload: {
+  id?: string
+  trigger: string
+  title: string
+  description: string
+  template: string
+}) {
+  customPrompts.value = saveCustomPrompt(payload)
+}
+
+function handleRemoveCustomPrompt(id: string) {
+  customPrompts.value = deleteCustomPrompt(id)
+}
+
+function handleUseCustomPrompt(tpl: string) {
+  const prefix = draft.value.trim()
+  draft.value = prefix ? `${prefix}\n${tpl}` : tpl
+  promptLibraryOpen.value = false
+  void nextTick(() => textareaRef.value?.focus())
+}
+
+function handleAddTrustPattern() {
+  const nid = effectiveNode.value?.id
+  const pat = newTrustPattern.value.trim()
+  if (!nid || !pat) return
+  fleet.addTrustPattern(nid, pat)
+  newTrustPattern.value = ''
+}
+
+function handleRemoveTrustPattern(pat: string) {
+  const nid = effectiveNode.value?.id
+  if (!nid) return
+  fleet.removeTrustPattern(nid, pat)
+}
+
+// 对话内搜索（Ctrl+F）与消息内存书签
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchActiveIdx = ref(0)
+const searchInputRef = ref<HTMLInputElement | null>(null)
+const highlightedMsgId = ref<string | null>(null)
+
+interface SearchMatchEntry {
+  msgId: string
+  msgIdx: number
+  thoughtKey?: string
+}
+
+const searchMatches = computed<SearchMatchEntry[]>(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return []
+  const hits: SearchMatchEntry[] = []
+  effectiveMessages.value.forEach((msg, msgIdx) => {
+    const parts = extractMessageParts(msg)
+    let matchedThoughtKey: string | undefined
+    for (let pIdx = 0; pIdx < parts.length; pIdx += 1) {
+      const p = parts[pIdx]
+      if (p.type === 'thought' && p.text.toLowerCase().includes(q)) {
+        matchedThoughtKey = `${msg.id}-p-${pIdx}`
+        break
+      }
+    }
+    const textHit = (msg.text || '').toLowerCase().includes(q)
+    const toolHit = (msg.toolCalls ?? []).some(
+      tc =>
+        tc.name.toLowerCase().includes(q)
+        || (tc.title || '').toLowerCase().includes(q)
+        || (tc.output || '').toLowerCase().includes(q)
+        || (tc.error || '').toLowerCase().includes(q),
+    )
+    if (textHit || matchedThoughtKey || toolHit) {
+      hits.push({ msgId: msg.id, msgIdx, thoughtKey: matchedThoughtKey })
+    }
+  })
+  return hits
+})
+
+function scrollToMessage(msgId: string, thoughtKey?: string) {
+  if (thoughtKey && !expandedThought.value[thoughtKey]) {
+    expandedThought.value = { ...expandedThought.value, [thoughtKey]: true }
+  }
+  highlightedMsgId.value = msgId
+  followLatest.value = false
+  void nextTick(() => {
+    const el = listEl.value?.querySelector(`[data-msg-id="${msgId}"]`)
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  })
+}
+
+watch(searchMatches, list => {
+  if (!list.length) {
+    searchActiveIdx.value = 0
+    if (searchOpen.value) highlightedMsgId.value = null
+    return
+  }
+  if (searchActiveIdx.value >= list.length) {
+    searchActiveIdx.value = 0
+  }
+  const hit = list[searchActiveIdx.value]
+  if (hit) scrollToMessage(hit.msgId, hit.thoughtKey)
+})
+
+function openThreadSearch() {
+  searchOpen.value = true
+  void nextTick(() => {
+    searchInputRef.value?.focus()
+    searchInputRef.value?.select()
+  })
+}
+
+function closeThreadSearch() {
+  searchOpen.value = false
+  searchQuery.value = ''
+  highlightedMsgId.value = null
+}
+
+function stepSearchMatch(delta: number) {
+  const list = searchMatches.value
+  if (!list.length) return
+  searchActiveIdx.value = (searchActiveIdx.value + delta + list.length) % list.length
+  const hit = list[searchActiveIdx.value]
+  if (hit) scrollToMessage(hit.msgId, hit.thoughtKey)
+}
+
+const bookmarkedIds = computed(() =>
+  effectiveKey.value ? fleet.bookmarkedIdsBySession[effectiveKey.value] ?? [] : [],
+)
+const bookmarkedMessages = computed(() =>
+  effectiveMessages.value.filter(m => bookmarkedIds.value.includes(m.id)),
+)
+function isMessageBookmarked(msgId: string): boolean {
+  return bookmarkedIds.value.includes(msgId)
+}
+function toggleBookmark(msgId: string) {
+  if (!effectiveKey.value) return
+  fleet.toggleMessageBookmark(effectiveKey.value, msgId)
+}
+
+// 发送前草稿 + 附加上下文 + 待传文件的 Token 估算，及 `@path` 行号裁剪助手
+const estimatedDraftTokens = computed(() => {
+  let chars = draft.value.length
+  for (const ctx of queuedContexts.value) {
+    chars += (ctx.payload || '').length + (ctx.label || '').length
+  }
+  let fileToks = 0
+  for (const f of queuedFiles.value) {
+    fileToks += Math.min(25000, Math.max(120, Math.ceil((f.size || 0) / 4)))
+  }
+  if (!chars && !fileToks) return 0
+  return Math.max(1, Math.ceil(chars / 3) + fileToks)
+})
+
+const untrimmedFileRef = computed(() => {
+  const m = draft.value.match(/@([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)(?!#L\d)/)
+  return m ? m[1] : null
+})
+
+function trimFirstFileCitation() {
+  const targetRef = untrimmedFileRef.value
+  if (!targetRef) return
+  draft.value = draft.value.replace(`@${targetRef}`, `@${targetRef}#L1-200`)
+  void nextTick(() => textareaRef.value?.focus())
+}
+
+function isCheckpointReverted(cpId?: string): boolean {
+  if (!cpId) return false
+  return effectiveCheckpoints.value.some(c => c.checkpointId === cpId && c.reverted)
+}
+
+function handleRevertCheckpoint(cpId?: string) {
+  if (!effectiveKey.value) return
+  fleet.revertCheckpoint(effectiveKey.value, cpId)
+}
+
+function inspectTurnDiff(cpId?: string) {
+  if (effectiveKey.value) {
+    fleet.requestSessionDiff(effectiveKey.value, cpId)
+  }
+  emit('openDiff')
+}
+
+function handleExecutePlan() {
+  if (isStreaming.value) return
+  draft.value = '请继续执行剩余未完成的计划步骤，并在完成后更新进度。'
+  void handleSubmit()
+}
+
+// 待发队列内联编辑
+const editingQueueId = ref<string | null>(null)
+const editingQueueText = ref('')
+
+async function handleRegenerate(msgIndex: number) {
+  if (sending.value || isStreaming.value) return
+  if (effectiveKey.value && fleet.sessionsByKey[effectiveKey.value]) {
+    sending.value = true
+    try {
+      await fleet.regenerateAssistantMessage(effectiveKey.value, msgIndex, { ...options.value })
+    } catch (err) {
+      emit('action', err instanceof Error ? err.message : '重新生成失败')
+    } finally {
+      sending.value = false
+    }
+    return
+  }
+  const msg = effectiveMessages.value[msgIndex]
+  if (msg) await retryTurn(msg)
+}
+
+function handleForkAt(msgIndex: number) {
+  if (!effectiveKey.value) return
+  fleet.forkSessionFromMessage(effectiveKey.value, msgIndex)
+  emit('action', '已从当前节点分叉出独立会话标签页')
+}
+
+function startEditQueued(id: string, text: string) {
+  editingQueueId.value = id
+  editingQueueText.value = text
+}
+
+function commitEditQueued(id: string) {
+  if (effectiveKey.value) {
+    fleet.updateQueuedPrompt(effectiveKey.value, id, editingQueueText.value)
+  }
+  editingQueueId.value = null
+  editingQueueText.value = ''
+}
+
+// 内联 `@` 工作区文件/上下文 与 `/` 可执行指令自动补全
+type SuggestMode = 'at' | 'slash' | null
+interface SuggestOption {
+  id: string
+  kind: 'file' | 'context' | 'command'
+  icon: OpusIconName
+  title: string
+  desc: string
+  insertText?: string
+  contextItem?: ComposerContextItem
+  action?: () => void
+}
+
+const mentionListId = useId()
+const mentionMode = ref<SuggestMode>(null)
+const mentionQuery = ref('')
+const mentionRange = ref<{ start: number; end: number }>({ start: 0, end: 0 })
+const mentionDismissed = ref(false)
+const activeSuggestIdx = ref(0)
+let filesFetchTimer: ReturnType<typeof setTimeout> | null = null
+
+const slashCommandSpecs = [
+  { id: '/plan', title: '/plan', desc: '生成分步计划并跟踪进度看板', run: 'template', template: '/plan ' },
+  { id: '/diff', title: '/diff', desc: '打开右侧代码变更审查面板', run: 'diff' },
+  { id: '/undo', title: '/undo', desc: '回滚上一轮文件修改检查点', run: 'undo' },
+  { id: '/compact', title: '/compact', desc: '通知代理压缩早期历史上下文', run: 'compact' },
+  { id: '/fork', title: '/fork', desc: '从当前进展分叉出新会话窗口', run: 'fork' },
+  { id: '/review', title: '/review', desc: '审查当前工作区改动与潜在风险', run: 'template', template: '请审查当前工作区代码改动，指出潜在 Bug、边界情况与优化建议。' },
+  { id: '/status', title: '/status', desc: '检查工作目录、Git 与运行状态', run: 'template', template: '请检查当前工作目录、Git 状态与环境运行健康状况并简洁汇报。' },
+  { id: '/handoff', title: '/handoff', desc: '携带摘要交接给其他节点或引擎', run: 'handoff' },
+  { id: '/clear', title: '/clear', desc: '开启干净的新工作会话', run: 'clear' },
+] as const
+
+function requestWorkspaceFilesDebounced(q: string) {
+  if (effectiveNode.value?.status !== 'online') return
+  if (filesFetchTimer) clearTimeout(filesFetchTimer)
+  filesFetchTimer = setTimeout(() => {
+    fleet.requestFilesList(q, 40, effectiveKey.value)
+    filesFetchTimer = null
+  }, 110)
+}
+
+function updateMentionTrigger() {
+  const ta = textareaRef.value
+  const val = draft.value
+  const caret = ta?.selectionStart ?? val.length
+  const prefix = val.slice(0, caret)
+
+  const slashMatch = prefix.match(/^\/([^\s]*)$/)
+  if (slashMatch) {
+    mentionMode.value = 'slash'
+    mentionQuery.value = slashMatch[1].toLowerCase()
+    mentionRange.value = { start: 0, end: caret }
+    mentionDismissed.value = false
+    activeSuggestIdx.value = 0
+    return
+  }
+
+  const atMatch = prefix.match(/(?:^|\s)@([^\s@]*)$/)
+  if (atMatch) {
+    const token = atMatch[1]
+    const atPos = caret - token.length - 1
+    mentionMode.value = 'at'
+    mentionQuery.value = token.toLowerCase()
+    mentionRange.value = { start: atPos, end: caret }
+    mentionDismissed.value = false
+    activeSuggestIdx.value = 0
+    ensurePersonalStoresLoaded()
+    requestWorkspaceFilesDebounced(token)
+    return
+  }
+
+  mentionMode.value = null
+  mentionQuery.value = ''
+}
+
+const suggestOptions = computed<SuggestOption[]>(() => {
+  if (mentionDismissed.value || !mentionMode.value) return []
+  const q = mentionQuery.value
+  if (mentionMode.value === 'slash') {
+    const baseOpts = slashCommandSpecs
+      .filter(c => !q || c.title.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q))
+      .map<SuggestOption>(c => ({
+        id: c.id,
+        kind: 'command',
+        icon: 'zap' as OpusIconName,
+        title: c.title,
+        desc: c.desc,
+        action: () => {
+          if (c.run === 'template') {
+            draft.value = c.template
+            mentionMode.value = null
+          } else if (c.run === 'diff') {
+            draft.value = ''
+            mentionMode.value = null
+            inspectTurnDiff()
+          } else if (c.run === 'undo') {
+            draft.value = ''
+            mentionMode.value = null
+            if (effectiveKey.value) fleet.revertCheckpoint(effectiveKey.value)
+            else emit('action', '请先打开包含检查点的会话')
+          } else if (c.run === 'compact') {
+            draft.value = ''
+            mentionMode.value = null
+            if (effectiveKey.value) fleet.compactSession(effectiveKey.value)
+            else emit('action', '请先进入活跃会话后再执行压缩')
+          } else if (c.run === 'fork') {
+            draft.value = ''
+            mentionMode.value = null
+            const lastIdx = Math.max(0, effectiveMessages.value.length - 1)
+            if (effectiveKey.value) fleet.forkSessionFromMessage(effectiveKey.value, lastIdx)
+          } else if (c.run === 'handoff') {
+            draft.value = ''
+            mentionMode.value = null
+            const last = [...effectiveMessages.value].reverse().find(m => m.text.trim())
+            emit('openHandoff', { summary: last?.text.slice(0, 1200) ?? '' })
+          } else if (c.run === 'clear') {
+            draft.value = ''
+            mentionMode.value = null
+            emit('clearSession')
+          }
+        },
+      }))
+
+    const customOpts = customPrompts.value
+      .filter(p => !q || p.trigger.toLowerCase().includes(q) || p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
+      .map<SuggestOption>(p => ({
+        id: `custom:${p.id}`,
+        kind: 'command',
+        icon: 'sparkle',
+        title: `/${p.trigger}`,
+        desc: `${p.title}${p.description ? ` · ${p.description}` : ''}`,
+        action: () => {
+          draft.value = p.template
+          mentionMode.value = null
+        },
+      }))
+
+    const manageOpt: SuggestOption[] =
+      !q || 'prompts manage 模板'.includes(q)
+        ? [{
+            id: 'custom:__manage__',
+            kind: 'command',
+            icon: 'settings',
+            title: '/prompts',
+            desc: '打开并管理自定义 Prompt 模板库',
+            action: () => {
+              draft.value = ''
+              mentionMode.value = null
+              promptLibraryOpen.value = true
+            },
+          }]
+        : []
+
+    return [...baseOpts, ...customOpts, ...manageOpt]
+  }
+
+  // '@' mention mode: 工作区文件 + @git diff + 个人资料/网站 + 其他会话结论
+  const out: SuggestOption[] = []
+  if (!q || 'git diff 变更'.includes(q)) {
+    out.push({
+      id: 'at:git-diff',
+      kind: 'context',
+      icon: 'branch',
+      title: '@git diff',
+      desc: '附带当前工作区 Git Diff 改动上下文',
+      action: () => {
+        if (effectiveKey.value) fleet.requestSessionDiff(effectiveKey.value)
+        const diff = effectiveKey.value ? fleet.diffBySession[effectiveKey.value] : null
+        const summaryText = diff?.files.length
+          ? `工作区 Git Diff（+${diff.summary.additions}/-${diff.summary.deletions}）：${diff.files.map(f => f.path).join(', ')}`
+          : '请查看当前工作区 `git diff` 未提交代码改动'
+        addContextItem({
+          id: 'ctx:git-diff',
+          kind: 'dir',
+          icon: 'branch',
+          label: 'Git Diff',
+          payload: summaryText,
+        })
+      },
+    })
+  }
+  for (const filePath of cachedNodeFiles.value) {
+    if (q && !filePath.toLowerCase().includes(q)) continue
+    out.push({
+      id: `file:${filePath}`,
+      kind: 'file',
+      icon: 'file',
+      title: filePath,
+      desc: '工作区文件',
+      insertText: `@${filePath} `,
+    })
+    if (out.length >= 10) break
+  }
+  for (const item of personalContextOptions.value) {
+    if (q && !item.label.toLowerCase().includes(q)) continue
+    out.push({
+      id: item.id,
+      kind: 'context',
+      icon: item.icon,
+      title: item.label,
+      desc: item.kind === 'website' ? '收藏网站' : '个人资料',
+      contextItem: item,
+    })
+    if (out.length >= 14) break
+  }
+  for (const sItem of sessionContextOptions.value) {
+    if (q && !sItem.label.toLowerCase().includes(q) && !sItem.preview.toLowerCase().includes(q)) continue
+    out.push({
+      id: sItem.id,
+      kind: 'context',
+      icon: 'branch',
+      title: sItem.label,
+      desc: sItem.preview,
+      contextItem: sItem,
+    })
+    if (out.length >= 16) break
+  }
+  return out
+})
+
+const autocompleteOpen = computed(() => !mentionDismissed.value && suggestOptions.value.length > 0)
+
+function applyAutocompleteOption(opt: SuggestOption) {
+  const { start, end } = mentionRange.value
+  const val = draft.value
+  if (opt.action) {
+    if (mentionMode.value === 'at') {
+      draft.value = `${val.slice(0, start)}${val.slice(end)}`.trimStart()
+    }
+    opt.action()
+  } else if (opt.insertText) {
+    const nextVal = `${val.slice(0, start)}${opt.insertText}${val.slice(end)}`
+    draft.value = nextVal
+    mentionMode.value = null
+    const nextCursor = start + opt.insertText.length
+    void nextTick(() => {
+      textareaRef.value?.focus()
+      textareaRef.value?.setSelectionRange(nextCursor, nextCursor)
+    })
+  } else if (opt.contextItem) {
+    draft.value = `${val.slice(0, start)}${val.slice(end)}`.trimStart()
+    addContextItem(opt.contextItem)
+    mentionMode.value = null
+  }
+  mentionDismissed.value = true
+  void nextTick(() => textareaRef.value?.focus())
+}
+
+function insertFileReference(refOrPath: string) {
+  const clean = refOrPath.trim()
+  if (!clean) return
+  if (/\s/.test(clean)) {
+    const prefix = draft.value.trim()
+    draft.value = prefix ? `${prefix}\n${clean}` : `${clean} `
+    void nextTick(() => textareaRef.value?.focus())
+    return
+  }
+  const prefix = draft.value.trim()
+  const refToken = clean.startsWith('@') ? clean : `@${clean}`
+  const isLineCite = /#L\d+/.test(refToken)
+  draft.value = prefix ? `${prefix} ${refToken} ` : isLineCite ? `${refToken} ` : `${refToken} 请分析并检查此文件改动：`
+  void nextTick(() => textareaRef.value?.focus())
+}
+
+defineExpose({ insertFileReference, openThreadSearch })
 
 watch(
   () => effectiveMessages.value.map(m => m.text.length + (m.thought?.length ?? 0)).join(','),
@@ -694,16 +1324,77 @@ function removeQueuedFile(idx: number) {
   queuedFiles.value = queuedFiles.value.filter((_, i) => i !== idx)
 }
 
-async function handleSubmit() {
-  if (isStreaming.value) {
+function stopStreamingRun() {
+  if (effectiveKey.value) {
     fleet.cancelSessionRun(effectiveKey.value)
-    return
   }
+}
+
+function tryExecuteDirectSlash(text: string): boolean {
+  const clean = text.trim()
+  if (clean === '/prompts') {
+    draft.value = ''
+    promptLibraryOpen.value = true
+    return true
+  }
+  const cmd = slashCommandSpecs.find(c => c.run !== 'template' && c.id === clean)
+  if (!cmd) return false
+  const opt = suggestOptions.value.find(o => o.id === cmd.id)
+  if (opt?.action) {
+    opt.action()
+    return true
+  }
+  if (cmd.run === 'diff') {
+    draft.value = ''
+    inspectTurnDiff()
+    return true
+  }
+  if (cmd.run === 'undo') {
+    draft.value = ''
+    if (effectiveKey.value) fleet.revertCheckpoint(effectiveKey.value)
+    return true
+  }
+  if (cmd.run === 'compact') {
+    draft.value = ''
+    if (effectiveKey.value) fleet.compactSession(effectiveKey.value)
+    return true
+  }
+  if (cmd.run === 'fork') {
+    draft.value = ''
+    if (effectiveKey.value) fleet.forkSessionFromMessage(effectiveKey.value, Math.max(0, effectiveMessages.value.length - 1))
+    return true
+  }
+  if (cmd.run === 'clear') {
+    draft.value = ''
+    emit('clearSession')
+    return true
+  }
+  if (cmd.run === 'handoff') {
+    draft.value = ''
+    const last = [...effectiveMessages.value].reverse().find(m => m.text.trim())
+    emit('openHandoff', { summary: last?.text.slice(0, 1200) ?? '' })
+    return true
+  }
+  return false
+}
+
+async function handleSubmit() {
   if (sending.value) return
   const text = draft.value.trim()
   const files = [...queuedFiles.value]
   const contexts = [...queuedContexts.value]
+
+  if (isStreaming.value && !text && !files.length && !contexts.length) {
+    stopStreamingRun()
+    return
+  }
   if (!text && !files.length && !contexts.length) return
+
+  if (!isStreaming.value && !files.length && !contexts.length && tryExecuteDirectSlash(text)) {
+    mentionMode.value = null
+    return
+  }
+
   if (!effectiveNode.value) {
     emit('action', '请先在左侧选择或配对至少一个在线节点')
     return
@@ -717,6 +1408,22 @@ async function handleSubmit() {
   const payloadText = contextBlock
     ? `${contextBlock}${text || (files.length ? '' : '请结合以上附加上下文进行分析或处理。')}`.trim()
     : text
+
+  if (isStreaming.value && effectiveKey.value) {
+    fleet.enqueuePrompt(effectiveKey.value, payloadText, files, { ...options.value })
+    if (submitted.text === originalText) submitted.text = ''
+    submitted.files = submitted.files.filter(file => !files.includes(file))
+    if (contexts.length) {
+      const sentIds = new Set(contexts.map(c => c.id))
+      contextsByKey.value = {
+        ...contextsByKey.value,
+        [submittedKey]: (contextsByKey.value[submittedKey] ?? []).filter(c => !sentIds.has(c.id)),
+      }
+    }
+    mentionMode.value = null
+    return
+  }
+
   sending.value = true
   try {
     if (effectiveKey.value && fleet.sessionsByKey[effectiveKey.value]) {
@@ -733,6 +1440,7 @@ async function handleSubmit() {
         [submittedKey]: (contextsByKey.value[submittedKey] ?? []).filter(c => !sentIds.has(c.id)),
       }
     }
+    mentionMode.value = null
   } catch (err) {
     emit('action', err instanceof Error ? err.message : '消息发送失败')
   } finally {
@@ -741,6 +1449,30 @@ async function handleSubmit() {
 }
 
 function handleKeydown(ev: KeyboardEvent) {
+  if (autocompleteOpen.value) {
+    const opts = suggestOptions.value
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault()
+      activeSuggestIdx.value = (activeSuggestIdx.value + 1) % opts.length
+      return
+    }
+    if (ev.key === 'ArrowUp') {
+      ev.preventDefault()
+      activeSuggestIdx.value = (activeSuggestIdx.value - 1 + opts.length) % opts.length
+      return
+    }
+    if (ev.key === 'Escape') {
+      ev.preventDefault()
+      mentionDismissed.value = true
+      return
+    }
+    if ((ev.key === 'Tab' || (ev.key === 'Enter' && !ev.shiftKey)) && !ev.isComposing) {
+      ev.preventDefault()
+      const chosen = opts[activeSuggestIdx.value] ?? opts[0]
+      if (chosen) applyAutocompleteOption(chosen)
+      return
+    }
+  }
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
     ev.preventDefault()
     void handleSubmit()
@@ -751,8 +1483,12 @@ function handleApproval(callId: string, decision: ApprovalDecision) {
   fleet.respondPermission(callId, decision)
 }
 
-function toggleThought(id: string) {
-  expandedThought.value = { ...expandedThought.value, [id]: !expandedThought.value[id] }
+function toggleThought(key: string, ev: Event) {
+  const el = ev.target as HTMLDetailsElement | null
+  if (!el) return
+  const isOpen = Boolean(el.open)
+  if (Boolean(expandedThought.value[key]) === isOpen) return
+  expandedThought.value = { ...expandedThought.value, [key]: isOpen }
 }
 
 function shareAsHandoff(msg: ChatMessage, artifact?: ArtifactRef) {
@@ -822,7 +1558,11 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (speechInst && speechActive.value) {
+    try { speechInst.stop() } catch { /* ignore */ }
+  }
   if (msgCopyTimer) clearTimeout(msgCopyTimer)
+  if (filesFetchTimer) clearTimeout(filesFetchTimer)
   if (hasLightboxClickFallback) {
     lightboxEl.value?.removeEventListener('click', onLightboxBackdropFallback)
   }
@@ -885,6 +1625,66 @@ async function retryTurn(msg: ChatMessage) {
 
 <template>
   <div class="thread-root" :class="{ 'thread-compact': compact, 'thread-mobile': mobile }" @keydown="handleThreadKeydown">
+    <div v-if="searchOpen" class="thread-search-bar" role="search" aria-label="在当前对话中搜索">
+      <OpusIcon name="search" class="ts-ic" />
+      <input
+        ref="searchInputRef"
+        v-model="searchQuery"
+        type="search"
+        class="ts-input"
+        placeholder="搜索本会话文本、思考过程或工具输出…"
+        aria-label="搜索对话内容"
+        @keydown.enter.exact.prevent="stepSearchMatch(1)"
+        @keydown.shift.enter.prevent="stepSearchMatch(-1)"
+        @keydown.esc.prevent="closeThreadSearch"
+      />
+      <span class="ts-count num">
+        {{ searchMatches.length ? `${searchActiveIdx + 1} / ${searchMatches.length}` : searchQuery.trim() ? '0 / 0' : '' }}
+      </span>
+      <button
+        type="button"
+        class="icon-btn ts-nav-btn"
+        title="上一个匹配 (Shift+Enter)"
+        aria-label="上一个匹配"
+        :disabled="!searchMatches.length"
+        @click="stepSearchMatch(-1)"
+      ><OpusIcon name="arrowUp" /></button>
+      <button
+        type="button"
+        class="icon-btn ts-nav-btn"
+        title="下一个匹配 (Enter)"
+        aria-label="下一个匹配"
+        :disabled="!searchMatches.length"
+        @click="stepSearchMatch(1)"
+      ><OpusIcon name="arrowDown" /></button>
+      <button
+        type="button"
+        class="icon-btn ts-nav-btn"
+        title="关闭搜索 (Esc)"
+        aria-label="关闭搜索"
+        @click="closeThreadSearch"
+      ><OpusIcon name="x" /></button>
+    </div>
+
+    <div v-if="bookmarkedMessages.length && !compact" class="bookmark-strip" aria-label="本会话已收藏的消息书签">
+      <span class="bm-lead">
+        <OpusIcon name="sparkle" />
+        <span>书签</span>
+      </span>
+      <div class="bm-chips">
+        <button
+          v-for="(bm, bIdx) in bookmarkedMessages"
+          :key="bm.id"
+          type="button"
+          class="bm-chip"
+          :title="bm.text.slice(0, 140)"
+          @click="scrollToMessage(bm.id)"
+        >
+          <span>#{{ bIdx + 1 }} · {{ (bm.text || bm.error || '消息').replace(/\s+/g, ' ').slice(0, 18) }}</span>
+        </button>
+      </div>
+    </div>
+
     <div ref="listEl" @scroll.passive="trackMessageScroll" :class="mobile ? 'mmsgs' : 'msgs'">
       <div :class="mobile ? 'mmsgs-inner' : 'msgs-inner'">
         <div v-if="!effectiveMessages.length" class="thread-empty">
@@ -904,96 +1704,293 @@ async function retryTurn(msg: ChatMessage) {
           <p v-else>前往「设置 -> Agent 与连接」添加控制节点，发放 sn_live_ 凭证并在目标机器启动 agent-node。</p>
         </div>
 
-        <template v-for="msg in effectiveMessages" :key="msg.id">
-          <div :class="[mobile ? 'mmsg' : 'msg', msg.role === 'user' ? 'user' : 'agent', getProviderMeta(msg.provider).accentClass]">
-            <span v-if="msg.role !== 'user'" class="am" :title="getProviderMeta(msg.provider).label">
-              <OpusIcon :name="getProviderMeta(msg.provider).icon" />
-            </span>
-            <div class="bubble">
-              <div v-if="msg.toolCalls?.length" class="tool-list">
-                <span v-for="tool in msg.toolCalls" :key="tool.id" class="tool">
-                  <OpusIcon name="terminal" />
-                  <span>{{ tool.name }}{{ tool.detail ? ` · ${tool.detail}` : '' }}</span>
-                </span>
-              </div>
+        <template v-for="(msg, msgIdx) in effectiveMessages" :key="msg.id">
+          <div v-if="msg.role === 'system'" :data-msg-id="msg.id" class="sys-notice" :class="{ 'is-search-hit': highlightedMsgId === msg.id }">
+            <OpusIcon name="info" />
+            <span>{{ msg.text }}</span>
+          </div>
 
-              <details v-if="msg.thought" class="thought-box" :open="expandedThought[msg.id]" @toggle="toggleThought(msg.id)">
-                <summary>思考过程 ({{ msg.thought.length }} 字)</summary>
-                <div class="thought-body">{{ msg.thought }}</div>
-              </details>
+          <div v-else :data-msg-id="msg.id" :class="[mobile ? 'mmsg' : 'msg', msg.role === 'user' ? 'user' : 'agent', getProviderMeta(msg.provider).accentClass, { 'is-search-hit': highlightedMsgId === msg.id }]">
+            <template v-if="msg.role === 'user'">
+              <div class="user-col">
+                <div class="bubble">
+                  <div v-if="msg.text" class="msg-text">{{ msg.text }}</div>
+                  <template v-for="art in msg.artifacts" :key="art.artifactId">
+                    <button
+                      v-if="art.mime.startsWith('image/') && fleet.imagePreviewByArtifactId[art.artifactId]"
+                      type="button"
+                      class="msg-img-thumb"
+                      :title="`查看大图：${art.fileName}`"
+                      @click="openImageLightbox(fleet.imagePreviewByArtifactId[art.artifactId], art.fileName)"
+                    >
+                      <img :src="fleet.imagePreviewByArtifactId[art.artifactId]" :alt="art.fileName" />
+                    </button>
+                    <ArtifactPill
+                      :artifact="art"
+                      :compact="compact"
+                      @status="emit('action', $event)"
+                      @handoff="shareAsHandoff(msg, $event)"
+                    />
+                  </template>
+                </div>
 
-              <MarkdownMessage v-if="msg.text && msg.role !== 'user'" :text="msg.text" :streaming="msg.streaming" />
-              <div v-else-if="msg.text" class="msg-text">{{ msg.text }}</div>
-              <div v-else-if="msg.streaming" class="typing" aria-label="思考与输出中"><i></i><i></i><i></i></div>
-
-              <div v-if="msg.error" class="state warn">
-                <OpusIcon name="alert" />
-                <span>{{ msg.error }}</span>
-              </div>
-
-              <PermissionRequestCard
-                v-for="card in msg.approvals"
-                :key="card.callId"
-                :card="card"
-                @respond="handleApproval"
-              />
-
-              <template v-for="art in msg.artifacts" :key="art.artifactId">
-                <button
-                  v-if="art.mime.startsWith('image/') && fleet.imagePreviewByArtifactId[art.artifactId]"
-                  type="button"
-                  class="msg-img-thumb"
-                  :title="`查看大图：${art.fileName}`"
-                  @click="openImageLightbox(fleet.imagePreviewByArtifactId[art.artifactId], art.fileName)"
-                >
-                  <img :src="fleet.imagePreviewByArtifactId[art.artifactId]" :alt="art.fileName" />
-                </button>
-                <ArtifactPill
-                  :artifact="art"
-                  :compact="compact"
-                  @status="emit('action', $event)"
-                  @handoff="shareAsHandoff(msg, $event)"
-                />
-              </template>
-
-              <div v-if="msg.role === 'assistant' && !msg.streaming && (msg.text || msg.error)" class="msg-foot">
-                <span v-if="msg.createdAt" class="msg-time num">{{ formatMsgTime(msg.createdAt) }}</span>
-                <div class="msg-foot-actions">
-                  <button
-                    v-if="msg.text"
-                    type="button"
-                    class="btn btn-subtle btn-sm"
-                    @click="copyMessageText(msg)"
-                  >
-                    <OpusIcon :name="copiedMsgId === msg.id ? 'check' : 'copy'" />
-                    <span>{{ copiedMsgId === msg.id ? '已复制' : '复制' }}</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-subtle btn-sm"
-                    :disabled="sending || isStreaming"
-                    @click="retryTurn(msg)"
-                  >
-                    <OpusIcon name="sync" />
-                    <span>重试</span>
-                  </button>
-                  <button
-                    v-if="msg.text && !compact"
-                    type="button"
-                    class="btn btn-subtle btn-sm"
-                    @click="shareAsHandoff(msg)"
-                  >
-                    <OpusIcon name="send" />
-                    <span>交接会话</span>
-                  </button>
+                <div class="user-foot">
+                  <div v-if="msg.branches && msg.branches.length > 1" class="branch-switcher">
+                    <button
+                      type="button"
+                      class="branch-nav-btn"
+                      aria-label="上一分支"
+                      :disabled="(msg.activeBranchIndex ?? 0) <= 0 || isStreaming"
+                      @click="fleet.switchBranch(effectiveKey, msgIdx, (msg.activeBranchIndex ?? 0) - 1)"
+                    >‹</button>
+                    <span class="num">{{ (msg.activeBranchIndex ?? 0) + 1 }} / {{ msg.branches.length }}</span>
+                    <button
+                      type="button"
+                      class="branch-nav-btn"
+                      aria-label="下一分支"
+                      :disabled="(msg.activeBranchIndex ?? 0) >= msg.branches.length - 1 || isStreaming"
+                      @click="fleet.switchBranch(effectiveKey, msgIdx, (msg.activeBranchIndex ?? 0) + 1)"
+                    >›</button>
+                  </div>
+                  <div class="user-hover-actions">
+                    <button
+                      v-if="msg.text"
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      @click="copyMessageText(msg)"
+                    >
+                      <OpusIcon :name="copiedMsgId === msg.id ? 'check' : 'copy'" />
+                      <span>{{ copiedMsgId === msg.id ? '已复制' : '复制' }}</span>
+                    </button>
+                    <button
+                      v-if="!compact && effectiveKey && fleet.sessionsByKey[effectiveKey]"
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      @click="handleForkAt(msgIdx)"
+                    >
+                      <OpusIcon name="branch" />
+                      <span>分支</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </template>
+
+            <template v-else>
+              <span class="am" :title="getProviderMeta(msg.provider).label">
+                <OpusIcon :name="getProviderMeta(msg.provider).icon" />
+              </span>
+              <div class="bubble">
+                <template v-if="extractMessageParts(msg).length">
+                  <div class="msg-parts">
+                    <template v-for="(part, pIdx) in extractMessageParts(msg)" :key="`${msg.id}-p-${pIdx}`">
+                      <details
+                        v-if="part.type === 'thought'"
+                        class="thought-box"
+                        :open="Boolean(expandedThought[`${msg.id}-p-${pIdx}`])"
+                        @toggle="toggleThought(`${msg.id}-p-${pIdx}`, $event)"
+                      >
+                        <summary>思考过程 ({{ part.text.length }} 字)</summary>
+                        <div class="thought-body">{{ part.text }}</div>
+                      </details>
+                      <ToolCallCard
+                        v-else-if="part.type === 'tool' && findToolCall(msg, part.callId)"
+                        :tool="findToolCall(msg, part.callId)!"
+                        @open-file="fp => emit('openFile', fp)"
+                        @open-subagent="sid => emit('openSubagent', sid)"
+                      />
+                      <MarkdownMessage
+                        v-else-if="part.type === 'text' && part.text"
+                        :text="part.text"
+                        :streaming="msg.streaming && pIdx === extractMessageParts(msg).length - 1"
+                        @open-file="(fp, ln) => emit('openFile', fp, ln)"
+                      />
+                    </template>
+                  </div>
+                </template>
+                <div v-else-if="msg.streaming" class="typing" aria-label="思考与输出中"><i></i><i></i><i></i></div>
+
+                <FormQuestionCard
+                  v-for="frm in msg.forms"
+                  :key="frm.formId"
+                  :form="frm"
+                  @submit="(fid, ans) => fleet.replyForm(fid, ans, false)"
+                  @cancel="fid => fleet.replyForm(fid, undefined, true)"
+                />
+
+                <div v-if="msg.error" class="state warn">
+                  <OpusIcon name="alert" />
+                  <span>{{ msg.error }}</span>
+                </div>
+
+                <PermissionRequestCard
+                  v-for="card in msg.approvals"
+                  :key="card.callId"
+                  :card="card"
+                  @respond="handleApproval"
+                />
+
+                <template v-for="art in msg.artifacts" :key="art.artifactId">
+                  <button
+                    v-if="art.mime.startsWith('image/') && fleet.imagePreviewByArtifactId[art.artifactId]"
+                    type="button"
+                    class="msg-img-thumb"
+                    :title="`查看大图：${art.fileName}`"
+                    @click="openImageLightbox(fleet.imagePreviewByArtifactId[art.artifactId], art.fileName)"
+                  >
+                    <img :src="fleet.imagePreviewByArtifactId[art.artifactId]" :alt="art.fileName" />
+                  </button>
+                  <ArtifactPill
+                    :artifact="art"
+                    :compact="compact"
+                    @status="emit('action', $event)"
+                    @handoff="shareAsHandoff(msg, $event)"
+                  />
+                </template>
+
+                <div
+                  v-if="msg.role === 'assistant' && !msg.streaming && (msg.text || msg.error || msg.checkpointId || msg.diffSummary?.filesChanged)"
+                  class="msg-foot"
+                >
+                  <span v-if="msg.createdAt" class="msg-time num">{{ formatMsgTime(msg.createdAt) }}</span>
+                  <div v-if="msg.checkpointId || msg.diffSummary?.filesChanged" class="turn-diff-bar">
+                    <button
+                      type="button"
+                      class="diff-pill num"
+                      title="在右侧检查代码改动详情"
+                      @click="inspectTurnDiff(msg.checkpointId)"
+                    >
+                      <OpusIcon name="branch" />
+                      <span>+{{ msg.diffSummary?.additions ?? 0 }} -{{ msg.diffSummary?.deletions ?? 0 }}</span>
+                      <span>· {{ msg.diffSummary?.filesChanged ?? 0 }} 文件</span>
+                    </button>
+                    <button
+                      v-if="msg.checkpointId && !isCheckpointReverted(msg.checkpointId)"
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      title="撤销本轮产生的代码改动"
+                      @click="handleRevertCheckpoint(msg.checkpointId)"
+                    >
+                      <OpusIcon name="history" />
+                      <span>回滚此轮</span>
+                    </button>
+                    <span v-else-if="msg.checkpointId" class="reverted-tag">已回滚</span>
+                  </div>
+                  <div class="msg-foot-actions">
+                    <button
+                      v-if="msg.text"
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      @click="copyMessageText(msg)"
+                    >
+                      <OpusIcon :name="copiedMsgId === msg.id ? 'check' : 'copy'" />
+                      <span>{{ copiedMsgId === msg.id ? '已复制' : '复制' }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      :disabled="sending || isStreaming"
+                      @click="handleRegenerate(msgIdx)"
+                    >
+                      <OpusIcon name="sync" />
+                      <span>重生成</span>
+                    </button>
+                    <button
+                      v-if="!compact && effectiveKey && fleet.sessionsByKey[effectiveKey]"
+                      type="button"
+                      class="btn btn-subtle btn-sm"
+                      @click="handleForkAt(msgIdx)"
+                    >
+                      <OpusIcon name="branch" />
+                      <span>分支</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-subtle btn-sm msg-foot-secondary"
+                      :class="{ 'is-bookmarked': isMessageBookmarked(msg.id) }"
+                      :title="isMessageBookmarked(msg.id) ? '取消本条消息书签' : '添加内存书签以便快速回看（仅当前会话内存保存）'"
+                      @click="toggleBookmark(msg.id)"
+                    >
+                      <OpusIcon name="sparkle" />
+                      <span>{{ isMessageBookmarked(msg.id) ? '已收藏' : '收藏' }}</span>
+                    </button>
+                    <button
+                      v-if="msg.text && !compact"
+                      type="button"
+                      class="btn btn-subtle btn-sm msg-foot-secondary"
+                      @click="shareAsHandoff(msg)"
+                    >
+                      <OpusIcon name="send" />
+                      <span>交接会话</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
         </template>
       </div>
     </div>
+
     <div :class="mobile ? 'mcomposer' : 'composer'">
+      <SessionTodoBar
+        v-if="!compact"
+        :items="effectiveTodos"
+        :streaming="isStreaming"
+        @execute-plan="handleExecutePlan"
+      />
+
+      <div v-if="effectiveQueue.length" class="follow-queue">
+        <div class="queue-hdr">
+          <OpusIcon name="tasks" class="queue-ic" />
+          <span>待发队列 ({{ effectiveQueue.length }}) · 当前轮次完成后自动依次执行</span>
+        </div>
+        <div class="queue-items">
+          <div v-for="item in effectiveQueue" :key="item.id" class="queue-row">
+            <template v-if="editingQueueId === item.id">
+              <input
+                v-model="editingQueueText"
+                type="text"
+                class="input queue-edit-input"
+                aria-label="编辑排队指令"
+                @keydown.enter.prevent="commitEditQueued(item.id)"
+                @keydown.esc.prevent="editingQueueId = null"
+              />
+              <button type="button" class="btn btn-primary btn-sm" @click="commitEditQueued(item.id)">保存</button>
+            </template>
+            <template v-else>
+              <span class="queue-text" :title="item.text">{{ item.text }}</span>
+              <button
+                type="button"
+                class="btn btn-subtle btn-sm"
+                title="打断当前生成并立即优先发送这条指令"
+                @click="fleet.steerQueuedPrompt(effectiveKey, item.id)"
+              >立即插队</button>
+              <button
+                type="button"
+                class="icon-btn queue-icon-btn"
+                aria-label="编辑排队内容"
+                title="编辑"
+                @click="startEditQueued(item.id, item.text)"
+              ><OpusIcon name="pencil" /></button>
+              <button
+                type="button"
+                class="icon-btn queue-icon-btn"
+                aria-label="移出待发队列"
+                title="删除"
+                @click="fleet.removeQueuedPrompt(effectiveKey, item.id)"
+              ><OpusIcon name="x" /></button>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <ChangedFilesSummaryBar
+        v-if="!compact && !mobile"
+        :diff="effectiveDiff"
+        @review="fp => emit('openDiff', fp)"
+      />
+
       <input ref="fileInputRef" type="file" multiple hidden @change="handleFileSelect" />
       <div
         :class="[
@@ -1004,6 +2001,30 @@ async function retryTurn(msg: ChatMessage) {
         @dragleave.self="draggingFiles = false"
         @drop.prevent="handleFileDrop"
       >
+        <div
+          v-if="autocompleteOpen"
+          :id="mentionListId"
+          class="mention-popover"
+          role="listbox"
+          :aria-label="mentionMode === 'slash' ? '斜杠命令列表' : '引用工作区文件与上下文'"
+        >
+          <button
+            v-for="(opt, idx) in suggestOptions"
+            :id="`${mentionListId}-opt-${idx}`"
+            :key="opt.id"
+            type="button"
+            role="option"
+            class="mention-option"
+            :class="{ 'is-active': idx === activeSuggestIdx }"
+            :aria-selected="idx === activeSuggestIdx"
+            @mousedown.prevent="applyAutocompleteOption(opt)"
+          >
+            <OpusIcon :name="opt.icon" class="mention-ic" />
+            <span class="mention-title">{{ opt.title }}</span>
+            <span class="mention-desc">{{ opt.desc }}</span>
+          </button>
+        </div>
+
         <div class="composer-editor">
           <TransitionGroup name="attachment" tag="div" class="queued-files">
             <span v-for="(file, idx) in queuedFiles" :key="`file-${file.name}-${idx}`" class="chip" :class="{ 'chip--image': Boolean(queuedFileThumb(file)) }">
@@ -1028,8 +2049,16 @@ async function retryTurn(msg: ChatMessage) {
           <div class="editor-field">
             <div ref="draftMeasure" class="draft-measure" aria-hidden="true">{{ draft + '\u200b' }}</div>
             <textarea ref="textareaRef" v-model="draft" class="composer-input" :style="{ height: editorHeight ? `${editorHeight}px` : undefined }"
-              :placeholder="effectiveNode ? `向 ${effectiveNode.name} 描述任务…` : '暂无在线节点…'"
-              aria-label="任务内容" title="Enter 发送，Shift+Enter 换行" rows="1" @keydown="handleKeydown" @paste="handleComposerPaste" />
+              :placeholder="effectiveNode ? `向 ${effectiveNode.name} 描述任务… 输入 @ 引用文件或 / 调用指令` : '暂无在线节点…'"
+              aria-label="任务内容" title="Enter 发送/排队，Shift+Enter 换行，@ 引用文件，/ 调用指令"
+              :aria-expanded="autocompleteOpen"
+              :aria-controls="autocompleteOpen ? mentionListId : undefined"
+              :aria-activedescendant="autocompleteOpen ? `${mentionListId}-opt-${activeSuggestIdx}` : undefined"
+              rows="1"
+              @input="updateMentionTrigger"
+              @click="updateMentionTrigger"
+              @keydown="handleKeydown"
+              @paste="handleComposerPaste" />
           </div>
         </div>
         <div class="composer-row">
@@ -1059,7 +2088,7 @@ async function retryTurn(msg: ChatMessage) {
               @pointerdown="noteTriggerPointerDown('model')"
               @click="showPanel('model', $event)"
             >
-              <span class="trigger-label">{{ model?.label || '默认模型' }}</span>
+              <span class="trigger-label">{{ model?.label || options.model || '默认模型' }}</span>
               <span
                 v-if="model?.provider && !model.label.startsWith(model.provider)"
                 class="trigger-provider"
@@ -1071,6 +2100,32 @@ async function retryTurn(msg: ChatMessage) {
             <span v-if="!mobile && !settingsOpen" class="trigger-tip" role="tooltip">选择模型 <kbd>Ctrl+/</kbd></span>
           </span>
           <span class="spacer" />
+          <button
+            v-if="untrimmedFileRef && !mobile"
+            type="button"
+            class="draft-trim-pill"
+            :title="`将 @${untrimmedFileRef} 裁剪为前 200 行引用以节省上下文 Token`"
+            @click="trimFirstFileCitation"
+          >
+            <OpusIcon name="braces" />
+            <span>裁行 L1-200</span>
+          </button>
+          <span
+            v-if="estimatedDraftTokens > 0 && !mobile"
+            class="draft-token-pill num"
+            :title="`当前草稿与附加上下文预计消耗约 ${estimatedDraftTokens} tokens`"
+          >~{{ formatTokenCount(estimatedDraftTokens) }} tok</span>
+          <button
+            v-if="speechSupported && !mobile"
+            type="button"
+            class="icon-btn voice-btn"
+            :class="{ 'is-recording': speechActive }"
+            :title="speechActive ? '停止语音听写' : '语音输入（中文/英文识别）'"
+            :aria-label="speechActive ? '停止语音输入' : '开始语音输入'"
+            @click="toggleVoiceDictation"
+          >
+            <OpusIcon name="sparkle" />
+          </button>
           <button
             type="button"
             class="safety-badge"
@@ -1088,12 +2143,22 @@ async function retryTurn(msg: ChatMessage) {
             <OpusIcon name="chevD" class="trigger-chev" />
           </button>
           <button
+            v-if="isStreaming && (draft.trim() || queuedFiles.length || queuedContexts.length)"
+            type="button"
+            class="btn btn-subtle btn-sm queue-add-btn"
+            title="加入待发队列（生成结束后自动发送）"
+            @click="handleSubmit"
+          >
+            <OpusIcon name="plus" />
+            <span>排队</span>
+          </button>
+          <button
             type="button"
             class="send"
             :class="{ stop: isStreaming }"
             :disabled="sending || (!isStreaming && !draft.trim() && !queuedFiles.length && !queuedContexts.length)"
             :aria-label="isStreaming ? '中止当前生成' : '发送消息'"
-            @click="handleSubmit"
+            @click="isStreaming ? stopStreamingRun() : handleSubmit()"
           >
             <Transition name="send-icon">
               <OpusIcon :key="String(isStreaming)" :name="isStreaming ? 'stop' : 'arrowUp'" />
@@ -1109,7 +2174,7 @@ async function retryTurn(msg: ChatMessage) {
         role="dialog"
         :aria-label="panel === 'model' ? '模型与思考强度' : panel === 'attach' ? '添加上下文' : '执行权限'"
         class="run-popover"
-        :class="panel === 'model' ? 'is-model' : panel === 'attach' ? 'is-attach' : 'is-permissions'"
+        :class="`is-${panel}`"
         @toggle="onPopoverToggle"
       >
         <template v-if="panel === 'attach'">
@@ -1253,6 +2318,88 @@ async function retryTurn(msg: ChatMessage) {
                 </button>
               </div>
             </div>
+            <button
+              type="button"
+              class="picker-option"
+              @pointerenter="closeSubmenu"
+              @click="closeSettings(); promptLibraryOpen = true"
+            >
+              <OpusIcon name="sparkle" class="menu-lead" />
+              <span class="option-title">自定义 Prompt 模板</span>
+              <span class="picker-effort num">{{ customPrompts.length }} 条</span>
+            </button>
+            <div v-if="rulesList.length" class="picker-item">
+              <button
+                type="button"
+                class="picker-option"
+                :class="{ 'is-sub-open': hoveredAttachKey === 'rules' || inlineAttachKey === 'rules' }"
+                data-attach-key="rules"
+                @pointerenter="onAttachRowPointerEnter('rules', $event)"
+                @pointerleave="scheduleSubClose"
+                @click="toggleAttachRow('rules', $event.currentTarget as HTMLElement)"
+              >
+                <OpusIcon name="note" class="menu-lead" />
+                <span class="option-title">项目规则预设 ({{ rulesList.length }})</span>
+                <OpusIcon name="chevR" class="option-tail" />
+              </button>
+              <div v-if="inlineAttachKey === 'rules'" class="effort-inline">
+                <button
+                  v-for="rule in rulesList"
+                  :key="rule.id"
+                  type="button"
+                  class="picker-option"
+                  :title="rule.source"
+                  @click="addContextItem({ id: rule.id, kind: 'dir', icon: 'note', label: rule.title, payload: `项目规范（${rule.source}）：\n${rule.content.slice(0, 1200)}` })"
+                >
+                  <OpusIcon name="note" class="menu-lead" />
+                  <span class="option-title">{{ rule.title }}</span>
+                  <span class="picker-badge">{{ rule.source }}</span>
+                </button>
+              </div>
+            </div>
+            <div v-if="mcpList.length || caps.includes('mcp')" class="picker-item">
+              <button
+                type="button"
+                class="picker-option"
+                :class="{ 'is-sub-open': hoveredAttachKey === 'mcp' || inlineAttachKey === 'mcp' }"
+                data-attach-key="mcp"
+                @pointerenter="onAttachRowPointerEnter('mcp', $event)"
+                @pointerleave="scheduleSubClose"
+                @click="toggleAttachRow('mcp', $event.currentTarget as HTMLElement)"
+              >
+                <OpusIcon name="api" class="menu-lead" />
+                <span class="option-title">MCP 工具服务</span>
+                <span class="picker-effort num">{{ mcpConnectedCount }}/{{ mcpList.length }}</span>
+                <OpusIcon name="chevR" class="option-tail" />
+              </button>
+              <div v-if="inlineAttachKey === 'mcp'" class="effort-inline">
+                <div class="mcp-sub-head">
+                  <span>服务状态</span>
+                  <button
+                    type="button"
+                    class="head-icon-btn"
+                    title="刷新 MCP 服务器状态"
+                    aria-label="刷新 MCP 状态"
+                    @click.stop="refreshMcp"
+                  >
+                    <OpusIcon name="sync" />
+                  </button>
+                </div>
+                <div v-if="!mcpList.length" class="mcp-empty faint">当前运行时暂未报告已配置的 MCP 服务。</div>
+                <div v-for="srv in mcpList" :key="srv.name" class="mcp-row">
+                  <div class="mcp-row-top">
+                    <span class="mcp-name">{{ srv.name }}</span>
+                    <span class="mcp-badge" :class="srv.status === 'connected' || srv.status === 'ready' ? 'is-ok' : 'is-warn'">
+                      {{ srv.status || 'unknown' }}
+                    </span>
+                  </div>
+                  <p v-if="srv.error" class="mcp-err">{{ srv.error }}</p>
+                  <p v-else-if="srv.tools?.length" class="mcp-tools faint">
+                    {{ srv.tools.length }} 个工具：{{ srv.tools.slice(0, 6).join(', ') }}{{ srv.tools.length > 6 ? '…' : '' }}
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="popover-footer">
             <p class="picker-footer-note">
@@ -1331,6 +2478,53 @@ async function retryTurn(msg: ChatMessage) {
                   <span class="option-desc">{{ cmd.desc }}</span>
                 </span>
               </button>
+            </template>
+            <template v-else-if="hoveredAttachKey === 'rules'">
+              <button
+                v-for="rule in rulesList"
+                :key="rule.id"
+                type="button"
+                class="picker-option picker-option--rich"
+                @click="addContextItem({ id: rule.id, kind: 'dir', icon: 'note', label: rule.title, payload: `项目规范（${rule.source}）：\n${rule.content.slice(0, 1200)}` })"
+              >
+                <OpusIcon name="note" class="option-lead" />
+                <span class="option-copy">
+                  <span class="option-title">{{ rule.title }}</span>
+                  <span class="option-desc">{{ rule.source }}</span>
+                </span>
+              </button>
+            </template>
+            <template v-else-if="hoveredAttachKey === 'mcp'">
+              <div class="mcp-sub-head">
+                <span>MCP 工具服务器</span>
+                <button
+                  type="button"
+                  class="head-icon-btn"
+                  title="刷新 MCP 服务器状态"
+                  aria-label="刷新 MCP 状态"
+                  @click.stop="refreshMcp"
+                >
+                  <OpusIcon name="sync" />
+                </button>
+              </div>
+              <div v-if="!mcpList.length" class="mcp-empty faint">
+                当前运行时暂未报告已配置的 MCP 服务。
+              </div>
+              <div v-for="srv in mcpList" :key="srv.name" class="mcp-row">
+                <div class="mcp-row-top">
+                  <span class="mcp-name">{{ srv.name }}</span>
+                  <span
+                    class="mcp-badge"
+                    :class="srv.status === 'connected' || srv.status === 'ready' ? 'is-ok' : 'is-warn'"
+                  >
+                    {{ srv.status || 'unknown' }}
+                  </span>
+                </div>
+                <p v-if="srv.error" class="mcp-err">{{ srv.error }}</p>
+                <p v-else-if="srv.tools?.length" class="mcp-tools faint">
+                  {{ srv.tools.length }} 个工具：{{ srv.tools.slice(0, 6).join(', ') }}{{ srv.tools.length > 6 ? '…' : '' }}
+                </p>
+              </div>
             </template>
           </div>
         </template>
@@ -1545,9 +2739,47 @@ async function retryTurn(msg: ChatMessage) {
               <small>加密中继 · Core</small>
             </div>
           </details>
+          <div v-if="effectiveNode" class="trust-policy-section">
+            <div class="trust-sec-head">
+              <span>节点信任命令白名单</span>
+              <span class="trust-sec-count num">{{ nodeTrustPatterns.length }}</span>
+            </div>
+            <div v-if="nodeTrustPatterns.length" class="trust-chips">
+              <span v-for="pat in nodeTrustPatterns" :key="pat" class="trust-chip" :title="pat">
+                <code>{{ pat }}</code>
+                <button
+                  type="button"
+                  class="trust-chip-x"
+                  :aria-label="`移除信任规则 ${pat}`"
+                  @click="handleRemoveTrustPattern(pat)"
+                >×</button>
+              </span>
+            </div>
+            <p v-else class="trust-empty faint">
+              尚未添加自动放行命令；在低/中风险审批弹窗可点击「始终信任」。
+            </p>
+            <form class="trust-add-form" @submit.prevent="handleAddTrustPattern">
+              <input
+                v-model="newTrustPattern"
+                type="text"
+                class="input trust-add-input"
+                placeholder="命令前缀如 npm test"
+                aria-label="新增信任命令前缀"
+              />
+              <button type="submit" class="btn btn-subtle btn-sm" :disabled="!newTrustPattern.trim()">添加</button>
+            </form>
+          </div>
         </template>
       </div>
     </div>
+    <PromptLibraryModal
+      :open="promptLibraryOpen"
+      :prompts="customPrompts"
+      @close="promptLibraryOpen = false"
+      @save="handleSaveCustomPrompt"
+      @remove="handleRemoveCustomPrompt"
+      @use-prompt="handleUseCustomPrompt"
+    />
     <dialog
       ref="lightboxEl"
       class="img-lightbox"
@@ -1570,14 +2802,24 @@ async function retryTurn(msg: ChatMessage) {
 
 <style scoped>
 .thread-root {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   min-width: 0;
   height: 100%;
 }
 .thread-root:not(.thread-mobile) { flex: 1; height: auto; }
+.thread-root :deep(.msgs),
+.thread-root :deep(.mmsgs) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+}
+.thread-root :deep(.composer),
+.thread-root :deep(.mcomposer) {
+  flex: none;
+}
 .msgs:has(.thread-empty) { display: grid; align-items: safe center; }
 .msgs .thread-empty { padding: 24px 0; }
 .msgs .thread-empty h4 { font-size: clamp(18px, 2cqi, 24px); letter-spacing: -.025em; }
@@ -2210,7 +3452,13 @@ async function retryTurn(msg: ChatMessage) {
   color: var(--text-3);
 }
 .msg-text { white-space: pre-wrap; word-break: break-word; color: inherit; }
-.msg.agent .bubble, .mmsg.agent .bubble { color: var(--text); }
+.msg.agent, .mmsg.agent { min-width: 0; }
+.msg.agent .bubble, .mmsg.agent .bubble {
+  color: var(--text);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 .msg.user .bubble, .mmsg.user .bubble { color: var(--accent-ink); }
 :deep(.msg.user .artifact-pill),
 :deep(.mmsg.user .artifact-pill) {
@@ -2219,9 +3467,10 @@ async function retryTurn(msg: ChatMessage) {
 }
 .msg-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px 8px;
   margin-top: 8px;
   padding-top: 6px;
   border-top: 1px solid var(--line);
@@ -2232,9 +3481,11 @@ async function retryTurn(msg: ChatMessage) {
 }
 .msg-foot-actions {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   margin-left: auto;
+  max-width: 100%;
 }
 .chip--image {
   padding-left: 4px;
@@ -2386,4 +3637,425 @@ dialog.img-lightbox::backdrop {
   cursor: pointer;
 }
 .chip-x:hover { color: var(--text); }
+
+/* 系统通知气泡、工具卡片容器、分支/回滚/队列与内联 @ / 菜单样式 */
+.sys-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  margin: 4px auto;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.sys-notice .i { width: 13px; height: 13px; color: var(--accent); flex: none; }
+.tool-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.turn-diff-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.diff-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.diff-pill:hover { border-color: var(--accent-line); color: var(--text); }
+.diff-pill .i { width: 11px; height: 11px; color: var(--accent); }
+.reverted-tag {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 6px;
+}
+.user-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 80%;
+  min-width: 0;
+}
+.mmsg.user .user-col { max-width: 82%; }
+:global(.dock) .msg.user .user-col,
+.thread-compact .msg.user .user-col { max-width: 92%; }
+.msg.user .user-col > .bubble,
+.mmsg.user .user-col > .bubble {
+  max-width: 100%;
+}
+.user-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+  padding-right: 2px;
+}
+.user-hover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.72;
+  transition: opacity var(--dur-1);
+}
+.msg.user:hover .user-hover-actions,
+.msg.user:focus-within .user-hover-actions,
+.mmsg.user .user-hover-actions {
+  opacity: 1;
+}
+.msg.user .user-hover-actions .btn-subtle,
+.mmsg.user .user-hover-actions .btn-subtle {
+  color: var(--text-3);
+}
+.msg.user .user-hover-actions .btn-subtle:hover,
+.mmsg.user .user-hover-actions .btn-subtle:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.branch-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-2);
+}
+.branch-nav-btn {
+  padding: 0 3px;
+  color: var(--text-2);
+  cursor: pointer;
+  font-weight: 600;
+}
+.branch-nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+.follow-queue {
+  margin: 0 auto 6px;
+  width: min(760px, 100%);
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  display: grid;
+  gap: 5px;
+}
+.queue-hdr {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.queue-ic { width: 12px; height: 12px; color: var(--accent); }
+.queue-items { display: grid; gap: 4px; }
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  background: var(--solid);
+  border: 1px solid var(--line);
+}
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.queue-edit-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  font-size: 12px;
+}
+.queue-icon-btn { width: 24px; height: 24px; flex: none; }
+.queue-add-btn { height: 28px; padding: 0 9px; font-size: 11.5px; flex: none; }
+
+.composer-box, .mcomposer .box { position: relative; }
+.mention-popover {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  z-index: 45;
+  max-height: 240px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--solid);
+  box-shadow: var(--shadow-pop);
+}
+.mention-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-block-size: 28px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.mention-option:hover,
+.mention-option.is-active {
+  background: var(--surface-2);
+}
+.mention-ic { width: 13px; height: 13px; color: var(--text-3); flex: none; }
+.mention-option.is-active .mention-ic { color: var(--accent); }
+.mention-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 550;
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: right;
+}
+.msg-parts {
+  display: grid;
+  gap: 8px;
+}
+.msg-parts .thought-box {
+  margin-bottom: 0;
+}
+.voice-btn.is-recording {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.mcp-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--line);
+}
+.mcp-empty { padding: 14px 12px; font-size: 12px; text-align: center; }
+.mcp-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+}
+.mcp-row:last-child { border-bottom: 0; }
+.mcp-row-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mcp-name { font-weight: 600; font-size: 12px; color: var(--text); }
+.mcp-badge {
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  font-size: 10.5px;
+}
+.mcp-badge.is-ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.mcp-badge.is-warn { background: var(--warn-soft); color: var(--warn); }
+.mcp-tools, .mcp-err { margin: 0; font-size: 11px; }
+.mcp-err { color: var(--warn); }
+
+.thread-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  flex: none;
+}
+.ts-ic { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.ts-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--solid);
+  color: var(--text);
+  font-size: 12px;
+}
+.ts-count {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ts-nav-btn { width: 24px; height: 24px; }
+.msg-foot-actions .msg-foot-secondary {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-1);
+}
+.msg.agent:hover .msg-foot-actions .msg-foot-secondary,
+.msg.agent:focus-within .msg-foot-actions .msg-foot-secondary,
+.mmsg.agent .msg-foot-actions .msg-foot-secondary,
+.msg-foot-actions .msg-foot-secondary.is-bookmarked {
+  opacity: 1;
+  pointer-events: auto;
+}
+.bookmark-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent-soft) 35%, var(--surface-1));
+  flex: none;
+  overflow-x: auto;
+}
+.bm-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  flex: none;
+}
+.bm-lead .i { width: 12px; height: 12px; }
+.bm-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.bm-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-full);
+  background: var(--solid);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bm-chip:hover { color: var(--accent); }
+.msg.is-search-hit .bubble,
+.mmsg.is-search-hit .bubble,
+.sys-notice.is-search-hit {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.msg-foot-actions .is-bookmarked {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.draft-token-pill {
+  padding: 2px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.draft-trim-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.draft-trim-pill:hover { filter: brightness(0.96); }
+.draft-trim-pill .i { width: 11px; height: 11px; }
+.trust-policy-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+.trust-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.trust-sec-count {
+  padding: 0 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.trust-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.trust-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 11px;
+}
+.trust-chip code { font-family: var(--mono); }
+.trust-chip-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+}
+.trust-chip-x:hover { color: var(--warn); }
+.trust-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.trust-add-form {
+  display: flex;
+  gap: 4px;
+}
+.trust-add-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+}
 </style>

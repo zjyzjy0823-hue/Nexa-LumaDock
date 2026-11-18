@@ -5,7 +5,7 @@ import { build } from 'esbuild'
 const bundle = await build({ entryPoints: ['src/services/diagnostics.ts'], bundle: true, write: false, platform: 'node', format: 'esm',
   define: { 'import.meta.env.VITE_API_BASE_URL': '""' } })
 const { getDiagnostics, diagnosticsRows, diagnosticsText } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
-const value = { appVersion: '0.6.1', mode: 'local', backend: 'healthy', database: { kind: 'sqlite', status: 'ok' }, workspaceId: 'workspace',
+const value = { appVersion: '0.7.0', mode: 'local', backend: 'healthy', database: { kind: 'sqlite', status: 'ok' }, workspaceId: 'workspace',
   core: { status: 'disconnected', url: null, workspaceId: null, clientId: null, tokenConfigured: false },
   sync: { pending: 2, rejected: 1, conflicts: 3, inFlight: 4, lastSuccessAt: null, lastError: null },
   protocol: { local: 3, core: null, compatible: null }, automation: { local: { scheduler: false, worker: false }, core: { scheduler: null, worker: null } } }

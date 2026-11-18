@@ -77,7 +77,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "studiolo", "version": "0.6.1"}
+                            assert health.json() == {"status": "ok", "service": "studiolo", "version": "0.7.0"}
                             break
                     except httpx.RequestError:
                         pass
