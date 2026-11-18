@@ -1,0 +1,35 @@
+services:
+  frps:
+    image: snowdreamtech/frps:0.61.1
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./frps.toml:/etc/frp/frps.toml:ro
+
+  edge-relay:
+    build:
+      context: ../edge-relay
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: "8090"
+      STUDIOLO_EDGE_SECRET: "${STUDIOLO_EDGE_SECRET:?请设置与 Mac Core 一致的 32 位以上 STUDIOLO_EDGE_SECRET}"
+      STUDIOLO_EDGE_DATA_DIR: "/data/edge-blobs"
+      STUDIOLO_EDGE_TTL_SECONDS: "3600"
+      STUDIOLO_EDGE_CORS_ORIGINS: "${STUDIOLO_EDGE_CORS_ORIGINS:-https://studiolo.example.com}"
+    volumes:
+      - edge_blobs:/data/edge-blobs
+
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  edge_blobs:
+  caddy_data:
+  caddy_config:

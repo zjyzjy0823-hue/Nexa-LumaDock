@@ -33,6 +33,8 @@ jobs:
       - run: npm run test:automation
       - run: npm run test:local-time
       - run: npm run test:data-bounded-reads
+      - run: npm run test:fleet
+      - run: npm run test:desktop
       - run: node --test tests/diagnostics.test.mjs
   contracts:
     runs-on: ubuntu-latest
@@ -149,6 +151,24 @@ jobs:
       - run: python -m compileall agent-adapters/openclaw
       - run: python -m pytest -q
         working-directory: agent-adapters/openclaw
+  agent-node-and-edge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            agent-node/requirements.txt
+            deploy/edge-relay/requirements.txt
+      - run: python -m pip install -r backend/requirements.txt -r agent-node/requirements.txt -r deploy/edge-relay/requirements.txt
+      - run: python -m compileall agent-node deploy/edge-relay
+      - run: python -m pytest -q tests
+        working-directory: agent-node
+      - run: python -m pytest -q test_edge_relay.py
+        working-directory: deploy/edge-relay
   desktop-windows:
     runs-on: windows-latest
     steps:

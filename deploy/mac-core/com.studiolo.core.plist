@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.studiolo.core</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/Studiolo/backend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STUDIOLO_MODE</key>
+    <string>core</string>
+    <key>DATABASE_URL</key>
+    <string>postgresql+psycopg://studiolo:CHANGE_ME@127.0.0.1:5432/studiolo</string>
+    <key>JWT_SECRET</key>
+    <string>REPLACE_WITH_64_HEX_JWT_SECRET</string>
+    <key>CORS_ORIGINS</key>
+    <string>https://studiolo.example.com</string>
+    <key>ALLOW_REGISTRATION</key>
+    <string>false</string>
+    <key>STUDIOLO_DATA_DIR</key>
+    <string>/Users/YOU/.studiolo-core/data</string>
+    <key>STUDIOLO_EDGE_RELAY_URL</key>
+    <string>https://studiolo.example.com</string>
+    <key>STUDIOLO_EDGE_SECRET</key>
+    <string>REPLACE_WITH_EDGE_SECRET</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/Studiolo/backend/.venv/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>app.main:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8000</string>
+    <string>--no-access-log</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.studiolo-core/logs/core.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.studiolo-core/logs/core.err.log</string>
+</dict>
+</plist>

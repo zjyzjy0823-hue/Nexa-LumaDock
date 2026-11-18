@@ -67,31 +67,28 @@
 | DeepSeek Harness (`dsh`) | 采用插件化本地架构，社区配套有 `codsh` / `dsh-cli` / MCP Gateway（`dsh-agent-gateway`）及带鉴权的 HTTP 外观插件（`dsh-gateway-server`）。 | 本机节点经受控 CLI Wrapper（`dsh-cli`/JSON 输出）或本地带鉴权 HTTP/MCP 网关接入，不向公网裸露内部 HTTP 端口。 |
 | Google Antigravity (`antigravity` / `agy`) | 提供 **`agy`** 终端 CLI 与官方 **`google-antigravity` Python SDK**（`Agent` / `LocalAgentConfig` 异步上下文，`agent.chat()` 实时流式输出 `response`、`response.thoughts` 与 `response.tool_calls`）。 | 在运行 Python 环境的桌面或服务器节点上直接以 `google-antigravity` Python SDK 包装为 `AgentAdapter` 流式 Provider，保留只读/读写能力显式开关。 |
 
-### 个人多设备部署拓扑（Mac Core + 公网 VPS 边缘入口 + 多节点 Agent Fleet）
+### 个人多设备部署拓扑（Mac Core + frp/VPS 边缘入口 + 控制/数据双面分离）
 
-针对你的实际拓扑（**Core 运行于 macOS；外加 1 台 Windows + 2 台手机 + 2 台 OCI VPS + 1 台腾讯云 VPS**），核心架构为「**Mac 常驻 Core 控制面与中继 + 公网 VPS TLS 边缘反向入口 + 全端 Agent Node 就地执行**」：
+针对你的实际拓扑（**Core 运行于 macOS；外加 1 台 Windows + 2 台手机 + 2 台 OCI VPS + 1 台腾讯云 VPS；常用 `frp` 内网穿透**），核心架构为「**Mac Core 轻控制面与数据库 + `frp` 控制隧道 + 云端 Edge Blob Relay / LAN 直传双通道文件总线**」：
 
 ```text
-  移动端 (Android ×2) / 外网设备 (/chat & Sync v3)
-            │  HTTPS + 已鉴权 TLS WebSocket（经公网入口或私网直连）
-            ▼
-  边缘公网入口（腾讯云 / OCI VPS 仅做 TLS 终结与反向隧道转发，或走 Tailscale 私网）
-            │  加密反向隧道（如 frp / Cloudflare Tunnel / SSH 隧道）
-            ▼
-  macOS 主机：Studiolo Core (PostgreSQL + Automation Engine + Agent Relay)
-   ├── 负责个人数据 Sync v3、自动化调度与全舰队在网状态注册（聊天正文不落库）
-   └── 本机同时挂载 Mac Agent Node（codex / opencode / hermes / dsh / antigravity）
-            ▲                   ▲                   ▲
-            │ 反向认证 WSS      │ 反向认证 WSS      │ 反向认证 WSS
-   ┌────────┴────────┐ ┌────────┴────────┐ ┌────────┴────────┐
-   │  Windows 桌面   │ │  OCI VPS #1/#2  │ │  腾讯云 VPS      │
-   │ 桌面 Sidecar     │ │ 轻量化 Node CLI │ │ 轻量化 Node CLI │
-   │ codex/opencode/ │ │ hermes/opencode/│ │ hermes/dsh/     │
-   │ dsh/antigravity │ │ dsh             │ │ antigravity     │
+  移动端 (Android ×2) / 外网设备 (/chat、/space & Sync v3)
+            │
+            ├──[控制面 & Sync] HTTPS + WSS ──▶ 公网 VPS (Caddy/Nginx TLS + frps) ──frpc──▶ Mac Core (PostgreSQL + Relay Hub)
+            │                                                                                ▲
+            └──[大文件数据面] 直连 LAN / frp xtcp P2P 优先；不可直连则走同台 VPS 上的 Edge Blob Relay（客户端 AEAD 密文分块，零回流 Mac）
+                                                                                             │
+   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐                               │
+   │  Windows 桌面   │ │  OCI VPS #1/#2  │ │  腾讯云 VPS      │ ───── outbound WSS (sn_live_) ─┘
+   │ agent-node      │ │ frps + EdgeRelay│ │ 或轻量 Node CLI │
+   │ codex/opencode/ │ │ + agent-node    │ │ hermes/dsh/agy  │
+   │ dsh/antigravity │ │                 │ │                 │
    └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
-1. **Mac 无公网 IP 时的外网穿透策略**：macOS 通常位于家庭/办公 NAT 之后，手机和异地服务器连回 Mac Core 时，推荐用 **1 台腾讯云或 OCI VPS 做纯反向入口（HTTPS/WSS TLS 终结 + 加密隧道回源到 Mac 回环口 Core）**，或全设备接入同一 Tailscale 私网（并保持内网 TLS 证书验证），两者均可做到外网手机随时连入 Mac Core，且不用把 Mac 裸露到公网。
+1. **Mac 无公网 IP 时的 `frp` + 双面分离策略**：
+   - **轻控制面走 `frps → frpc → Mac Core`**：VPS 终结公网 HTTPS/WSS 后，仅将体积小、低延迟的 Sync v3、节点心跳、Chat 流式增量、审批信令与 `ArtifactRef` 文件票据经 `frp` 转入 Mac 回环口（`127.0.0.1:8000`）。
+   - **大文件数据面不经 Mac 二跳**：无论是 `/chat` 互传文件/截图/构建产物还是 `/space` 共享文件，均采用客户端 AEAD 预加密的 `1–4 MiB` 内容寻址分块 HTTP 流（含 SHA-256 校验与 `Range` 断点续传）；优先尝试同局域网 `LAN` 或 `frp xtcp` 直连端点互传，不可直连或收件方休眠时流式写入公网 VPS 旁的 **Edge Blob Relay**（仅存密文分块与 TTL，拿不到密钥与明文），避免 Mac 住宅窄带上行成为全端瓶颈。
 2. **Mac Host 常驻与同机隔离要求**：
    - **防休眠与备份**：Core 落在 Mac 上后，Mac 即为全端同步与 Agent 调度中心，需关闭自动休眠（电源常开 + `launchd` 守护）并定期向 OCI / 腾讯云加密异地备份 PostgreSQL 与 Core 配置。
    - **同机逻辑隔离**：Mac 上的 Core 服务与 Mac 本机 `Agent Node` 使用独立身份与目录边界——远端/手机访问 Mac 文件或执行命令仍必须经过 `Node Token` 与本地不可远端覆盖的 `allowedRoots` 目录白名单及默认人工审批。

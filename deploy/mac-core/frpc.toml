@@ -1,0 +1,28 @@
+serverAddr = "your.vps.ip.or.domain"
+serverPort = 7000
+
+auth.method = "token"
+# 必须与 VPS deploy/vps-edge/frps.toml 完全一致
+auth.token = "REPLACE_WITH_STRONG_FRP_TOKEN"
+
+transport.tls.enable = true
+transport.heartbeatInterval = 30
+transport.heartbeatTimeout = 90
+
+# L1：Mac Core 控制面（仅监听 Mac 本机 127.0.0.1:8000，由 frpc 穿透到 VPS Caddy 终结 TLS）
+[[proxies]]
+name = "studiolo-core"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8000
+remotePort = 8080
+transport.useEncryption = true
+transport.useCompression = true
+
+# L2 可选：节点直传端口通过 frp xtcp P2P 打洞直连，未打通时自动无缝降级到 VPS Edge Relay
+[[proxies]]
+name = "studiolo-mac-direct-xtcp"
+type = "xtcp"
+secretKey = "REPLACE_WITH_XTCP_SECRET"
+localIP = "127.0.0.1"
+localPort = 49100

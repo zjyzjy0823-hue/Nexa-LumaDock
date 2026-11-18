@@ -1,0 +1,25 @@
+studiolo.example.com {
+	encode zstd gzip
+
+	# L2 大文件加密分块中继：直走 VPS Edge Relay，不回源占满家庭宽带
+	handle /api/edge/blobs/* {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	# L1 控制面、Sync v3、WSS 多端协同总线：经 frps 隧道转发至家中 Mac Core
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

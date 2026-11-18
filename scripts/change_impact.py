@@ -73,7 +73,7 @@ def classify(path, metadata=False):
         return "MEDIUM", "validation-tooling" if path.startswith(".github/") else "release-metadata"
     if path.startswith(("docs/",)) or path.endswith(".md"):
         return "LOW", "documentation"
-    if path.startswith(("backend/tests/", "tests/", "device-client/tests/", "agent-adapters/openclaw/tests/")) or path == "scripts/smoke-backend-sidecar.py":
+    if path.startswith(("backend/tests/", "tests/", "device-client/tests/", "agent-adapters/openclaw/tests/", "agent-node/tests/", "deploy/edge-relay/test_")) or path == "scripts/smoke-backend-sidecar.py":
         return "MEDIUM", "tests"
     for boundary, patterns in RULES:
         if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns):
@@ -88,7 +88,7 @@ def classify(path, metadata=False):
         return "MEDIUM", "frontend-contract"
     if path.startswith("src/") or path.startswith("public/"):
         return "LOW", "diagnostics-presentation" if "Diagnostics" in path or "diagnostics" in path else "frontend-presentation"
-    if path.startswith(("device-client/", "agent-adapters/")):
+    if path.startswith(("device-client/", "agent-adapters/", "agent-node/", "deploy/")):
         return "MEDIUM", "client-service"
     return "HIGH", "unknown"
 

@@ -1,6 +1,9 @@
 node_modules/
 output/v060*
 .venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 scripts/__pycache__/
 tests/__pycache__/
 dist/

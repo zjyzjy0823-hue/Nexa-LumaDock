@@ -1,0 +1,17 @@
+[Unit]
+Description=Studiolo Remote AgentNode Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/studiolo/agent-node
+Environment=STUDIOLO_NODE_TOKEN=sn_live_REPLACE_WITH_ISSUED_NODE_TOKEN
+ExecStart=/opt/studiolo/agent-node/.venv/bin/python -m agent_node --config /etc/studiolo/node-config.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

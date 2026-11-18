@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.studiolo.agent-node</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/Studiolo/agent-node</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STUDIOLO_NODE_TOKEN</key>
+    <string>sn_live_REPLACE_WITH_ISSUED_NODE_TOKEN</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/Studiolo/agent-node/.venv/bin/python</string>
+    <string>-m</string>
+    <string>agent_node</string>
+    <string>--config</string>
+    <string>/Users/YOU/.studiolo-core/node-config.json</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.studiolo-core/logs/node.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.studiolo-core/logs/node.err.log</string>
+</dict>
+</plist>

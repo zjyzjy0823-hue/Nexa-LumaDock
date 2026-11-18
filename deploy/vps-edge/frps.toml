@@ -1,0 +1,15 @@
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+auth.method = "token"
+# 部署前请务必替换为高强度随机密钥（例如 openssl rand -hex 32），且与 Mac Core frpc.toml 保持一致
+auth.token = "REPLACE_WITH_STRONG_FRP_TOKEN"
+
+transport.tcpMux = true
+transport.heartbeatTimeout = 90
+transport.tls.force = true
+
+# 允许来自 Mac Core 的 127.0.0.1 隧道回环监听（不对外直开端口，全部经由 Caddy TLS 终结）
+allowPorts = [
+  { start = 8080, end = 8089 },
+]
