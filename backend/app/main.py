@@ -18,6 +18,7 @@ from .api.data.routes import router as data_router, v1_router as v1_data_router
 from .api.devices.routes import router as devices_router, legacy_router as legacy_devices_router, runtime_router as device_runtime_router
 from .api.websites import router as websites_router
 from .api.agent_actions import router as agent_actions_router
+from .fleet.routes import router as fleet_router, ws_router as fleet_ws_router
 from .realtime.events import Event
 from .resources import resource_path
 from .config import load_runtime_config
@@ -68,14 +69,16 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=list(runtime_config.cors_origins),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Chunk-Sha256", "Range"],
+    expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
 )
 for router in (
     auth.router, auth.v1_router, dashboard.router, api_keys.router, websites_router,
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
     v1_data_router, v1_automation_router, automation_client_router, automation_event_router, settings.router, ledger.router,
     workspace.router, clients.router, client_runtime.router, core.router, sync.router, agent_actions_router,
+    fleet_router, fleet_ws_router,
 ):
     app.include_router(router)
 

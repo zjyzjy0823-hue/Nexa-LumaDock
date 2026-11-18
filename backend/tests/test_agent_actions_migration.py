@@ -93,7 +93,7 @@ def test_0014_upgrade_preserves_data_defaults_and_downgrade(tmp_path):
         assert "agent_action_logs" in inspect(db).get_table_names()
         assert (
             db.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0019_local_automation_events"
+            == "0020_fleet_nodes_and_blobs"
         )
         for table in tables:
             after = db.execute(text(f'SELECT * FROM "{table}"')).mappings().all()

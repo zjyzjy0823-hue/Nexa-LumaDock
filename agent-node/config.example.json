@@ -1,0 +1,23 @@
+{
+  "coreUrl": "https://core.your-domain.example",
+  "nodeTokenEnv": "STUDIOLO_NODE_TOKEN",
+  "allowedRoots": [
+    "/srv/projects",
+    "D:\\xiangmu"
+  ],
+  "directTransfer": {
+    "enabled": true,
+    "bindHost": "0.0.0.0",
+    "port": 18910,
+    "advertiseUrls": []
+  },
+  "providers": {
+    "codex": { "enabled": true, "command": "codex" },
+    "opencode": { "enabled": true, "serveUrl": "http://127.0.0.1:4096" },
+    "hermes": { "enabled": true, "command": "hermes", "mode": "acp" },
+    "antigravity": { "enabled": true, "command": "agy" },
+    "dsh": { "enabled": true, "command": "dsh" },
+    "openclaw": { "enabled": false, "gatewayUrl": "ws://127.0.0.1:18789" },
+    "mock": { "enabled": false }
+  }
+}

@@ -1,0 +1,170 @@
+"""确定性 Mock 适配器：用于 CI 无外网/无 CLI 环境测试及离线交互验证。"""
+
+import asyncio
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from ..config import ensure_allowed_path
+from ..worktree import create_session_worktree
+from .base import (
+    AdapterProbe,
+    AgentAdapter,
+    ApprovalCallback,
+    EventEmitter,
+    build_token_usage_event,
+    estimate_tokens,
+)
+
+
+MOCK_MODELS = (
+    ("mock-fast", "Mock Fast", ("low", "medium")),
+    ("mock-balanced", "Mock Balanced", ("low", "medium", "high")),
+    ("mock-deep", "Mock Deep", ("medium", "high", "xhigh")),
+)
+MOCK_CONTEXT_WINDOWS = {
+    "mock-deep": 200000,
+    "mock-balanced": 128000,
+    "mock-fast": 64000,
+    "mock-lite": 32000,
+}
+
+
+class MockAdapter(AgentAdapter):
+    provider = "mock"
+
+    def __init__(self, allowed_roots: tuple[Path, ...]) -> None:
+        self.allowed_roots = allowed_roots
+        self._sessions: dict[str, dict[str, Any]] = {}
+        self._histories: dict[str, list[dict[str, Any]]] = {}
+        self._active_runs: dict[str, asyncio.Event] = {}
+
+    async def probe(self) -> AdapterProbe:
+        return AdapterProbe(
+            provider=self.provider,
+            version="mock-1.0",
+            status="ready",
+            capabilities=("chat", "history", "approval", "worktree", "artifacts", "models", "read-only"),
+        )
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        return [{"id": model_id, "label": label, "efforts": list(efforts)} for model_id, label, efforts in MOCK_MODELS]
+
+    async def list_sessions(self, *, page: int = 1, limit: int = 30) -> list[dict[str, Any]]:
+        items = list(self._sessions.values())
+        start = max(0, (page - 1) * limit)
+        return items[start : start + limit]
+
+    async def open_session(
+        self,
+        *,
+        cwd: str,
+        session_id: str | None = None,
+        use_worktree: bool = False,
+    ) -> dict[str, Any]:
+        safe_cwd = ensure_allowed_path(cwd, self.allowed_roots)
+        sid = session_id or f"mock-{uuid4().hex[:8]}"
+        effective_cwd = safe_cwd
+        worktree_path: str | None = None
+        if use_worktree:
+            wt = create_session_worktree(safe_cwd, sid, self.allowed_roots)
+            effective_cwd = wt
+            worktree_path = str(wt)
+        meta = {
+            "sessionId": sid,
+            "provider": self.provider,
+            "cwd": str(effective_cwd),
+            "worktreePath": worktree_path,
+            "title": f"Mock Session ({effective_cwd.name})",
+        }
+        self._sessions[sid] = meta
+        self._histories.setdefault(sid, [])
+        return meta
+
+    async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        items = self._histories.get(session_id, [])
+        return items[-limit:]
+
+    async def send_prompt(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        request_id: str,
+        emit: EventEmitter,
+        request_approval: ApprovalCallback,
+        attachments: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        settings = options or {}
+        model_id = settings.get("model") or "mock-balanced"
+        model = next((entry for entry in MOCK_MODELS if entry[0] == model_id), None)
+        if model is None:
+            raise ValueError("未知的 Mock 模型")
+        effort = settings.get("effort")
+        if effort and effort not in model[2]:
+            raise ValueError("所选 Mock 模型不支持该思考强度")
+
+        run_id = f"run-{uuid4().hex[:8]}"
+        cancel_ev = asyncio.Event()
+        self._active_runs[run_id] = cancel_ev
+        try:
+            thought_text = "Inspecting workspace constraints..."
+            hist_tokens = sum(estimate_tokens(str(item.get("text") or "")) for item in self._histories.get(session_id, []))
+            input_tokens = max(12, hist_tokens + estimate_tokens(text) + len(attachments or []) * 120)
+            reasoning_tokens = estimate_tokens(thought_text)
+            ctx_win = MOCK_CONTEXT_WINDOWS.get(model_id, 128000)
+
+            self._histories.setdefault(session_id, []).append({"role": "user", "text": text, "requestId": request_id})
+            await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
+            await emit({"type": "ThoughtDelta", "sessionId": session_id, "runId": run_id, "text": thought_text})
+
+            async def _finish_with_reply(reply_text: str) -> None:
+                out_tokens = max(8, estimate_tokens(reply_text)) + reasoning_tokens
+                self._histories[session_id].append({"role": "assistant", "text": reply_text, "runId": run_id})
+                await emit({"type": "TextDelta", "sessionId": session_id, "runId": run_id, "text": reply_text})
+                await emit(
+                    build_token_usage_event(
+                        session_id=session_id,
+                        run_id=run_id,
+                        request_id=request_id,
+                        scope="turn",
+                        input_tokens=input_tokens,
+                        output_tokens=out_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        total_tokens=input_tokens + out_tokens,
+                        context_window=ctx_win,
+                        model=model_id,
+                        source="estimated",
+                    )
+                )
+                await emit({"type": "Completed", "sessionId": session_id, "runId": run_id, "requestId": request_id})
+
+            if "RUN_CMD" in text:
+                call_id = f"call-{uuid4().hex[:6]}"
+                decision = await request_approval(session_id, call_id, "git status && pytest -q", "medium")
+                await emit({"type": "ToolCall", "sessionId": session_id, "runId": run_id, "callId": call_id, "name": "shell", "decision": decision})
+                if decision == "deny":
+                    await _finish_with_reply("已按指令拒绝执行命令。")
+                    return
+
+            if cancel_ev.is_set():
+                await emit({"type": "Failed", "sessionId": session_id, "runId": run_id, "code": "cancelled", "message": "Cancelled by user"})
+                return
+
+            att_note = f" (attachments={len(attachments)})" if attachments else ""
+            selection = ""
+            if settings:
+                selection = f" · {model[1]} / {effort or 'default'}"
+                if settings.get("readOnly"):
+                    selection += " / read-only"
+            await _finish_with_reply(f"[mock{selection}] Echo: {text}{att_note}")
+        finally:
+            self._active_runs.pop(run_id, None)
+
+    async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
+        if run_id and run_id in self._active_runs:
+            self._active_runs[run_id].set()
+        else:
+            for ev in self._active_runs.values():
+                ev.set()

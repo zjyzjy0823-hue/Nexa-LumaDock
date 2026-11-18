@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db, runtime_config
-from .models import Agent, ApiKey, Client, Device, User, utcnow
+from .models import Agent, AgentNode, ApiKey, Client, Device, User, utcnow
 from .runtime_mode import require_core_mode
 
 
@@ -59,6 +59,38 @@ def device_from_token(
     return device
 
 
+def authenticate_node_token(token: str, db: Session) -> AgentNode | None:
+    """校验 sn_live_ 节点凭证并确认未被吊销，供 HTTP 与 WebSocket 鉴权共用。"""
+    if not token.startswith("sn_live_"):
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return db.scalar(
+        select(AgentNode).where(AgentNode.token_hash == token_hash, AgentNode.revoked_at.is_(None))
+    )
+
+
+def node_from_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> AgentNode:
+    if credentials is None:
+        raise HTTPException(401, "Invalid node credential")
+    node = authenticate_node_token(credentials.credentials, db)
+    if node is None:
+        raise HTTPException(401, "Invalid node credential")
+    return node
+
+
+def authenticate_user_jwt(token: str, db: Session) -> User | None:
+    """校验用户 JWT 并返回 User，供 HTTP 与 WebSocket 首帧鉴权共用。"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = int(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        return None
+    return db.get(User, user_id)
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
@@ -87,14 +119,9 @@ def current_user(
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = int(payload["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
-    user = db.get(User, user_id)
+    user = authenticate_user_jwt(credentials.credentials, db)
     if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     return user
 
 

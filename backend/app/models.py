@@ -27,6 +27,7 @@ class User(Base):
     website_categories: Mapped[list["WebsiteCategory"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     devices: Mapped[list["Device"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     agents: Mapped[list["Agent"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    agent_nodes: Mapped[list["AgentNode"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     workspaces: Mapped[list["Workspace"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
@@ -524,3 +525,54 @@ class LocalMutation(Base):
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AgentNode(Base):
+    """跨设备 Agent 控制节点注册元数据（严禁持久化任何聊天正文或模型订阅密钥）。"""
+    __tablename__ = "agent_nodes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    platform: Mapped[str] = mapped_column(String(20), default="windows")
+    hostname: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    token_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 节点上报的只读工作目录白名单摘要与适配器能力；真实路径边界由节点本地配置强制裁决
+    allowed_roots_json: Mapped[list[str]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    adapters_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    transfer_endpoints_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    runtime_status: Mapped[str] = mapped_column(String(20), default="offline")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    user: Mapped[User] = relationship(back_populates="agent_nodes")
+
+
+class EncryptedBlob(Base):
+    """客户端预加密分块文件元数据（通用底座：服务 /chat 跨端附件传输及后续 Shared Space）。"""
+    __tablename__ = "encrypted_blobs"
+    __table_args__ = (
+        Index("ix_encrypted_blobs_workspace_purpose", "workspace_id", "purpose", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    uploader_kind: Mapped[str] = mapped_column(String(20), default="user")
+    uploader_id: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(32), default="fleet_artifact")
+    digest: Mapped[str] = mapped_column(String(64), index=True)
+    ciphertext_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    chunk_size: Mapped[int] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer)
+    storage_role: Mapped[str] = mapped_column(String(24), default="core")
+    storage_location: Mapped[str] = mapped_column(String(500), default="")
+    # 仅保留密文分块清单/非敏感校验元信息（服务端不存储也不解析明文文件或解密密钥）
+    manifest_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -1,0 +1,7 @@
+httpx>=0.28,<1
+websockets>=14,<17
+cryptography>=43,<47
+fastapi>=0.116,<1
+uvicorn>=0.35,<1
+PyJWT>=2.10,<3
+pytest>=8,<9
