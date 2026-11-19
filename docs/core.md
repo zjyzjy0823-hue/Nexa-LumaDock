@@ -61,6 +61,9 @@ v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`
 | `APP_TIMEZONE` | 默认 `Asia/Shanghai` | 默认 `Asia/Shanghai` |
 | `ALLOW_REGISTRATION` | 默认 `true` | 默认 `true`；设为 `false` 可关闭公开注册 |
 | `STUDIOLO_HOST` / `STUDIOLO_PORT` | Desktop 固定 `127.0.0.1:17800` | 入口默认 `0.0.0.0:8000`；Docker Compose 的端口映射和健康检查按 8000 配置 |
+| `STUDIOLO_SHARED_SPACE_ENABLED` | 默认 `true` | 默认 `true`；设为 `false` 可独立关闭 `/api/v1/spaces/*` 入口 |
+| `STUDIOLO_VAULT_MASTER_KEY` | 仅需启用 `protected` 受控机密档时配置（≥ 32 字节） | 启用 `protected` 受控机密档必填（≥ 32 字节高熵密钥，重启后不可随意更改）；未配置时 `standard` 与 `e2ee` 档仍可独立运行 |
+| `STUDIOLO_SPACE_BLOB_DIR` | 默认位于 `STUDIOLO_DATA_DIR/space-blobs` | 可选；Shared Space 分块文件持久化私有目录 |
 
 Core 也可在 `backend` 目录安装 `requirements-postgres.txt` 后运行 `python core_entry.py`；此时设置 `STUDIOLO_MODE=core`、PostgreSQL URL 和 JWT secret。配置错误会在连接数据库前退出，错误消息不会打印数据库密码。
 
