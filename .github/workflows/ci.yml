@@ -202,3 +202,78 @@ jobs:
         with:
           name: studiolo-desktop-windows
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+  desktop-macos:
+    # Intel x64 与 Apple Silicon 各自在原生 runner 上出包（sidecar 由 PyInstaller 构建，不能交叉编译）
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-latest
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.arch }}
+      - run: npm ci
+      - run: python -m pip install -r backend/requirements.txt 'pyinstaller>=6,<7'
+      - name: Build sidecar and .app
+        run: |
+          set -euo pipefail
+          npm run desktop:prepare
+          node node_modules/@tauri-apps/cli/tauri.js build --target "$(rustc --print host-tuple)" --bundles app
+      - run: python scripts/smoke-backend-sidecar.py
+      - name: Ad-hoc sign and package DMG
+        run: |
+          set -euo pipefail
+          TRIPLE=$(rustc --print host-tuple)
+          APP="src-tauri/target/$TRIPLE/release/bundle/macos/Studiolo.app"
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          DMG_DIR="src-tauri/target/$TRIPLE/release/bundle/dmg"
+          DMG="$DMG_DIR/Studiolo_${VERSION}_${{ matrix.arch }}.dmg"
+          mkdir -p "$DMG_DIR"
+          # 先签名再打包：未签名的 .app 塞进 DMG 会被 Gatekeeper 直接判为不可用
+          codesign --force --sign - "$APP/Contents/MacOS/studiolo-backend"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          STAGE=$(mktemp -d)
+          ditto "$APP" "$STAGE/Studiolo.app"
+          ln -s /Applications "$STAGE/Applications"
+          if [ -f src-tauri/icons/icon.icns ]; then cp src-tauri/icons/icon.icns "$STAGE/.VolumeIcon.icns"; fi
+          hdiutil create -volname Studiolo -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+          hdiutil verify "$DMG"
+          shasum -a 256 "$DMG" | tee "$DMG.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studiolo-desktop-macos-${{ matrix.arch }}
+          path: |
+            src-tauri/target/*/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/dmg/*.sha256
+      - name: Attach DMG to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" src-tauri/target/*/release/bundle/dmg/*.dmg --clobber
+          else
+            echo "No release for $GITHUB_REF_NAME yet — artifact only."
+          fi
