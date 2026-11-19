@@ -13,6 +13,7 @@ import OpusSyncBadge from './components/ui/OpusSyncBadge.vue'
 import { libraryItems } from './components/layout/opusNavigation'
 import OpusModulePage from './pages/OpusModulePage.vue'
 import ChatPage from './pages/ChatPage.vue'
+import SpacePage from './pages/SpacePage.vue'
 import DashboardPage from './pages/DashboardPage.vue'
 import TodayPage from './pages/TodayPage.vue'
 import WebsitesPage from './pages/WebsitesPage.vue'
@@ -33,6 +34,7 @@ import { useSettingsStore } from './stores/settings'
 import { useDataStore } from './stores/data'
 import { useAutomationStore } from './stores/automation'
 import { useLedgerStore } from './stores/ledger'
+import { useSpaceStore } from './stores/space'
 import { nextWorkbenchTheme, useWorkbenchTheme, workbenchThemeLabel } from './composables/useWorkbenchTheme'
 import type { WorkbenchTheme } from './composables/useWorkbenchTheme'
 
@@ -107,6 +109,7 @@ watch(() => auth.user?.id, (current, previous) => {
     useDataStore().reset()
     useAutomationStore().reset()
     useLedgerStore().reset()
+    useSpaceStore().reset()
   }
   if (current !== undefined && auth.token) void settings.load(auth.token).catch(() => {})
 })
@@ -308,14 +311,14 @@ onUnmounted(() => {
     <template #default="{ syncStatus, syncLabel, syncKind, openSync, openAdd, inLibrary }">
       <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @add="openAdd" @sync="openSync" @ask-agent="shellRef?.openDock()" />
       <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" @mobile-fullscreen="hideMobileTabbar = $event" />
-      <OpusModulePage v-else-if="currentPage === 'Space'" :page="currentPage" :mobile="mobile" @navigate="navigate" @back="back" />
+      <SpacePage v-else-if="currentPage === 'Space'" :mobile="mobile" @action="showToast" @back="back" />
       <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">
         <template v-if="!libraryDetailOpen">
           <div class="mhead"><h1>资料</h1><span class="spacer"></span><button class="mpill" type="button" @click="openSync"><OpusSyncBadge :kind="syncKind" :label="syncLabel" /></button></div>
           <div class="msearch"><OpusIcon name="search" /><input v-model="libraryQuery" placeholder="搜索账本、网站、记录…" aria-label="搜索"></div>
           <button class="vault-entry mat" type="button" @click="navigate('Space')">
             <span class="lk"><OpusIcon name="lock" /></span>
-            <span style="flex:1;min-width:0"><div style="font-weight:650;font-size:15px">共享空间</div><div class="faint" style="font-size:12.5px">查看需输入密码 · 待接入</div></span><OpusIcon name="chevR" />
+            <span style="flex:1;min-width:0"><div style="font-weight:650;font-size:15px">共享空间</div><div class="faint" style="font-size:12.5px">普通随时看 · 机密按次输密 · 极密 E2EE</div></span><OpusIcon name="chevR" />
           </button>
           <OpusSegment class="mseg" role="group" aria-label="资料类型"><button v-for="item in libraryItems" :key="item.page" type="button" :aria-pressed="currentPage === item.page" @click="navigate(item.page)">{{ item.label }}</button></OpusSegment>
         </template>

@@ -447,6 +447,14 @@ async function copyApiPath(path: string) {
               </label>
             </div>
           </div>
+          <div class="agents-scope-row">
+            <span class="muted" style="font-size:12px;font-weight:600">Shared Space</span>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <label class="dlg-check">
+                <input v-model="newAgentScopes" type="checkbox" value="space:read" />仅普通共享只读（机密与 E2EE 始终禁止）
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
