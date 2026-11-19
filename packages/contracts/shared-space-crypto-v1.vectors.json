@@ -1,0 +1,94 @@
+{
+  "contract": "shared-space-crypto-v1",
+  "version": 1,
+  "allowLowCostForVectors": true,
+  "scope": {
+    "workspaceId": "ws-studiolo-001",
+    "spaceId": "sp-vault-001",
+    "entryId": "en-secret-001",
+    "revision": 2,
+    "epoch": 1
+  },
+  "inputs": {
+    "password": "Correct-Horse-Battery-Staple#2026",
+    "wrongPassword": "Wrong-Password#2026",
+    "saltB64": "AQIDBAUGBwgJCgsMDQ4PEA",
+    "kdf": {
+      "algorithm": "argon2id",
+      "m": 1024,
+      "t": 1,
+      "p": 1,
+      "dkLen": 32
+    },
+    "spaceKeyB64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+    "dekB64": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+    "nonces": {
+      "envelopeB64": "CgsMDQ4PEBESExQV",
+      "dekB64": "FhcYGRobHB0eHyAh",
+      "manifestB64": "IiMkJSYnKCkqKywt",
+      "chunk0B64": "Li8wMTIzNDU2Nzg5",
+      "chunk1B64": "Ojs8PT4_QEFCQ0RF"
+    },
+    "manifest": {
+      "version": 1,
+      "entryType": "key",
+      "title": "生产 OpenAI Key",
+      "fileName": "openai.key",
+      "mime": "text/plain",
+      "sizeBytes": 80,
+      "chunkCount": 2,
+      "chunkSize": 57,
+      "plaintextSha256": "ff641f60c46ba94f2237130d4b20ac77a7a9a962e928e9e4596266653b928594",
+      "tags": [
+        "prod",
+        "ai"
+      ],
+      "summary": "跨语言向量校验样例"
+    },
+    "chunksPlaintextB64": [
+      "U3R1ZGlvbG8g5p6B5a-G5rWL6K-V5YiG5Z2XICMwIOKAlCBBUElfS0VZPXNrLXRlc3QtMTIzNDU2",
+      "AAEC_2JpbmFyeS10YWlsLWNodW5rLTE"
+    ],
+    "vaultMasterKey": "studiolo-test-master-key-must-be-at-least-32-bytes-long"
+  },
+  "expected": {
+    "kekHex": "726f6740ea315a4b7435a13f154cbaf75e1da8cf0c7d69d946dfef25929ca431",
+    "keyEnvelope": {
+      "version": 1,
+      "epoch": 1,
+      "kdf": {
+        "algorithm": "argon2id",
+        "m": 1024,
+        "t": 1,
+        "p": 1,
+        "dkLen": 32,
+        "saltB64": "AQIDBAUGBwgJCgsMDQ4PEA"
+      },
+      "aead": "aes-256-gcm",
+      "nonceB64": "CgsMDQ4PEBESExQV",
+      "wrappedKeyB64": "FHxh-rlu3wZ8BX2ADTK7WsddtZZjr7uQad6sJb8RLXdSfEdHCSPI_6T-DnLRqmUf"
+    },
+    "wrappedDek": {
+      "version": 1,
+      "epoch": 1,
+      "aead": "aes-256-gcm",
+      "nonceB64": "FhcYGRobHB0eHyAh",
+      "wrappedDekB64": "4lDOICS1O_6UpDeIYsSbC9Rx6vF9nwHKnz8d_V2mJ5UfW2sfHIG-_V4DQmTWNw8m"
+    },
+    "encryptedManifestB64": "IiMkJSYnKCkqKywtemTAUPtUHcIL-JRDymaFs6cKhLY_971Nv_wFGMnNpMFPNSEDjNJGvlvmQO-Jzi7mOPJA5m8GJX8JsKC0GGoSUMUYq1qiS2qOmCFwHT5JPjXBCPc_0CufozXN137vKF1hLXq15RXSCYj8CtNc6yWR8VIE7m1cLQi6YCM33-RZWXf5roB1gaOFkhrm9R5TEk0waOWHXplxdLkpt8CYsf5onW3PNuZ_XxYNMJ5xwV6-CInSFb4ty0yWQCVPi8E1znJ9nq0GayqoKfWhSe8WUe0itd_wE39bUUZZbTve5Z6nl1jx-cNw-d821cMwHujAC7SBVnGsau578Atgra5xkUDZYYPCALPXBy2o6Ml_g2FT5vm7JOO9VO1hRYXpYl8dxMIw8_basMORwO6IhnWqXXlLqJF1ioIL5A",
+    "encryptedChunks": [
+      {
+        "chunkIndex": 0,
+        "ciphertextB64": "Li8wMTIzNDU2Nzg5iJISH1HRxXx3ZW3w8vZU4I2Z1KM95BuqD2HSEjRA8jhCg1CLR0DsNB14QMzccwy1DMfZh_g0m_wLRDX4o4vhOarMtvz8A0iXYA",
+        "sha256": "5271c585bfffd49558c172e465b9d31ab94c0f5454ae2d71280685ab6d690091"
+      },
+      {
+        "chunkIndex": 1,
+        "ciphertextB64": "Ojs8PT4_QEFCQ0RFZiWhNLITK7t2cHLG6DfuBjBPKhE0juxhrhiLWp_a-y_16Hk7ZlOM",
+        "sha256": "ed80dfac09e4a4d2cc8798a45d1d54731d1c05cd1c60fb5961dccbfb9e512bbc"
+      }
+    ],
+    "vaultWorkspaceKeyHex": "781eb7c0882d840d2bc458b7f44068d15d83ad12bd340e0ac471396e69034f7e",
+    "protectedPasswordVerifier": "argon2id$m=1024,t=1,p=1$AQIDBAUGBwgJCgsMDQ4PEA$cm9nQOoxWkt0NaE_FUy6914dqM8MfWnZRt_vJZKcpDE"
+  }
+}

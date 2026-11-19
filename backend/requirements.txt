@@ -13,3 +13,4 @@ httpx>=0.28,<1
 alembic>=1.13,<2
 python-dotenv>=1,<2
 tzdata>=2025.2,<2027
+cryptography>=44,<47

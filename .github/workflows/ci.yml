@@ -34,6 +34,7 @@ jobs:
       - run: npm run test:local-time
       - run: npm run test:data-bounded-reads
       - run: npm run test:fleet
+      - run: npm run test:space-crypto
       - run: npm run test:desktop
       - run: node --test tests/diagnostics.test.mjs
   contracts:
