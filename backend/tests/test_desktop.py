@@ -84,7 +84,8 @@ def test_desktop_csp_allows_weather_service_origins():
     config = json.loads((root / "src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
     for mode in ("csp", "devCsp"):
         allowed = config["app"]["security"][mode]["connect-src"].split()
-        assert origins <= set(allowed), f"{mode} blocks weather origins: {origins - set(allowed)}"
+        blocked = {origin for origin in origins if origin not in allowed and f"{urlsplit(origin).scheme}:" not in allowed}
+        assert not blocked, f"{mode} blocks weather origins: {blocked}"
 
 
 @pytest.mark.parametrize("origin", ["http://tauri.localhost", "tauri://localhost"])

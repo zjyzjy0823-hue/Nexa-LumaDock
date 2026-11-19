@@ -12,6 +12,7 @@ const bundle = await build({
     export { getSyncStatus } from './src/api/sync.ts'
     export { conflictFields, conflictTitle, conflictEntityLabel, conflictConfirmation, conflictRequestError, detectedTime } from './src/services/conflictPresentation.ts'
     export { useAuthStore } from './src/stores/auth.ts'
+    export { useFleetStore } from './src/stores/fleet.ts'
     export { resolveConfirmation, confirmation } from './src/composables/useConfirm.ts'
     export { coreSyncRequestError, syncErrorMessage, syncStatusDisplay } from './src/services/coreSyncErrors.ts'
     export { ApiError } from './src/api/client.ts'
@@ -21,7 +22,7 @@ const bundle = await build({
   bundle: true, write: false, platform: 'node', format: 'esm',
   define: { 'import.meta.env.VITE_API_BASE_URL': '""', 'process.env.NODE_ENV': '"production"' },
 })
-const { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS, useAuthStore, resolveConfirmation, confirmation, coreSyncRequestError,
+const { useCoreSync, CORE_SYNC_STATUS_POLL_INTERVAL_MS, useAuthStore, useFleetStore, resolveConfirmation, confirmation, coreSyncRequestError,
   syncErrorMessage, syncStatusDisplay, ApiError, createRenderer, createPinia, ref, useSyncConflicts, getSyncStatus,
   conflictFields, conflictTitle, conflictEntityLabel, conflictConfirmation, conflictRequestError, detectedTime } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
@@ -65,7 +66,7 @@ test('automation conflict presents definition enabled/trigger/action and delete 
 })
 async function settle() { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)) }
 
-async function mount(handler, conflictsMode = false) {
+async function mount(handler, conflictsMode = false, mode = 'local') {
   const previous = { fetch: globalThis.fetch, localStorage: globalThis.localStorage, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout }
   let time = 0
   let timerId = 0
@@ -99,6 +100,7 @@ async function mount(handler, conflictsMode = false) {
   const renderer = createRenderer({ insert() {}, remove() {}, createElement: () => ({}), createText: () => ({}), createComment: () => ({}), setText() {}, setElementText() {}, parentNode: () => null, nextSibling: () => null, patchProp() {} })
   const pinia = createPinia()
   const auth = useAuthStore(pinia)
+  auth.mode = mode
   auth.token = 'local-test-token'
   const messages = []
   const statusRefreshes = []
@@ -115,6 +117,69 @@ async function mount(handler, conflictsMode = false) {
   const unmount = () => { if (!unmounted) { unmounted = true; app.unmount() } }
   return { state, auth, calls, messages, saved, timers, advance, unmount, open, statusRefreshes, close() { unmount(); resolveConfirmation(false); Object.assign(globalThis, previous) } }
 }
+
+test('Core clients never request local connection or sync status', async () => {
+  const ctx = await mount(() => { throw new Error('unexpected local request') }, false, 'core')
+  try {
+    await ctx.state.refresh()
+    await ctx.advance(CORE_SYNC_STATUS_POLL_INTERVAL_MS * 3)
+    assert.deepEqual(ctx.calls, [])
+    assert.equal(ctx.timers.size, 0)
+  } finally { ctx.close() }
+})
+
+test('linked desktop Fleet uses a separately authenticated Core workspace', async () => {
+  const ctx = await mount(path => reply(path.endsWith('/connection') ? metadata : status))
+  const originalFetch = globalThis.fetch
+  const originalSocket = globalThis.WebSocket
+  const requests = []
+  const sockets = []
+  let workspaceId = 'different-workspace'
+  globalThis.fetch = async (url, options) => {
+    requests.push([url, options.headers.Authorization])
+    if (url.endsWith('/auth/login')) return reply({ access_token: 'fleet-core-token' })
+    if (url.endsWith('/workspace')) return reply({ id: workspaceId })
+    if (url.endsWith('/fleet/nodes')) return reply([])
+    throw new Error('unexpected Fleet request')
+  }
+  globalThis.WebSocket = class {
+    static OPEN = 1
+    static CONNECTING = 0
+    readyState = 0
+    constructor(url) { this.url = url; sockets.push(this) }
+    send(data) { this.frame = JSON.parse(data) }
+    close() { this.readyState = 3 }
+  }
+  try {
+    ctx.auth.workstation = true
+    const fleet = useFleetStore()
+    await fleet.loadNodes()
+    fleet.connectSocket()
+    assert.equal(fleet.coreSignInUrl, metadata.coreUrl)
+    assert.deepEqual(requests, [])
+    assert.deepEqual(sockets, [])
+    await assert.rejects(fleet.signInToCoreFleet('qa', 'fixture-password'), /工作区不匹配/)
+    assert.equal(fleet.coreSignInUrl, metadata.coreUrl)
+    workspaceId = metadata.workspaceId
+    await fleet.signInToCoreFleet('qa', 'fixture-password')
+    await settle()
+    assert.equal(fleet.coreSignInUrl, '')
+    assert.deepEqual(requests.at(-1), [metadata.coreUrl + '/api/v1/fleet/nodes', 'Bearer fleet-core-token'])
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].url, 'ws://127.0.0.1:8000/ws/fleet/client')
+    sockets[0].onopen()
+    assert.deepEqual(sockets[0].frame, { type: 'auth', token: 'fleet-core-token' })
+    ctx.auth.coreConnection = { ...metadata, coreUrl: 'https://different.example' }
+    await settle()
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].readyState, 3)
+    assert.equal(fleet.coreSignInUrl, 'https://different.example')
+  } finally {
+    globalThis.fetch = originalFetch
+    globalThis.WebSocket = originalSocket
+    ctx.close()
+  }
+})
 
 test('disconnected entry loads Local outbox and cannot run sync', async () => {
   const ctx = await mount(path => reply(path.endsWith('/connection') ? { connected: false } : status))

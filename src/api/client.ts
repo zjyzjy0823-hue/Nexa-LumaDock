@@ -1,14 +1,17 @@
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+import { getApiBaseUrl } from '../services/fleetUrl'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
-export async function apiRequest<T>(path: string, options: RequestInit = {}, token?: string | null): Promise<T> {
+export async function apiRequest<T>(
+  path: string, options: RequestInit = {}, token?: string | null, baseUrl = getApiBaseUrl(),
+): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${baseUrl}${path}`, {
       ...options,
+      ...(baseUrl ? { credentials: 'omit', redirect: 'error' } as const : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),

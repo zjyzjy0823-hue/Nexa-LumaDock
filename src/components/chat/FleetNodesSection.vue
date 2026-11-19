@@ -7,6 +7,7 @@ import { sessionKey, useFleetStore } from '../../stores/fleet'
 import type { AdapterInfo, AdapterProvider, AgentNode, NodePlatform } from '../../types/fleet'
 import Modal from '../ui/Modal.vue'
 import OpusIcon from '../ui/OpusIcon.vue'
+import FleetCoreSignIn from './FleetCoreSignIn.vue'
 import { getPlatformIcon, getProviderMeta } from './providerMeta'
 
 defineProps<{
@@ -37,6 +38,7 @@ onMounted(() => {
 })
 
 function openCreateModal() {
+  if (fleet.coreSignInUrl) return
   newName.value = ''
   showCreate.value = true
 }
@@ -144,6 +146,8 @@ const totalReadyAdapters = computed(() =>
 
 <template>
   <section class="fleet-sec" :class="{ 'is-settings': embeddedInSettings, 'is-mobile': mobile }">
+    <FleetCoreSignIn v-if="fleet.coreSignInUrl" />
+    <template v-else>
     <div class="card mat fleet-panel">
       <header class="fleet-panel-head">
         <div class="fleet-panel-title-wrap">
@@ -338,6 +342,7 @@ const totalReadyAdapters = computed(() =>
         <button type="button" class="btn btn-primary" @click="issuedToken = null">我已妥善保存</button>
       </template>
     </Modal>
+    </template>
   </section>
 </template>
 

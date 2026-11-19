@@ -1,7 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
-import type { CoreConnectRequest } from '../api/core'
+import type { CoreConnection, CoreConnectRequest } from '../api/core'
+import { desktopPlatform } from '../desktop/platform'
+import { normalizeCoreOrigin, setApiBaseUrl } from '../services/fleetUrl'
 import type { User } from '../types/widget'
 
 export interface AuthStatus {
@@ -12,16 +14,29 @@ export interface AuthStatus {
 }
 
 const tokenKey = 'studiolo:access-token'
+const androidCoreKey = 'studiolo:android-core'
 
 export const useAuthStore = defineStore('auth', () => {
   localStorage.removeItem('studiolo:local-account:v1')
+  const android = desktopPlatform() === 'android'
+  const androidCoreUrl = ref('')
+  if (android) {
+    const savedOrigin = localStorage.getItem(androidCoreKey)
+    if (savedOrigin) {
+      try { androidCoreUrl.value = normalizeCoreOrigin(savedOrigin) } catch { localStorage.removeItem(androidCoreKey) }
+    }
+    if (!androidCoreUrl.value) localStorage.removeItem(tokenKey)
+    setApiBaseUrl(androidCoreUrl.value)
+  }
   const token = ref<string | null>(localStorage.getItem(tokenKey))
   const user = ref<User | null>(null)
+  const mode = ref<AuthStatus['mode']>(android ? 'core' : 'local')
+  const coreConnection = ref<CoreConnection>()
   const workstation = ref(false)
   const setupRequired = ref(false)
   const allowRegistration = ref(true)
   let sessionGeneration = 0
-  watch(token, () => { sessionGeneration += 1 }, { flush: 'sync' })
+  watch(token, () => { sessionGeneration += 1; coreConnection.value = undefined }, { flush: 'sync' })
 
   function setSessionToken(next: string) {
     token.value = next
@@ -50,9 +65,12 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function bootstrap() {
+    if (android && !androidCoreUrl.value) return
     let status: AuthStatus | null = null
     try {
       status = await apiRequest<AuthStatus>('/api/v1/auth/status')
+      if (android && status.mode !== 'core') throw new Error('此地址未运行 Studiolo Core。')
+      mode.value = status.mode
       workstation.value = status.workstation
       setupRequired.value = status.setupRequired
       allowRegistration.value = status.allowRegistration
@@ -75,6 +93,7 @@ export const useAuthStore = defineStore('auth', () => {
           await resumeWorkstation()
           return
         }
+        if (android && error instanceof ApiError && error.status === 401) return
         throw error
       }
     }
@@ -90,6 +109,24 @@ export const useAuthStore = defineStore('auth', () => {
         throw error
       }
     }
+  }
+
+  async function setAndroidCore(value: string) {
+    const origin = normalizeCoreOrigin(value)
+    const status = await apiRequest<AuthStatus>('/api/v1/auth/status', {}, null, origin)
+    if (status.mode !== 'core') throw new Error('此地址未运行 Studiolo Core。')
+    logout()
+    localStorage.setItem(androidCoreKey, origin)
+    androidCoreUrl.value = origin
+    setApiBaseUrl(origin)
+    allowRegistration.value = status.allowRegistration
+  }
+
+  function clearAndroidCore() {
+    logout()
+    localStorage.removeItem(androidCoreKey)
+    androidCoreUrl.value = ''
+    setApiBaseUrl('')
   }
 
   async function signIn(username: string, password: string) {
@@ -135,6 +172,9 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     token,
     user,
+    mode,
+    coreConnection,
+    androidCoreUrl,
     workstation,
     setupRequired,
     allowRegistration,
@@ -145,6 +185,8 @@ export const useAuthStore = defineStore('auth', () => {
     register,
     setupOffline,
     setupWithCore,
+    setAndroidCore,
+    clearAndroidCore,
     logout,
   }
 })

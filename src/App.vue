@@ -264,7 +264,7 @@ onMounted(async () => {
   systemDark.addEventListener('change', updateSystemTheme)
   mobileMedia.addEventListener('change', updateMobile)
   motionMedia.addEventListener('change', updateSystemMotion)
-  if (isTauri()) {
+  if (desktop) {
     await checkDesktopBackend()
     backendTimer = setInterval(checkDesktopBackend, 2000)
   } else {
@@ -298,7 +298,7 @@ onUnmounted(() => {
       <div :class="!mobile && desktopPlatform() !== 'macos' ? 'opus-auth-body' : undefined">
         <div v-if="desktopError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ desktopError }}</p><button type="button" @click="checkDesktopBackend">重试检查</button></section></div>
         <div v-else-if="!authReady" class="auth-loading" role="status">正在打开 Studiolo…</div>
-        <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button></section></div>
+        <div v-else-if="authStartupError" class="auth-loading auth-loading--error"><section class="auth-error-panel" role="alert"><p>{{ authStartupError }}</p><button type="button" @click="restoreSession">重试连接</button><button v-if="android" type="button" @click="auth.clearAndroidCore(); authStartupError = ''">更换 Core 服务器</button></section></div>
         <AuthGate v-else />
       </div>
     </div>

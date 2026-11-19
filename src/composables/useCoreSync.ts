@@ -31,8 +31,8 @@ export function useCoreSync(notify: (message: string) => void) {
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let pollController: AbortController | null = null
   type Session = { token: string; generation: number }
-  const current = (requestSession: Session) => alive && requestSession.generation === sessionGeneration && requestSession.token === auth.token
-  const session = (): Session | null => auth.token ? { token: auth.token, generation: sessionGeneration } : null
+  const current = (requestSession: Session) => alive && auth.mode === 'local' && requestSession.generation === sessionGeneration && requestSession.token === auth.token
+  const session = (): Session | null => auth.mode === 'local' && auth.token ? { token: auth.token, generation: sessionGeneration } : null
 
   function stopPolling() {
     if (pollTimer !== null) clearTimeout(pollTimer)
@@ -43,7 +43,7 @@ export function useCoreSync(notify: (message: string) => void) {
   }
 
   function schedulePoll() {
-    if (!alive || !mounted || !auth.token || pollTimer !== null) return
+    if (!alive || !mounted || !session() || pollTimer !== null) return
     pollTimer = setTimeout(() => { pollTimer = null; void pollStatus() }, CORE_SYNC_STATUS_POLL_INTERVAL_MS)
   }
 
@@ -90,12 +90,14 @@ export function useCoreSync(notify: (message: string) => void) {
     stopPolling()
     connectionLoading.value = syncLoading.value = true
     if (clearErrors) connectionError.value = syncError.value = ''
+    const previousConnection = auth.coreConnection
     try {
       const results = await Promise.allSettled([getCoreConnection(requestSession.token), getSyncStatus(requestSession.token)])
       if (!current(requestSession)) return
       const [core, sync] = results
       if (core.status === 'fulfilled') {
         connection.value = core.value
+        if (auth.coreConnection === previousConnection) auth.coreConnection = core.value
         if (!core.value.connected) connectionTest.value = null
       } else {
         const message = await errorMessage(core.reason, requestSession)
@@ -144,6 +146,7 @@ export function useCoreSync(notify: (message: string) => void) {
       const result = await connectCore(requestSession.token, payload)
       if (!current(requestSession)) return
       connection.value = result
+      auth.coreConnection = result
       connectionTest.value = null
       syncResult.value = null
       notify('Core 已连接，将在后台自动同步。')
@@ -166,6 +169,7 @@ export function useCoreSync(notify: (message: string) => void) {
       const result = await disconnectCore(requestSession.token)
       if (!current(requestSession)) return
       connection.value = result
+      auth.coreConnection = result
       connectionTest.value = null
       syncResult.value = null
       notify('Core 已断开，本地数据保留。')
@@ -187,7 +191,7 @@ export function useCoreSync(notify: (message: string) => void) {
     })
   }
 
-  watch(() => auth.token, () => {
+  watch([() => auth.token, () => auth.mode], () => {
     sessionGeneration += 1
     stopPolling()
     connection.value = null
@@ -197,7 +201,7 @@ export function useCoreSync(notify: (message: string) => void) {
     connectionLoading.value = syncLoading.value = false
     action.value = null
     connectionError.value = syncError.value = ''
-    if (mounted && alive && auth.token) void refresh()
+    if (mounted && alive && session()) void refresh()
   }, { flush: 'sync' })
   onMounted(() => { mounted = true; void refresh() })
   onUnmounted(() => { alive = mounted = false; sessionGeneration += 1; stopPolling() })

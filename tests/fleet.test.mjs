@@ -12,7 +12,7 @@ import {
   generateFileKey,
   sha256Hex,
 } from '../src/services/blobTransfer.ts'
-import { buildFleetWsUrl } from '../src/services/fleetUrl.ts'
+import { buildFleetWsUrl, normalizeCoreOrigin } from '../src/services/fleetUrl.ts'
 import {
   applyTokenUsageEvent,
   estimateTurnUsageFallback,
@@ -90,10 +90,21 @@ test('WebSocket URL 构造绝不携带 token 查询参数', () => {
   assert.equal(buildFleetWsUrl('https://core.local').includes('token='), false)
 })
 
+test('Core 地址仅接受 HTTPS 或可用于开发的 HTTP 回环地址', () => {
+  assert.equal(normalizeCoreOrigin(' https://Core.example:8443/ '), 'https://core.example:8443')
+  assert.equal(normalizeCoreOrigin('http://127.0.0.1:28000/'), 'http://127.0.0.1:28000')
+  assert.throws(() => normalizeCoreOrigin('http://core.example'))
+  assert.throws(() => normalizeCoreOrigin('https://core.example/api'))
+  assert.throws(() => normalizeCoreOrigin('https://user@core.example'))
+  assert.throws(() => normalizeCoreOrigin('https://core.example/?token=example'))
+})
+
 test('浏览器端加密上传 + LAN 不可达自动降级 Core 下载解密端到端闭环', async () => {
   const originalFetch = globalThis.fetch
   const storedChunks = new Map()
   let initPayloadSeen = null
+  const lanDownloadRequests = []
+  const coreDownloadRequests = []
 
   globalThis.fetch = async (url, options = {}) => {
     const u = String(url)
@@ -152,9 +163,11 @@ test('浏览器端加密上传 + LAN 不可达自动降级 Core 下载解密端�
       )
     }
     if (u.startsWith('http://192.168.199.99')) {
+      lanDownloadRequests.push(options.headers)
       throw new Error('ECONNREFUSED simulated LAN unreachable')
     }
     if (u.includes('/api/v1/fleet/artifacts/blob-demo-1/chunks/')) {
+      coreDownloadRequests.push({ url: u, headers: options.headers })
       const idx = Number(u.split('/chunks/')[1])
       return new Response(storedChunks.get(idx), { status: 200 })
     }
@@ -179,12 +192,18 @@ test('浏览器端加密上传 + LAN 不可达自动降级 Core 下载解密端�
     assert.equal(JSON.stringify(initPayloadSeen).includes(ref.keyB64), false)
 
     const result = await downloadAndDecryptBlob({
-      artifact: ref,
+      artifact: { ...ref, directToken: 'transfer-test' },
       token: 'jwt-test',
       apiBaseUrl: 'http://127.0.0.1:48197',
     })
     assert.equal(result.transport, 'core')
     assert.equal(result.fileName, 'report.tar.gz')
+    assert.deepEqual(lanDownloadRequests, [{ 'X-Transfer-Token': 'transfer-test' }])
+    assert.equal(coreDownloadRequests.length, 3)
+    for (const request of coreDownloadRequests) {
+      assert.equal(new URL(request.url).origin, 'http://127.0.0.1:48197')
+      assert.deepEqual(request.headers, { Authorization: 'Bearer jwt-test' })
+    }
     const outBytes = new Uint8Array(await result.blob.arrayBuffer())
     assert.deepEqual(outBytes, raw)
   } finally {

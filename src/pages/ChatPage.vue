@@ -17,6 +17,7 @@ import {
   startColumnDrag,
 } from '../composables/useResizableShell'
 import { sessionKey, useFleetStore } from '../stores/fleet'
+import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import { chatBubbleStyleLabel, chatBubbleStyleOptions, useWorkbenchTheme } from '../composables/useWorkbenchTheme'
 import type { AdapterProvider, AgentNode, ArtifactRef, ChatSession } from '../types/fleet'
 
@@ -1132,6 +1133,8 @@ function handleClearMemory() {
 </script>
 
 <template>
+  <FleetCoreSignIn v-if="fleet.coreSignInUrl" />
+  <template v-else>
   <!-- 移动端（方案 B · 收件箱列表 → 全屏沉浸对话页，类似 Happy / Orca Mobile） -->
   <div v-if="mobile" class="mchat-root">
     <!-- 第一层：会话与审批收件箱（极简顶栏图标工具条 + 带状态微动画的会话卡片） -->
@@ -2494,6 +2497,7 @@ function handleClearMemory() {
         </div>
       </div>
     </div>
+  </template>
 </template>
 
 <style scoped>

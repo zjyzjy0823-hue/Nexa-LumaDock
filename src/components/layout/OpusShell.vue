@@ -15,6 +15,7 @@ import { useAutomationStore } from '../../stores/automation'
 import { useAuthStore } from '../../stores/auth'
 import { useFleetStore } from '../../stores/fleet'
 import AgentChatThread from '../chat/AgentChatThread.vue'
+import FleetCoreSignIn from '../chat/FleetCoreSignIn.vue'
 import { getProviderMeta } from '../chat/providerMeta'
 import { version } from '../../../package.json'
 import OpusSegment from '../ui/OpusSegment.vue'
@@ -183,6 +184,7 @@ watch([() => props.toast, () => props.toastKey], ([text]) => {
 })
 
 const syncKind = computed<'offline' | 'conflict' | 'pending' | 'synced'>(() => {
+  if (auth.mode === 'core') return 'synced'
   if (!syncStatus.value?.connected) return 'offline'
   if (syncStatus.value.conflicts) return 'conflict'
   if (syncStatus.value.running || syncStatus.value.pending || syncStatus.value.inFlight || !syncStatus.value.lastSuccessAt) return 'pending'
@@ -190,6 +192,7 @@ const syncKind = computed<'offline' | 'conflict' | 'pending' | 'synced'>(() => {
 })
 const queued = computed(() => (syncStatus.value?.pending ?? 0) + (syncStatus.value?.inFlight ?? 0))
 const syncLabel = computed(() => {
+  if (auth.mode === 'core') return '直连 Core'
   const state = syncStatus.value
   if (!state) return syncError.value || '正在读取同步状态'
   if (!state.connected) return '离线 · 本机可用'
@@ -199,9 +202,10 @@ const syncLabel = computed(() => {
   if (queued.value) return `${queued.value} 项待同步`
   return state.lastSuccessAt ? '已同步' : '等待首次同步'
 })
-const fleetLocalOnline = computed(() => !syncStatus.value?.connected && fleet.wsState === 'online')
+const coreOnline = computed(() => auth.mode === 'core' || Boolean(syncStatus.value?.connected))
+const fleetLocalOnline = computed(() => !coreOnline.value && fleet.wsState === 'online')
 const coreLabel = computed(() => {
-  if (syncStatus.value?.connected) {
+  if (coreOnline.value) {
     return connection.value?.connected ? `Core · ${connection.value.coreUrl}` : 'Core'
   }
   if (fleetLocalOnline.value) return '本地 Fleet 在线（未启用远程 Core 同步）'
@@ -456,7 +460,8 @@ onUnmounted(() => {
                 <button class="icon-btn" type="button" aria-label="在 Agent 页打开" title="在 Agent 页打开" @click="go('Chat')"><OpusIcon name="external" /></button>
                 <button class="icon-btn" type="button" aria-label="关闭 Agent 侧板" @click="dockOpen = false"><OpusIcon name="x" /></button>
               </div>
-              <AgentChatThread compact @action="emit('action', $event)" @open-handoff="go('Chat')" />
+              <FleetCoreSignIn v-if="fleet.coreSignInUrl" />
+              <AgentChatThread v-else compact @action="emit('action', $event)" @open-handoff="go('Chat')" />
             </div>
           </aside>
         </div>
@@ -468,13 +473,13 @@ onUnmounted(() => {
             aria-controls="sync-panel"
             :aria-expanded="panelOpen"
             :title="coreLabel"
-            :aria-label="'连接状态：' + (syncStatus?.connected ? 'Core 在线' : fleetLocalOnline ? '本地 Fleet 在线' : 'Core 离线')"
+            :aria-label="'连接状态：' + (coreOnline ? 'Core 在线' : fleetLocalOnline ? '本地 Fleet 在线' : 'Core 离线')"
             @click="panelOpen = !panelOpen"
           >
-            <Wifi v-if="syncStatus?.connected" :size="13" :stroke-width="2" style="color:var(--ok)" />
+            <Wifi v-if="coreOnline" :size="13" :stroke-width="2" style="color:var(--ok)" />
             <Wifi v-else-if="fleetLocalOnline" :size="13" :stroke-width="2" style="color:var(--ok)" />
             <WifiOff v-else :size="13" :stroke-width="2" style="color:var(--danger)" />
-            <span>{{ syncStatus?.connected ? 'Core' : fleetLocalOnline ? '本地 · Fleet' : 'Core' }}</span>
+            <span>{{ fleetLocalOnline ? '本地 · Fleet' : 'Core' }}</span>
           </button>
           <span class="spacer"></span>
           <span class="sb-item faint">v{{ version }}</span>
@@ -482,12 +487,12 @@ onUnmounted(() => {
         <div id="sync-panel" class="sync-panel" :hidden="!panelOpen">
           <h3>同步</h3>
           <div class="faint" style="font-size:12.5px">{{ syncStatus?.lastSuccessAt ? '最近同步 ' + new Date(syncStatus.lastSuccessAt).toLocaleString() : syncLabel }}</div>
-          <div class="queue">
+          <div v-if="auth.mode === 'local'" class="queue">
             <div v-if="queued" class="row"><span class="tile-icon" style="width:26px;height:26px"><OpusIcon name="sync" /></span><span class="grow"><div class="title" style="font-size:12.5px">{{ queued }} 项待同步</div><div class="sub">更改已保存在本机，联网后同步到 Core</div></span><OpusSyncBadge kind="pending" label="排队中" /></div>
             <div v-if="syncStatus?.conflicts" class="row"><span class="tile-icon" style="width:26px;height:26px"><OpusIcon name="alert" /></span><span class="grow"><div class="title" style="font-size:12.5px">{{ syncStatus.conflicts }} 个冲突待处理</div><div class="sub">需要确认保留本机或 Core 版本</div></span><button type="button" class="btn btn-sm btn-danger" @click="openSyncSettings">处理冲突</button></div>
             <div v-if="!queued && !syncStatus?.conflicts" class="cleared" style="padding:20px"><OpusIcon :name="syncKind === 'offline' ? 'wifiOff' : 'checks'" />{{ syncKind === 'offline' ? '离线：所有更改都已保存在本机' : '所有更改均已同步' }}</div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center"><span class="faint" style="font-size:11.5px;flex:1">共享空间只同步密文，这里不显示内容名称。</span><button type="button" class="btn btn-ghost btn-sm" @click="openSyncSettings">同步设置</button><button type="button" class="btn btn-primary btn-sm" :disabled="!syncStatus?.connected || busy || syncStatus.running" @click="sync"><OpusIcon name="sync" />立即同步</button></div>
+          <div v-if="auth.mode === 'local'" style="display:flex;gap:8px;align-items:center"><span class="faint" style="font-size:11.5px;flex:1">共享空间只同步密文，这里不显示内容名称。</span><button type="button" class="btn btn-ghost btn-sm" @click="openSyncSettings">同步设置</button><button type="button" class="btn btn-primary btn-sm" :disabled="!syncStatus?.connected || busy || syncStatus.running" @click="sync"><OpusIcon name="sync" />立即同步</button></div>
         </div>
         <div class="toast-host desk"><div v-for="item in toasts" :key="item.id" class="toast" :class="{ out: item.out }" role="status">{{ item.text }}</div></div>
       </div>

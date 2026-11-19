@@ -278,6 +278,7 @@ export async function downloadAndDecryptBlob(options: {
   const { artifact, token, apiBaseUrl = '', onProgress } = options
   const epRes = await fetch(`${apiBaseUrl}/api/v1/fleet/artifacts/${artifact.artifactId}/endpoints`, {
     headers: { Authorization: `Bearer ${token}` },
+    redirect: 'error',
   })
   if (!epRes.ok) {
     throw new Error(`解析文件传输端点失败 (${epRes.status})`)
@@ -288,13 +289,12 @@ export async function downloadAndDecryptBlob(options: {
   const aadContext = artifact.aadContext || artifact.artifactId
 
   for (const ep of epPayload.endpoints) {
-    const base = ep.kind === 'core' && ep.url.startsWith('/') ? `${apiBaseUrl}${ep.url}` : ep.url
-    const headers: Record<string, string> =
-      (ep.kind === 'lan' || ep.kind === 'xtcp') && artifact.directToken
-        ? { 'X-Transfer-Token': artifact.directToken }
-        : ep.kind === 'edge_relay' && ep.ticket
-          ? { Authorization: `Bearer ${ep.ticket}` }
-          : { Authorization: `Bearer ${token}` }
+    const base = ep.kind === 'core' ? `${apiBaseUrl}/api/v1/fleet/artifacts/${artifact.artifactId}` : ep.url
+    const headers: Record<string, string> = {}
+    if (ep.kind === 'core') headers.Authorization = `Bearer ${token}`
+    else if (ep.kind === 'edge_relay' && ep.ticket) headers.Authorization = `Bearer ${ep.ticket}`
+    else if ((ep.kind === 'lan' || ep.kind === 'xtcp') && artifact.directToken) headers['X-Transfer-Token'] = artifact.directToken
+    else continue
 
     try {
       const plainParts: Uint8Array[] = []
@@ -303,7 +303,7 @@ export async function downloadAndDecryptBlob(options: {
         // LAN/XTCP 端点设置短超时，不可达时快速无缝降级到 Edge Relay 或 Core
         const timer = setTimeout(() => controller.abort(), ep.kind === 'lan' || ep.kind === 'xtcp' ? 2000 : 30000)
         try {
-          const res = await fetch(`${base}/chunks/${i}`, { headers, signal: controller.signal })
+          const res = await fetch(`${base}/chunks/${i}`, { headers, signal: controller.signal, redirect: 'error' })
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const encBytes = new Uint8Array(await res.arrayBuffer())
           const plain = await decryptChunk(key, aadContext, i, encBytes)

@@ -85,7 +85,13 @@ onUnmounted(() => { password.value = '' })
 </script>
 
 <template>
-  <SettingsSection title="同步" description="本地修改立即保存在这台设备，连接 Studiolo Core 后会在后台自动同步。">
+  <SettingsSection v-if="auth.mode === 'core'" title="Core 连接" description="此设备直接访问 Core 中的数据。">
+    <div v-if="auth.androidCoreUrl" class="settings-card">
+      <p class="sync-note">{{ auth.androidCoreUrl }}</p>
+      <ActionButton variant="secondary" @click="auth.clearAndroidCore()">退出登录并更换服务器</ActionButton>
+    </div>
+  </SettingsSection>
+  <SettingsSection v-else title="同步" description="本地修改立即保存在这台设备，连接 Studiolo Core 后会在后台自动同步。">
     <div class="settings-card" :aria-busy="connectionLoading || (!!action && action !== 'sync')">
       <div class="settings-card__heading">
         <span>Core 连接</span>

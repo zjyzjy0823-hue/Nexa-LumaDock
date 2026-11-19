@@ -41,6 +41,7 @@ const clientName = ref(defaultClientName)
 const busy = ref(false)
 const busyKind = ref<'offline' | 'core' | 'auth' | null>(null)
 const error = ref('')
+const chooseAndroidCore = ref(false)
 
 const canRegister = computed(() => auth.allowRegistration)
 
@@ -49,6 +50,19 @@ function setMode(next: 'login' | 'register') {
   error.value = ''
   password.value = ''
   confirmation.value = ''
+}
+
+async function submitAndroidCore() {
+  busy.value = true
+  error.value = ''
+  try {
+    await auth.setAndroidCore(coreUrl.value)
+    chooseAndroidCore.value = false
+    setMode('login')
+    username.value = ''
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '连接 Core 失败，请稍后重试。'
+  } finally { busy.value = false }
 }
 
 function openCoreSetup() {
@@ -151,7 +165,13 @@ async function submit() {
         <h1 class="auth-title">Studiolo</h1>
       </header>
 
-      <template v-if="auth.setupRequired">
+      <form v-if="platform === 'android' && (!auth.androidCoreUrl || chooseAndroidCore)" class="auth-form" @submit.prevent="submitAndroidCore">
+        <label class="auth-field"><span>Core 服务器地址</span><input v-model="coreUrl" class="input" name="coreUrl" type="url" placeholder="https://core.example.com" required /></label>
+        <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
+        <button class="btn btn-primary auth-submit" type="submit" :disabled="busy">{{ busy ? '正在检查连接…' : '连接 Core' }}</button>
+        <button v-if="auth.androidCoreUrl" class="btn btn-ghost" type="button" :disabled="busy" @click="chooseAndroidCore = false; error = ''">返回登录</button>
+      </form>
+      <template v-else-if="auth.setupRequired">
         <div v-if="wizardStep === 'choose'" class="setup-choices">
           <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
           <button class="btn btn-primary setup-primary" type="button" :disabled="busy" @click="startOffline">
@@ -190,6 +210,10 @@ async function submit() {
       </template>
 
       <template v-else>
+        <div v-if="platform === 'android'" class="auth-form">
+          <span class="faint">{{ auth.androidCoreUrl }}</span>
+          <button class="btn btn-ghost" type="button" :disabled="busy" @click="coreUrl = auth.androidCoreUrl; chooseAndroidCore = true; error = ''; password = ''; confirmation = ''">更换 Core 服务器</button>
+        </div>
         <OpusSegment v-if="canRegister" class="auth-seg" role="tablist" aria-label="账户操作">
           <button type="button" role="tab" :aria-pressed="mode === 'login'" :aria-selected="mode === 'login'" @click="setMode('login')">登录</button>
           <button type="button" role="tab" :aria-pressed="mode === 'register'" :aria-selected="mode === 'register'" @click="setMode('register')">注册</button>

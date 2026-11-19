@@ -2,9 +2,27 @@
  * Studiolo Fleet URL 辅助（无框架/DOM 依赖，可在浏览器与 Node 测试环境下复用）。
  */
 
+let configuredOrigin: string | undefined
+
+export function setApiBaseUrl(origin: string): void {
+  configuredOrigin = origin
+}
+
 export function getApiBaseUrl(): string {
   const env = (import.meta as { env?: Record<string, string | undefined> }).env
-  return (env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+  return (configuredOrigin ?? env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+}
+
+export function normalizeCoreOrigin(value: string): string {
+  const url = new URL(value.trim())
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('请输入 HTTPS Core 地址。本机回环地址可使用 HTTP。')
+  }
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('Core 地址只能包含协议、主机和端口。')
+  }
+  return url.origin
 }
 
 /**

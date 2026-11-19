@@ -4,7 +4,7 @@ from app.main import app
 
 
 def test_android_auth_document_records_credentials_and_existing_routes():
-    content = (Path(__file__).parents[2] / "docs/android-auth.md").read_text()
+    content = (Path(__file__).parents[2] / "docs/android-auth.md").read_text(encoding="utf-8")
     for decision in ("nc_live_", "nd_live_", "Android Keystore", "POST /api/v1/core/connect",
                      "POST /api/v1/clients/{id}/revoke", "401", "409", "工作区", "不接受扫码",
                      "POST /api/v1/devices/{id}/token", "DELETE /api/v1/devices/{id}/token"):

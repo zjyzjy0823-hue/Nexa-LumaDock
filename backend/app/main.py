@@ -65,9 +65,11 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Studiolo API", version=APP_VERSION, lifespan=lifespan)
+native_origins = ("http://tauri.localhost", "https://tauri.localhost", "tauri://localhost")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(runtime_config.cors_origins),
+    allow_origins=list(dict.fromkeys((*runtime_config.cors_origins, *native_origins))) if runtime_config.mode == "core"
+    else list(runtime_config.cors_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Chunk-Sha256", "Range"],

@@ -4,7 +4,9 @@
 
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { apiRequest, ApiError } from '../api/client'
 import { downloadAndDecryptBlob, encryptAndUploadFile } from '../services/blobTransfer'
+import { normalizeCoreOrigin } from '../services/fleetUrl'
 import {
   buildFleetWsUrl,
   createFleetNode,
@@ -85,6 +87,49 @@ export function createRequestId(): string {
 
 export const useFleetStore = defineStore('fleet', () => {
   const auth = useAuthStore()
+  const useLinkedCore = computed(() => auth.mode === 'local' && auth.workstation)
+  const linkedCore = computed(() => useLinkedCore.value && auth.coreConnection?.connected ? auth.coreConnection : null)
+  type FleetRoute = { origin: string; token: string }
+  const coreSession = ref<(FleetRoute & { localToken: string; workspaceId: string; coreUrl: string }) | null>(null)
+  const fleetRoute = computed<FleetRoute | null>((previous) => {
+    if (!auth.token || (useLinkedCore.value && !auth.coreConnection)) return null
+    const core = linkedCore.value
+    const session = coreSession.value
+    const target = core
+      ? session?.localToken === auth.token && session.workspaceId === core.workspaceId && session.coreUrl === core.coreUrl
+        ? session : null
+      : { origin: getApiBaseUrl(), token: auth.token }
+    if (!target) return null
+    return previous?.token === target.token && previous.origin === target.origin
+      ? previous : { origin: target.origin, token: target.token }
+  })
+  const coreSignInUrl = computed(() => linkedCore.value && !fleetRoute.value ? linkedCore.value.coreUrl : '')
+  let fleetRequested = false
+
+  async function signInToCoreFleet(username: string, password: string) {
+    const core = linkedCore.value
+    const localToken = auth.token
+    if (!core || !localToken) return
+    const origin = normalizeCoreOrigin(core.coreUrl)
+    const { access_token: token } = await apiRequest<{ access_token: string }>('/api/v1/auth/login', {
+      method: 'POST', body: JSON.stringify({ username, password }),
+    }, null, origin)
+    if (!token) throw new Error('Core 没有返回有效的登录凭证。')
+    const workspace = await apiRequest<{ id: string }>('/api/v1/workspace', {}, token, origin)
+    if (workspace.id !== core.workspaceId) throw new Error('该 Core 账号与本机已连接的工作区不匹配。')
+    if (localToken !== auth.token || linkedCore.value?.coreUrl !== core.coreUrl || linkedCore.value.workspaceId !== core.workspaceId) return
+    coreSession.value = { origin, token, localToken, workspaceId: core.workspaceId, coreUrl: core.coreUrl }
+  }
+
+  function requireFleetRoute(): FleetRoute {
+    const route = fleetRoute.value
+    if (!route) throw new Error(coreSignInUrl.value ? '请先登录 Core 对话工作区' : '对话连接尚未就绪')
+    return route
+  }
+
+  function checkFleetRoute(route: FleetRoute) {
+    if (fleetRoute.value !== route) throw new Error('对话连接已变更，请重试')
+  }
 
   // ---------------- 节点元信息（允许从 Core REST 刷新，不包含聊天正文） ----------------
   const nodes = ref<AgentNode[]>([])
@@ -97,7 +142,7 @@ export const useFleetStore = defineStore('fleet', () => {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectAttempt = 0
   let intentionalClose = false
-  let activeConnectToken: string | null = null
+  let activeConnectRoute: FleetRoute | null = null
 
   // ---------------- 纯内存会话/消息/审批/产物状态 ----------------
   const selectedNodeId = ref<string>('')
@@ -343,7 +388,7 @@ export const useFleetStore = defineStore('fleet', () => {
 
   function disconnectSocket() {
     intentionalClose = true
-    activeConnectToken = null
+    activeConnectRoute = null
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -364,19 +409,34 @@ export const useFleetStore = defineStore('fleet', () => {
     () => auth.token,
     (nextToken, prevToken) => {
       if (!nextToken || nextToken !== prevToken) {
+        coreSession.value = null
         clearSessionMemory()
         nodes.value = []
       }
     },
   )
+  watch(fleetRoute, (route, previous) => {
+    if (previous) clearSessionMemory()
+    nodes.value = []
+    selectedNodeId.value = ''
+    nodesLoading.value = false
+    lastError.value = null
+    if (route && fleetRequested) {
+      void loadNodes()
+      connectSocket()
+    }
+  })
 
   // ---------------- REST Node Lifecycle ----------------
   async function loadNodes() {
-    if (!auth.token) return
+    fleetRequested = true
+    const route = fleetRoute.value
+    if (!route) return
     nodesLoading.value = true
     lastError.value = null
     try {
-      const fetched = await listFleetNodes(auth.token)
+      const fetched = await listFleetNodes(route.token, route.origin)
+      if (fleetRoute.value !== route) return
       nodes.value = fetched
       if (!selectedNodeId.value || !fetched.some(n => n.id === selectedNodeId.value)) {
         const firstOnline = fetched.find(n => n.status === 'online') ?? fetched[0]
@@ -386,9 +446,11 @@ export const useFleetStore = defineStore('fleet', () => {
         }
       }
     } catch (err) {
+      if (fleetRoute.value !== route) return
+      if (linkedCore.value && err instanceof ApiError && err.status === 401) coreSession.value = null
       lastError.value = err instanceof Error ? err.message : '加载节点列表失败'
     } finally {
-      nodesLoading.value = false
+      if (fleetRoute.value === route) nodesLoading.value = false
     }
   }
 
@@ -408,30 +470,34 @@ export const useFleetStore = defineStore('fleet', () => {
     platform: NodePlatform
     hostname?: string | null
   }): Promise<NodeTokenOut> {
-    if (!auth.token) throw new Error('尚未登录')
-    const res = await createFleetNode(auth.token, payload)
+    const route = requireFleetRoute()
+    const res = await createFleetNode(route.token, payload, route.origin)
+    checkFleetRoute(route)
     nodes.value = [res.node, ...nodes.value.filter(n => n.id !== res.node.id)]
     if (!selectedNodeId.value) selectedNodeId.value = res.node.id
     return res
   }
 
   async function rotateNode(nodeId: string): Promise<NodeTokenOut> {
-    if (!auth.token) throw new Error('尚未登录')
-    const res = await rotateFleetNodeToken(auth.token, nodeId)
+    const route = requireFleetRoute()
+    const res = await rotateFleetNodeToken(route.token, nodeId, route.origin)
+    checkFleetRoute(route)
     nodes.value = nodes.value.map(n => (n.id === nodeId ? res.node : n))
     return res
   }
 
   async function revokeNode(nodeId: string): Promise<AgentNode> {
-    if (!auth.token) throw new Error('尚未登录')
-    const updated = await revokeFleetNode(auth.token, nodeId)
+    const route = requireFleetRoute()
+    const updated = await revokeFleetNode(route.token, nodeId, route.origin)
+    checkFleetRoute(route)
     nodes.value = nodes.value.map(n => (n.id === nodeId ? updated : n))
     return updated
   }
 
   async function removeNode(nodeId: string): Promise<void> {
-    if (!auth.token) throw new Error('尚未登录')
-    await deleteFleetNode(auth.token, nodeId)
+    const route = requireFleetRoute()
+    await deleteFleetNode(route.token, nodeId, route.origin)
+    checkFleetRoute(route)
     nodes.value = nodes.value.filter(n => n.id !== nodeId)
     if (selectedNodeId.value === nodeId) {
       selectedNodeId.value = nodes.value[0]?.id ?? ''
@@ -440,32 +506,35 @@ export const useFleetStore = defineStore('fleet', () => {
 
   // ---------------- WebSocket 连接与首帧认证 ----------------
   function connectSocket() {
-    const token = auth.token
-    if (!token) return
+    fleetRequested = true
+    const route = fleetRoute.value
+    if (!route) return
+    const { token, origin } = route
     if (
       socket &&
-      activeConnectToken === token &&
+      activeConnectRoute === route &&
       (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
     ) {
       return
     }
 
+    if (socket || reconnectTimer) disconnectSocket()
     intentionalClose = false
-    activeConnectToken = token
+    activeConnectRoute = route
     wsState.value = reconnectAttempt > 0 ? 'reconnecting' : 'connecting'
 
-    const wsUrl = buildFleetWsUrl()
+    const wsUrl = buildFleetWsUrl(origin)
     const ws = new WebSocket(wsUrl)
     socket = ws
 
     ws.onopen = () => {
-      if (socket !== ws) return
+      if (socket !== ws || fleetRoute.value !== route) return
       // 首帧发送认证 JWT（避免泄漏到 URL），待服务端回传 FleetSnapshot 验证握手成功后再转 online
       ws.send(JSON.stringify({ type: 'auth', token }))
     }
 
     ws.onmessage = event => {
-      if (socket !== ws) return
+      if (socket !== ws || fleetRoute.value !== route) return
       try {
         const frame = JSON.parse(String(event.data)) as FleetWsEvent
         handleWsEvent(frame)
@@ -475,11 +544,12 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     ws.onclose = ev => {
-      if (socket !== ws) return
+      if (socket !== ws || fleetRoute.value !== route) return
       socket = null
       if (intentionalClose || ev.code === 4401) {
         wsState.value = 'disconnected'
         if (ev.code === 4401) {
+          if (linkedCore.value) coreSession.value = null
           lastError.value = 'Fleet 会话认证失败或登录已过期'
         }
         return
@@ -488,7 +558,7 @@ export const useFleetStore = defineStore('fleet', () => {
       const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]
       reconnectAttempt += 1
       reconnectTimer = setTimeout(() => {
-        if (!intentionalClose && auth.token) connectSocket()
+        if (!intentionalClose && fleetRoute.value === route) connectSocket()
       }, delay)
     }
 
@@ -500,7 +570,9 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   function sendWsCommand(frame: Record<string, unknown>): boolean {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const route = fleetRoute.value
+    if (!route) return false
+    if (!socket || activeConnectRoute !== route || socket.readyState !== WebSocket.OPEN) {
       connectSocket()
       lastError.value = '正在建立到 Core Relay 的连接，请稍候重试'
       return false
@@ -1930,18 +2002,21 @@ export const useFleetStore = defineStore('fleet', () => {
 
   async function uploadFilesWithPreview(files: File[]): Promise<ArtifactRef[]> {
     const uploadedRefs: ArtifactRef[] = []
-    if (!files.length || !auth.token) return uploadedRefs
-    const apiBaseUrl = getApiBaseUrl()
+    if (!files.length) return uploadedRefs
+    const route = requireFleetRoute()
     const nextPreviews: Record<string, string> = {}
     for (const file of files) {
-      const ref = await encryptAndUploadFile({ file, token: auth.token, apiBaseUrl })
+      const ref = await encryptAndUploadFile({ file, token: route.token, apiBaseUrl: route.origin })
+      checkFleetRoute(route)
       uploadedRefs.push(ref)
+    }
+    for (const [index, file] of files.entries()) {
       if (
         file.type.startsWith('image/')
         && typeof URL !== 'undefined'
         && typeof URL.createObjectURL === 'function'
       ) {
-        nextPreviews[ref.artifactId] = URL.createObjectURL(file)
+        nextPreviews[uploadedRefs[index].artifactId] = URL.createObjectURL(file)
       }
     }
     if (Object.keys(nextPreviews).length) {
@@ -2137,8 +2212,9 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   async function ensureArtifactImagePreview(artifact: ArtifactRef) {
+    const route = fleetRoute.value
     if (
-      !auth.token ||
+      !route ||
       !artifact?.artifactId ||
       !artifact.keyB64 ||
       !artifact.mime?.startsWith('image/') ||
@@ -2149,9 +2225,10 @@ export const useFleetStore = defineStore('fleet', () => {
     try {
       const { blob } = await downloadAndDecryptBlob({
         artifact,
-        token: auth.token,
-        apiBaseUrl: getApiBaseUrl(),
+        token: route.token,
+        apiBaseUrl: route.origin,
       })
+      checkFleetRoute(route)
       if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         imagePreviewByArtifactId.value = {
           ...imagePreviewByArtifactId.value,
@@ -2164,12 +2241,13 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   async function downloadArtifactToBrowser(artifact: ArtifactRef) {
-    if (!auth.token) throw new Error('尚未登录')
+    const route = requireFleetRoute()
     const { blob, transport, fileName } = await downloadAndDecryptBlob({
       artifact,
-      token: auth.token,
-      apiBaseUrl: getApiBaseUrl(),
+      token: route.token,
+      apiBaseUrl: route.origin,
     })
+    checkFleetRoute(route)
     const url = URL.createObjectURL(blob)
     try {
       const a = document.createElement('a')
@@ -2958,6 +3036,8 @@ export const useFleetStore = defineStore('fleet', () => {
 
   return {
     nodes,
+    coreSignInUrl,
+    signInToCoreFleet,
     nodesLoading,
     lastError,
     wsState,

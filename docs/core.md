@@ -44,7 +44,9 @@ Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`�
 
 本地连接元数据使用严格验证的 `schemaVersion: 1`，不包含凭证。旧版无版本字段的有效连接元数据会在读取时升级。凭证通过 `CredentialStore` 接口保存；当前实现为原子写入的 `FileCredentialStore`，未来可替换为系统 Credential Manager 或 Keychain。游标、outbox 和同步诊断保存在 Local SQLite 中，不写入连接元数据。
 
-公网 Core 必须通过 HTTPS 暴露。HTTP 仅适用于可信 localhost/LAN 开发环境；连接流程不会跳过 TLS 证书验证或自动跟随重定向。Desktop 仍只请求 `127.0.0.1:17800`，由 Python Local Backend 请求 Core，WebView 不直连 Core。Client 凭证当前保存在受 AppData 用户权限保护的独立文件；未来可迁至 Windows Credential Manager、macOS Keychain、Android Keystore 或 iOS Keychain。`/connection/test` 对远端 401 统一报告 `unauthorized`，包括撤销情形，因为 Core 不泄露凭证失效原因。
+公网 Core 必须通过 HTTPS 暴露。Local Backend 的 Core 同步连接也允许在可信 localhost/LAN 开发环境使用 HTTP。Desktop 由 Local Backend 执行同步，连接 Core 后，节点、Agent 对话和对话附件直接访问已连接的 Core。首次使用这些功能时，需要登录该 Core 工作区，用户 JWT 仅保留在当前应用会话中。同步 Client 凭证保存在受 AppData 用户权限保护的独立文件。`/connection/test` 对远端 401 统一报告 `unauthorized`。
+
+Android 首次启动时填写 Core 地址，例如 `https://studiolo.example`，连接成功后使用 Core 账号登录。Android 和 Desktop 的原生 Fleet 直连使用 HTTPS，开发测试可以用 HTTP 回环地址。Core Web 和 Android 直连时使用服务端数据，并隐藏 Desktop Local 专用的同步操作。
 
 v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`ledger.transaction`、`website.category`、`website`、`data.collection`、`data.record`。冲突持久保留本地编辑，其 remote snapshot 随 Core 后续 revision 刷新；后台同步、同步 UI 与冲突解决 UI 已随 v0.5.6–v0.5.8 启用（见 desktop.md 与 conflict-center 记录）；Workspace 切换仍未提供。Settings 中的个人偏好、Dashboard 布局与 Automation 定义已同步（3 个 personal adapter），Device、Agent 与 Dashboard 其它运行时状态不同步。
 
@@ -55,7 +57,7 @@ v0.5.3 引入手动双向 Ledger 同步；v0.5.4 扩展到 `ledger.category`、`
 | `STUDIOLO_MODE` | Desktop 强制设为 `local`；Web 开发默认 `local` | 必须为 `core` |
 | `DATABASE_URL` | 默认 `sqlite:///./studiolo.db`；Desktop 强制使用 AppData 的 `studiolo.db` | 必填 `postgresql+psycopg://...`，禁止 SQLite |
 | `JWT_SECRET` | Desktop 的 `secret.key`；Web 开发需自行配置 | 必填，至少 16 字符；容器重启后应保持不变 |
-| `CORS_ORIGINS` | Desktop 含 Tauri 和本地 Vite origins | 逗号分隔的明确 origins；不允许 `*`，未配置时为空 |
+| `CORS_ORIGINS` | Desktop 含 Tauri 和本地 Vite origins | 填写需要跨源访问的 Web origins，以逗号分隔。Core 同时允许 Tauri 的 `http://tauri.localhost`、`https://tauri.localhost` 和 `tauri://localhost` |
 | `APP_TIMEZONE` | 默认 `Asia/Shanghai` | 默认 `Asia/Shanghai` |
 | `ALLOW_REGISTRATION` | 默认 `true` | 默认 `true`；设为 `false` 可关闭公开注册 |
 | `STUDIOLO_HOST` / `STUDIOLO_PORT` | Desktop 固定 `127.0.0.1:17800` | 入口默认 `0.0.0.0:8000`；Docker Compose 的端口映射和健康检查按 8000 配置 |
