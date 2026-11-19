@@ -196,6 +196,10 @@ def test_opencode_http_sse_adapter(tmp_path):
         def _create():
             return {"id": "oc-1", "title": "OC Demo"}
 
+        @fake_oc.get("/session/{sid}")
+        def _details(sid: str):
+            return {"id": sid, "directory": str(tmp_path)}
+
         @fake_oc.post("/session/{sid}/prompt_async")
         async def _prompt(sid: str, request: Request):
             body = await request.json()
@@ -365,6 +369,10 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
         def _create():
             return {"id": "oc-rich", "title": "OC Rich"}
 
+        @fake_oc.get("/session/{sid}")
+        def _details(sid: str):
+            return {"id": sid, "directory": str(tmp_path)}
+
         @fake_oc.post("/session/{sid}/prompt_async")
         async def _prompt(sid: str):
             return {"accepted": True}
@@ -465,19 +473,31 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
 
 def test_opencode_v2_protocol_adapter(tmp_path):
     async def _run():
-        roots = canonicalize_roots([str(tmp_path)])
+        project = tmp_path / "project"
+        project.mkdir()
+        roots = canonicalize_roots([str(project)])
         fake_v2 = FastAPI()
         selected_models: list[dict] = []
         perm_decisions: list[str] = []
+        history_requests: list[str] = []
 
         @fake_v2.get("/api/session")
         def _v2_list():
-            return {"data": [{"id": "ses-v2", "title": "V2 Demo", "location": {"directory": str(tmp_path)}}]}
+            return {"data": [
+                {"id": "ses-outside", "location": {"directory": str(tmp_path / "project-other")}},
+                {"id": "ses-unknown", "title": "Unknown workspace"},
+                {"id": "ses-v2", "title": "V2 Demo", "location": {"directory": str(project)}},
+            ]}
+
+        @fake_v2.get("/api/session/{sid}")
+        def _v2_details(sid: str):
+            directory = project if sid == "ses-v2" else tmp_path / "project-other"
+            return {"data": {"id": sid, "location": {"directory": str(directory)}}}
 
         @fake_v2.post("/api/session")
         async def _v2_create(request: Request):
             body = await request.json()
-            assert body["location"]["directory"] == str(tmp_path.resolve())
+            assert body["location"]["directory"] == str(project.resolve())
             return {"data": {"id": "ses-v2", "title": "New V2"}}
 
         @fake_v2.get("/api/model")
@@ -531,6 +551,7 @@ def test_opencode_v2_protocol_adapter(tmp_path):
 
         @fake_v2.get("/api/session/{sid}/message")
         def _v2_history(sid: str):
+            history_requests.append(sid)
             return {
                 "data": [
                     {"id": "u1", "type": "user", "text": "hi"},
@@ -557,7 +578,9 @@ def test_opencode_v2_protocol_adapter(tmp_path):
         models = await adapter.list_models()
         assert models[0]["id"] == "opencode-go/deepseek-v4.1-flash" and models[0]["label"] == "DeepSeek V4.1 Flash 1017"
         assert models[0]["efforts"] == ["low", "high"]
-        sess = await adapter.open_session(cwd=str(tmp_path))
+        assert [item["sessionId"] for item in await adapter.list_sessions(limit=1)] == ["ses-v2"]
+        assert history_requests == []
+        sess = await adapter.open_session(cwd=str(project))
         assert sess["sessionId"] == "ses-v2"
 
         events: list[dict] = []
@@ -594,6 +617,10 @@ def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
         @fake_v2.get("/api/session")
         def _v2_sessions():
             return {"data": []}
+
+        @fake_v2.get("/api/session/{sid}")
+        def _details(sid: str):
+            return {"data": {"id": sid, "location": {"directory": str(tmp_path)}}}
 
         @fake_v2.get("/api/agent")
         def _v2_agents():

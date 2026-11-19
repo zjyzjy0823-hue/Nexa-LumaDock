@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from ..config import PathOutsideAllowedRootsError, ensure_allowed_path
 from .base import (
     AdapterProbe,
     AgentAdapter,
@@ -383,6 +384,28 @@ class OpenCodeAdapter(AgentAdapter):
                     )
             return models
 
+    def _allowed_session_directory(self, session: dict[str, Any]) -> Path:
+        location = session.get("location")
+        directory = session.get("directory") or (location.get("directory") if isinstance(location, dict) else None)
+        if not isinstance(directory, str) or not Path(directory).is_absolute():
+            raise PathOutsideAllowedRootsError("OpenCode session has no verifiable workspace")
+        try:
+            return ensure_allowed_path(directory, self.allowed_roots)
+        except (PathOutsideAllowedRootsError, OSError, ValueError):
+            raise PathOutsideAllowedRootsError("OpenCode session is outside the allowed workspace") from None
+
+    async def _session_directory(self, client: httpx.AsyncClient, prefix: str, session_id: str) -> Path:
+        if not session_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in session_id):
+            raise PathOutsideAllowedRootsError("Invalid OpenCode session")
+        response = await client.get(f"{self.serve_url}{prefix}/session/{session_id}")
+        if response.status_code != 200:
+            raise PathOutsideAllowedRootsError("Cannot verify the OpenCode session workspace")
+        payload = response.json()
+        details = payload.get("data", payload) if isinstance(payload, dict) else None
+        if not isinstance(details, dict) or details.get("id") != session_id:
+            raise PathOutsideAllowedRootsError("Cannot verify the OpenCode session workspace")
+        return self._allowed_session_directory(details)
+
     async def list_sessions(self, *, page: int = 1, limit: int = 30) -> list[dict[str, Any]]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
@@ -393,6 +416,10 @@ class OpenCodeAdapter(AgentAdapter):
             out: list[dict[str, Any]] = []
             for s in rows:
                 if not isinstance(s, dict) or not s.get("id"):
+                    continue
+                try:
+                    cwd = self._allowed_session_directory(s)
+                except PathOutsideAllowedRootsError:
                     continue
                 sid = str(s.get("id"))
                 raw_title = str(s.get("title") or "").strip()
@@ -422,14 +449,12 @@ class OpenCodeAdapter(AgentAdapter):
                                 await c.patch(f"{self.serve_url}{prefix}/session/{sid}", json={"title": raw_title})
                     except Exception:
                         pass
-                loc = s.get("location") if isinstance(s.get("location"), dict) else {}
-                cwd = str(s.get("directory") or loc.get("directory") or "")
                 out.append(
                     {
                         "sessionId": sid,
                         "provider": self.provider,
                         "title": raw_title or sid,
-                        "cwd": cwd,
+                        "cwd": str(cwd),
                     }
                 )
                 if len(out) >= limit:
@@ -443,10 +468,13 @@ class OpenCodeAdapter(AgentAdapter):
         session_id: str | None = None,
         use_worktree: bool = False,
     ) -> dict[str, Any]:
-        sid_seed = session_id or f"oc-{uuid4().hex[:8]}"
-        eff_cwd, wt_path = prepare_session_dir(cwd, self.allowed_roots, session_id=sid_seed, use_worktree=use_worktree)
         if session_id:
-            return {"sessionId": session_id, "provider": self.provider, "cwd": str(eff_cwd), "worktreePath": wt_path, "title": f"OpenCode ({eff_cwd.name})"}
+            async with self._client() as c:
+                prefix = await self._detect_api_prefix(c)
+                directory = await self._session_directory(c, prefix, session_id)
+            return {"sessionId": session_id, "provider": self.provider, "cwd": str(directory), "title": f"OpenCode ({directory.name})"}
+        sid_seed = f"oc-{uuid4().hex[:8]}"
+        eff_cwd, wt_path = prepare_session_dir(cwd, self.allowed_roots, session_id=sid_seed, use_worktree=use_worktree)
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
             if prefix == "/api":
@@ -464,6 +492,7 @@ class OpenCodeAdapter(AgentAdapter):
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             fetch_limit = max(limit * 3, 120) if prefix == "/api" else limit
             res = await c.get(f"{self.serve_url}{prefix}/session/{session_id}/message", params={"limit": fetch_limit})
             if res.status_code != 200:
@@ -606,9 +635,10 @@ class OpenCodeAdapter(AgentAdapter):
         options: dict[str, str] | None = None,
     ) -> None:
         run_id = request_id
-        await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
+            await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
             if prefix == "/api":
                 await self._send_prompt_v2(
                     c,
@@ -1081,6 +1111,7 @@ class OpenCodeAdapter(AgentAdapter):
     ) -> dict[str, Any]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             if prefix != "/api":
                 return {"sessionId": session_id, "formId": form_id, "cancelled": cancel}
             if cancel:
@@ -1096,6 +1127,7 @@ class OpenCodeAdapter(AgentAdapter):
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
                 await c.post(f"{self.serve_url}/api/session/{session_id}/interrupt")
             else:
@@ -1104,6 +1136,7 @@ class OpenCodeAdapter(AgentAdapter):
     async def rename_session(self, *, session_id: str, title: str) -> dict[str, Any]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             res = await c.patch(f"{self.serve_url}{prefix}/session/{session_id}", json={"title": title})
             if res.status_code < 400:
                 return {"sessionId": session_id, "title": title}
@@ -1112,11 +1145,13 @@ class OpenCodeAdapter(AgentAdapter):
     async def delete_session(self, *, session_id: str) -> None:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             await c.delete(f"{self.serve_url}{prefix}/session/{session_id}")
 
     async def compact_session(self, *, session_id: str) -> dict[str, Any]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
+            await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
                 res = await c.post(f"{self.serve_url}/api/session/{session_id}/compact", json={})
             else:
