@@ -58,6 +58,8 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 
 ## v0.8.0 · Android Local-first MVP（原生离线切片）
 
+详细实施拆分与验收清单见 [v0.8.0 实施计划](v0.8.0-plan.md)。
+
 - **080-01b** 补齐干净环境 Android SDK/NDK/JDK21 工具链锁定与 GitHub CI APK 产出。
 - **080-02** 落地 Rust Commands、`sqlx` SQLite 迁移、受限 Repository 与 Websites/Outbox 同事务写入。
 - **080-03** 接入 Core HTTPS 登录、Personal Workspace 确认、Android Keystore 凭据存储与重新授权。
