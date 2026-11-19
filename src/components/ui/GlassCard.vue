@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import type { SurfaceRole } from '../../theme/registry'
+
 defineProps<{
   title?: string
   kicker?: string
+  surfaceRole?: SurfaceRole
 }>()
 </script>
 
 <template>
-  <article class="glass-card card mat">
+  <article class="glass-card card mat" :data-surface-role="surfaceRole ?? 'card'">
     <div v-if="title || kicker || $slots.action" class="glass-card__header card-h">
       <div class="glass-card__heading">
         <span v-if="kicker" class="glass-card__kicker">{{ kicker }}</span>

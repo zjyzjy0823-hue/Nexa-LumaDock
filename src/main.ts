@@ -8,6 +8,7 @@ import './styles/main.css'
 import './desktop/desktop.css'
 import './styles/workbench.css'
 import './styles/opus-app.css'
+import './theme/tokens.css'
 
 async function mountApp() {
   const app = createApp(App).use(createPinia())

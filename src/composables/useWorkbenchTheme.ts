@@ -1,13 +1,15 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import {
+  DEFAULT_THEME_ID,
+  THEME_LIST,
+  getThemeDefinition,
+  type ThemeId,
+} from '../theme/registry'
 
-export type WorkbenchTheme = 'glass' | 'paper' | 'white'
+export type WorkbenchTheme = ThemeId
 export type ChatBubbleStyle = 'minimal' | 'claude' | 'lobe' | 'antd' | 'timeline'
 
-export const workbenchThemeOptions = [
-  { id: 'white', title: '纯白（默认）', shortTitle: '纯白', description: '纯白画布配冷灰侧栏与高对比黑色操作，参考 Codex 与 Antigravity 配色' },
-  { id: 'glass', title: 'Liquid Glass', shortTitle: 'Liquid Glass', description: '导航、卡片与浮层使用玻璃材质，列表与输入保持实体' },
-  { id: 'paper', title: '纸墨', shortTitle: '纸墨', description: '实体表面，信息密度高，适合长时间使用' },
-] as const
+export const workbenchThemeOptions = THEME_LIST
 
 export const chatBubbleStyleOptions = [
   { id: 'minimal', title: '极简无框（默认）', shortTitle: '极简无框', badge: 'assistant-ui', description: 'Agent 回复无外框无底色像原生文档，用户为柔和浅灰胶囊' },
@@ -21,17 +23,17 @@ const themeOrder: readonly WorkbenchTheme[] = ['white', 'paper', 'glass']
 const bubbleOrder: readonly ChatBubbleStyle[] = ['minimal', 'claude', 'lobe', 'antd', 'timeline']
 const key = 'studiolo:workbench-theme'
 const bubbleKey = 'studiolo:chat-bubble-style'
+const reducedTransparencyKey = 'studiolo:reduced-transparency'
 
-function storedTheme(): WorkbenchTheme {
+function readStoredThemeRaw(): string {
   try {
-    const saved = localStorage.getItem(key)
-    return saved === 'paper' || saved === 'white' || saved === 'glass' ? saved : 'white'
+    return localStorage.getItem(key) ?? DEFAULT_THEME_ID
   } catch {
-    return 'white'
+    return DEFAULT_THEME_ID
   }
 }
 
-function storedBubbleStyle(): ChatBubbleStyle {
+function readStoredBubbleStyle(): ChatBubbleStyle {
   try {
     const saved = localStorage.getItem(bubbleKey) as ChatBubbleStyle | null
     return saved && bubbleOrder.includes(saved) ? saved : 'minimal'
@@ -40,8 +42,21 @@ function storedBubbleStyle(): ChatBubbleStyle {
   }
 }
 
+function readStoredReducedTransparency(): boolean {
+  try {
+    const saved = localStorage.getItem(reducedTransparencyKey)
+    if (saved !== null) return saved === 'true'
+  } catch {
+    // 忽略存储受限
+  }
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    return window.matchMedia('(prefers-reduced-transparency: reduce)').matches
+  }
+  return false
+}
+
 export function workbenchThemeLabel(id: WorkbenchTheme | string): string {
-  return workbenchThemeOptions.find(item => item.id === id)?.shortTitle ?? '纯白'
+  return getThemeDefinition(id).definition.shortTitle
 }
 
 export function chatBubbleStyleLabel(id: ChatBubbleStyle | string): string {
@@ -50,16 +65,19 @@ export function chatBubbleStyleLabel(id: ChatBubbleStyle | string): string {
 
 export function nextWorkbenchTheme(current: WorkbenchTheme): WorkbenchTheme {
   const index = themeOrder.indexOf(current)
-  return themeOrder[(index + 1) % themeOrder.length] ?? 'white'
+  return themeOrder[(index + 1) % themeOrder.length] ?? DEFAULT_THEME_ID
 }
 
-const theme = ref<WorkbenchTheme>(storedTheme())
-const bubbleStyle = ref<ChatBubbleStyle>(storedBubbleStyle())
+// 保留原始 themeId（允许未来版本的主题 ID 在回退到默认主题渲染时不丢失本地存储值）
+const rawThemeId = ref<string>(readStoredThemeRaw())
+const theme = computed<WorkbenchTheme>(() => getThemeDefinition(rawThemeId.value).resolvedId)
+const bubbleStyle = ref<ChatBubbleStyle>(readStoredBubbleStyle())
+const reducedTransparency = ref<boolean>(readStoredReducedTransparency())
 
 export function useWorkbenchTheme() {
   function setTheme(value: WorkbenchTheme) {
-    theme.value = value
-    try { localStorage.setItem(key, value) } catch { /* Keep the in-session choice. */ }
+    rawThemeId.value = value
+    try { localStorage.setItem(key, value) } catch { /* 保持当次会话选择 */ }
   }
 
   function setBubbleStyle(value: ChatBubbleStyle) {
@@ -67,8 +85,21 @@ export function useWorkbenchTheme() {
     if (typeof document !== 'undefined') {
       document.documentElement.dataset.bubbleStyle = value
     }
-    try { localStorage.setItem(bubbleKey, value) } catch { /* Keep the in-session choice. */ }
+    try { localStorage.setItem(bubbleKey, value) } catch { /* 保持当次会话选择 */ }
   }
 
-  return { theme, setTheme, bubbleStyle, setBubbleStyle }
+  function setReducedTransparency(value: boolean) {
+    reducedTransparency.value = value
+    try { localStorage.setItem(reducedTransparencyKey, String(value)) } catch { /* 保持当次会话选择 */ }
+  }
+
+  return {
+    theme,
+    rawThemeId,
+    setTheme,
+    bubbleStyle,
+    setBubbleStyle,
+    reducedTransparency,
+    setReducedTransparency,
+  }
 }

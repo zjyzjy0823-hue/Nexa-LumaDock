@@ -12,8 +12,8 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 | --- | --- | --- | --- |
 | **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
 | **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审、多端直连 Core 登录与安全边界加固 | 本地全量回归已通过（107 前端 + 6 agent-node + 503 后端），待远端推送 CI 与多节点实机最终验收 | ✅ 主体已收口 |
-| **v0.7.1** | **Shared Space（`/space`）三档分级共享首版 & Theme Engine 标准化**：`standard`（随时查看/专用 Space Token API 直读）+ `protected`（UI 按次输密/细粒度 Vault Token 直读）+ `e2ee`（Argon2id/AES-256-GCM 零知识与 Epoch 轮换）；共用 Theme Registry 与可选 Liquid Glass | 密码学跨语言向量、三档隔离与审计矩阵、旧 v3 外观严格字段兼容（详单见 [v0.7.1 计划](v0.7.1-plan.md)） | 🚧 下一阶段（15–24 人日） |
-| **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 12–20 人日 |
+| **v0.7.1** | **Shared Space（`/space`）三档分级共享首版 & Theme Engine 标准化**：`standard`（随时查看/专用 Space Token API 直读）+ `protected`（UI 按次输密/细粒度 Vault Token 直读）+ `e2ee`（Argon2id/AES-256-GCM 零知识与 Epoch 轮换）；共用 Theme Registry 与可选 Liquid Glass | 本地全量单测、跨语言密码学向量与生产构建已通过，待远端 CI（含 PostgreSQL 0021 迁移）与真机验收（详单见 [v0.7.1 计划](v0.7.1-plan.md)） | ✅ 主体已落地 |
+| **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 🚧 下一阶段（12–20 人日） |
 | **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 12–20 人日 |
 | **v0.8.1** | **Android 全业务与移动完整体验闭环**：Ledger / Data / Conflict Center、Automation、Share to Studiolo、Android 本地密文块缓存与无障碍/低端机优化 | 跨端金额/时区语义、父子依赖同步、TalkBack 与 48dp 触控规范、Android 密文块接入 | 14–24 人日 |
 | **v0.9.0** | **功能冻结、安全加固与发布工程**：长离线与密文恢复、桌面旧凭据安全存储迁移、Android WorkManager 后台同步、三端签名/公证候选包 | 跨版本升级与库/blob 一致性恢复、桌面凭据无损迁移、真机持久运行诊断 | 12–22 人日 |

@@ -1,0 +1,75 @@
+/*
+ * Studiolo Theme Engine 语义 Surface Role 与无障碍/低端机材质降级防线。
+ *
+ * 规则：
+ * 1. Liquid Glass 仅作用于 nav / card / overlay / popover，长列表(list)、输入区(input)与长文本(prose)强制使用高对比实体表面。
+ * 2. 当平台不支持 backdrop-filter、系统开启 prefers-reduced-transparency 或用户开启无模糊降级时，
+ *    自动退化为不透明实体表面与简化阴影。
+ */
+
+[data-surface-role="list"],
+[data-surface-role="input"],
+[data-surface-role="prose"] {
+  background: var(--solid);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-material="solid"] .mat,
+:root[data-material="solid"] .workbench-material,
+:root[data-reduced-transparency="on"] .mat,
+:root[data-reduced-transparency="on"] .workbench-material,
+:root[data-blur="off"] .mat,
+:root[data-blur="off"] .workbench-material {
+  background: var(--solid);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-theme="glass"][data-material="solid"] {
+  --glass-dialog-background: var(--solid);
+  --glass-card-background: var(--solid);
+  --surface: var(--solid);
+  --material-filter: none;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme="glass"] {
+    --glass-dialog-background: var(--solid);
+    --glass-card-background: var(--solid);
+    --surface: var(--solid);
+    --material-filter: none;
+  }
+
+  .mat,
+  .workbench-material {
+    background: var(--solid);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme="glass"] {
+    --glass-dialog-background: var(--solid);
+    --glass-card-background: var(--solid);
+    --surface: var(--solid);
+    --material-filter: none;
+  }
+
+  .mat,
+  .workbench-material {
+    background: var(--solid);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

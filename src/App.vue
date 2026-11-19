@@ -37,6 +37,7 @@ import { useLedgerStore } from './stores/ledger'
 import { useSpaceStore } from './stores/space'
 import { nextWorkbenchTheme, useWorkbenchTheme, workbenchThemeLabel } from './composables/useWorkbenchTheme'
 import type { WorkbenchTheme } from './composables/useWorkbenchTheme'
+import { applyThemeToRoot, resolveThemeState } from './theme/registry'
 
 type Page = 'Home' | 'Dashboard' | 'Websites' | 'Devices' | 'Agents' | 'Data' | 'Ledger' | 'Automation' | 'API' | 'Settings' | 'Space' | 'Chat'
 const pagePaths: Record<Page, string> = {
@@ -55,9 +56,12 @@ const android = desktopPlatform() === 'android'
 const desktop = isTauri() && !android
 const auth = useAuthStore()
 const settings = useSettingsStore()
-const { theme, setTheme, bubbleStyle } = useWorkbenchTheme()
+const { theme, rawThemeId, setTheme, bubbleStyle, reducedTransparency } = useWorkbenchTheme()
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
 const prefersDark = ref(systemDark.matches)
+const supportsBackdropFilter = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+  ? (CSS.supports('backdrop-filter', 'blur(1px)') || CSS.supports('-webkit-backdrop-filter', 'blur(1px)'))
+  : true
 const syncSettings = ref(new URLSearchParams(window.location.search).get('section') === 'sync')
 const mobileMedia = window.matchMedia('(max-width: 700px)')
 const mobile = ref(android || (mobileMedia.matches && !desktop))
@@ -113,19 +117,21 @@ watch(() => auth.user?.id, (current, previous) => {
   }
   if (current !== undefined && auth.token) void settings.load(auth.token).catch(() => {})
 })
-watch([theme, mode, motionReduced, bubbleStyle, () => settings.settings.appearance], ([value, colorMode, reduced, bStyle, appearance]) => {
-  const root = document.documentElement
-  const blur = appearance.blur ?? 26
-  root.dataset.theme = root.dataset.workbenchTheme = value
-  root.dataset.mode = root.dataset.workbenchMode = colorMode
-  root.dataset.blur = root.dataset.workbenchBlur = blur > 0 ? 'on' : 'off'
-  root.dataset.motion = reduced ? 'reduced' : 'full'
-  root.dataset.bubbleStyle = bStyle
-  root.style.setProperty('--workbench-blur', blur + 'px')
-  document.querySelector('meta[name="theme-color"]')?.setAttribute(
-    'content',
-    colorMode === 'dark' ? '#0d1117' : value === 'paper' ? '#f3f2ee' : '#fdfdfe',
-  )
+watch([rawThemeId, mode, motionReduced, reducedTransparency, bubbleStyle, () => settings.settings.appearance], ([requestedId, colorMode, reduced, noGlass, bStyle, appearance]) => {
+  const resolved = resolveThemeState({
+    requestedThemeId: requestedId,
+    appearanceTheme: colorMode,
+    primaryTheme: settings.settings.theme,
+    systemPrefersDark: prefersDark.value,
+    blurPx: appearance.blur ?? 26,
+    transparencyPercent: appearance.transparency ?? 72,
+    reducedMotion: reduced,
+    reducedTransparency: noGlass,
+    supportsBackdropFilter,
+    bubbleStyle: bStyle,
+  })
+  applyThemeToRoot(document.documentElement, resolved)
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved.themeColor)
 }, { immediate: true })
 
 function setReducedMotion(value: boolean) {

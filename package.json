@@ -9,6 +9,7 @@
     "test:core-sync": "node --test tests/core-sync.test.mjs",
     "test:fleet": "node --experimental-strip-types --test tests/fleet.test.mjs",
     "test:space-crypto": "node --experimental-strip-types --test tests/space-crypto.test.mjs",
+    "test:theme-engine": "node --experimental-strip-types --test tests/theme-engine.test.mjs",
     "test:desktop": "node --experimental-strip-types --test tests/desktop-shortcuts.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",

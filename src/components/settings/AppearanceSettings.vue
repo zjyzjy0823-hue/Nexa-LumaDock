@@ -1,18 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Check, CircleHelp, Droplets, SlidersHorizontal, Sparkles } from 'lucide-vue-next'
 import SettingsSection from './SettingsSection.vue'
 import { accentOptions, backgroundOptions, themeOptions } from '../../mock/settings'
 import type { AppearanceConfig } from '../../types/settings'
 import { useWorkbenchTheme, workbenchThemeOptions } from '../../composables/useWorkbenchTheme'
+import { resolveThemeState } from '../../theme/registry'
 
 const props = defineProps<{ config: AppearanceConfig }>()
 const emit = defineEmits<{ 'update:config': [config: AppearanceConfig] }>()
-const { theme: workbenchTheme, setTheme } = useWorkbenchTheme()
+const { theme: workbenchTheme, rawThemeId, setTheme, reducedTransparency, setReducedTransparency } = useWorkbenchTheme()
 
 function update<K extends keyof AppearanceConfig>(key: K, value: AppearanceConfig[K]) {
   emit('update:config', { ...props.config, [key]: value })
 }
 const accent = () => accentOptions.find(item => item.id === props.config.accent)?.color ?? accentOptions[0]!.color
+const resolvedPreview = computed(() =>
+  resolveThemeState({
+    requestedThemeId: rawThemeId.value,
+    appearanceTheme: props.config.theme,
+    systemPrefersDark: typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
+    blurPx: props.config.blur,
+    transparencyPercent: props.config.transparency,
+    reducedTransparency: reducedTransparency.value,
+  }),
+)
 </script>
 
 <template>
@@ -22,7 +34,11 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
       <div class="workbench-theme-options__buttons" role="group" aria-label="工作台主题">
         <button v-for="item in workbenchThemeOptions" :key="item.id" class="workbench-button" type="button" :aria-pressed="workbenchTheme === item.id" @click="setTheme(item.id)">{{ item.shortTitle }}</button>
       </div>
-      <p class="appearance-note">主题选择保存在本设备。新版工作台、今天和网站会立即应用。</p>
+      <p class="appearance-note">主题选择保存在本设备（不改变 Sync v3 外观字段）。新版工作台、共享空间与对话会立即应用。</p>
+      <label class="appearance-degrade-toggle">
+        <input type="checkbox" :checked="reducedTransparency" @change="setReducedTransparency(($event.target as HTMLInputElement).checked)" />
+        <span>减少透明与模糊（低端机 / 高对比实体降级）</span>
+      </label>
     </div>
     <div class="appearance-layout">
       <div class="appearance-main">
@@ -66,8 +82,8 @@ const accent = () => accentOptions.find(item => item.id === props.config.accent)
 
       <div class="appearance-side">
         <div class="appearance-live-title">实时预览 <span>LIVE PREVIEW</span></div>
-        <div class="appearance-preview" :class="[`background--${config.background}`, `appearance-preview--${config.theme}`]"
-          :style="{ '--preview-accent': accent(), '--preview-blur': `${config.blur}px`, '--preview-opacity': `${config.transparency / 100}` }">
+        <div class="appearance-preview" :class="[`background--${config.background}`, `appearance-preview--${resolvedPreview.colorMode}`]"
+          :style="{ '--preview-accent': accent(), '--preview-blur': `${resolvedPreview.effectiveBlurPx}px`, '--preview-opacity': `${resolvedPreview.effectiveOpacity}` }">
           <div class="appearance-preview__orb" />
           <div class="appearance-preview__panel"><div class="appearance-preview__top"><span class="appearance-preview__logo">✦</span><span class="appearance-preview__dots">•••</span></div><strong>Studiolo</strong><small>Everything in its place.</small><div class="appearance-preview__line"><span /></div><div class="appearance-preview__tiles"><i /><i /><i /></div></div>
         </div>
