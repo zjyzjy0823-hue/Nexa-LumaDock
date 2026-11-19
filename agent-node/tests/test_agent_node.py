@@ -294,10 +294,13 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
         await daemon.handle_command(ws, {"type": "session.open", "provider": "mock", "cwd": str(repo), "requestId": "open-cp"})
         sid = next(f["sessionId"] for f in frames if f["type"] == "SessionOpened")
 
-        # 1. 工作区文件索引查询
+        # 1. 工作区文件索引查询（含子序列模糊匹配）
         await daemon.handle_command(ws, {"type": "files.list", "provider": "mock", "sessionId": sid, "query": "app", "requestId": "fl-1"})
         files_snap = next(f for f in frames if f["type"] == "FilesSnapshot" and f.get("requestId") == "fl-1")
         assert "src/app.py" in files_snap["files"]
+        await daemon.handle_command(ws, {"type": "files.list", "provider": "mock", "sessionId": sid, "query": "sap", "requestId": "fl-fuzzy"})
+        fuzzy_snap = next(f for f in frames if f["type"] == "FilesSnapshot" and f.get("requestId") == "fl-fuzzy")
+        assert "src/app.py" in fuzzy_snap["files"]
 
         # 2. 发送 /plan + MOCK_EDIT：触发 TodoUpdated, ToolCallUpdate, 写 mock_demo.txt 并自动生成 Checkpoint 与 DiffSnapshot
         await daemon.handle_command(
@@ -318,10 +321,11 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
         diff_snap = next(f for f in frames if f["type"] == "DiffSnapshot" and f["sessionId"] == sid)
         assert any(item["path"] == "mock_demo.txt" for item in diff_snap["files"])
 
-        # 3. 主动拉取 session.diff
+        # 3. 主动拉取 session.diff（含当前 Git 分支名）
         await daemon.handle_command(ws, {"type": "session.diff", "provider": "mock", "sessionId": sid, "requestId": "sd-1"})
         manual_diff = next(f for f in frames if f["type"] == "DiffSnapshot" and f.get("requestId") == "sd-1")
         assert any(item["path"] == "mock_demo.txt" for item in manual_diff["files"])
+        assert bool(manual_diff.get("branch"))
 
         # 4. 检查点回滚应清除新增文件并推送刷新后空 DiffSnapshot
         await daemon.handle_command(
@@ -423,7 +427,32 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
                 break
             await asyncio.sleep(0.1)
         assert any(f["type"] == "TerminalOutput" and "TERMINAL_OK_SENTINEL" in f.get("data", "") for f in frames)
+        await daemon.handle_command(ws, {"type": "terminal.signal", "terminalId": tid, "signal": "SIGINT"})
         await daemon.handle_command(ws, {"type": "terminal.close", "terminalId": tid, "sessionId": sid2})
         await daemon.terminal_manager.close_all()
+
+        # 9. 文件写入、Git Blame 查询与工作区 Skills 动态发现
+        (repo / ".studiolo" / "skills").mkdir(parents=True, exist_ok=True)
+        (repo / ".studiolo" / "skills" / "quick-check.md").write_text(
+            "---\ndescription: 快速检查当前仓库健康度\n---\n请运行核心单测并汇报结果。",
+            encoding="utf-8",
+        )
+        await daemon.handle_command(ws, {"type": "skills.list", "provider": "mock", "sessionId": sid2, "requestId": "sk-1"})
+        sk_evt = next((f for f in frames if f["type"] == "SkillsSnapshot" and f.get("requestId") == "sk-1"), None)
+        assert sk_evt is not None and any(s["trigger"] == "/quick-check" for s in sk_evt["skills"]), sk_evt
+
+        await daemon.handle_command(
+            ws,
+            {"type": "file.write", "provider": "mock", "sessionId": sid2, "path": "src/app.py", "content": "print('v3')\n", "requestId": "fw-1"},
+        )
+        fw_evt = next((f for f in frames if f["type"] == "FileWritten" and f.get("requestId") == "fw-1"), None)
+        assert fw_evt is not None and (repo / "src" / "app.py").read_text(encoding="utf-8") == "print('v3')\n"
+
+        await daemon.handle_command(
+            ws,
+            {"type": "file.blame", "provider": "mock", "sessionId": sid2, "path": "src/app.py", "requestId": "fb-1"},
+        )
+        fb_evt = next((f for f in frames if f["type"] == "FileBlameSnapshot" and f.get("requestId") == "fb-1"), None)
+        assert fb_evt is not None and fb_evt["isGitRepo"] is True and len(fb_evt["lines"]) >= 1
 
     asyncio.run(_run())

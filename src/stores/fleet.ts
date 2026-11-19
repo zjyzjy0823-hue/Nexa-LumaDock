@@ -23,6 +23,8 @@ import type {
   ChatMessage,
   ChatSession,
   CheckpointInfo,
+  ComposerMode,
+  DiffAnnotation,
   DiffFileEntry,
   FilePreviewState,
   FleetConnectionState,
@@ -40,16 +42,22 @@ import type {
   TerminalSessionState,
   TodoItem,
   WorkspaceRule,
+  WorkspaceSkill,
   WorkspaceTreeEntry,
 } from '../types/fleet'
 import { buildSessionHtmlReport } from '../services/htmlExport'
 import {
   appendMessagePart,
   branchFromUserMessage,
+  buildDiffAnnotationsPrompt,
+  buildForkContextSeed,
   buildSessionMarkdown,
+  deriveOptimisticSessionTitle,
+  isGenericSessionTitle,
   mergeToolCallUpdate,
   switchMessageBranch,
 } from '../services/chatHelpers'
+import { loadSoundPref, playCueSound, saveSoundPref } from '../services/soundCue'
 import {
   applyTokenUsageEvent,
   estimateTurnUsageFallback,
@@ -61,7 +69,7 @@ import {
 import { resolveSavedModelPref, saveAgentModelPref } from '../services/modelPrefs'
 import { useAuthStore } from './auth'
 
-const MAX_MESSAGES_PER_SESSION = 200
+const MAX_MESSAGES_PER_SESSION = 500
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]
 
 export function sessionKey(nodeId: string, provider: AdapterProvider, sessionId: string): string {
@@ -100,19 +108,88 @@ export const useFleetStore = defineStore('fleet', () => {
   const pendingApprovalsByCall = ref<Record<string, PermissionRequestCard>>({})
   const runningBySession = ref<Record<string, string>>({}) // sessionKey -> active runId
   const composerDrafts = ref<Record<string, { text: string; files: File[] }>>({})
+  const DRAFT_SESSION_KEY = 'studiolo:fleet-drafts:v1'
+  const SEND_SHORTCUT_KEY = 'studiolo:fleet-send-shortcut:v1'
+  const sendShortcut = ref<'enter' | 'ctrl-enter'>(
+    typeof window !== 'undefined' && window.localStorage?.getItem(SEND_SHORTCUT_KEY) === 'ctrl-enter'
+      ? 'ctrl-enter'
+      : 'enter',
+  )
+  const soundEnabled = ref<boolean>(loadSoundPref())
+
+  // 从 sessionStorage 恢复当前标签页未发出的文本草稿（仅内存标签生命周期，登出/清理立即销毁）
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      const raw = window.sessionStorage.getItem(DRAFT_SESSION_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, string>
+        if (parsed && typeof parsed === 'object') {
+          const restored: Record<string, { text: string; files: File[] }> = {}
+          for (const [k, txt] of Object.entries(parsed)) {
+            if (typeof txt === 'string' && txt.trim()) restored[k] = { text: txt, files: [] }
+          }
+          composerDrafts.value = restored
+        }
+      }
+    } catch {
+      // 忽略解析异常
+    }
+  }
+
+  watch(
+    composerDrafts,
+    drafts => {
+      if (typeof window === 'undefined' || !window.sessionStorage) return
+      try {
+        const slim: Record<string, string> = {}
+        for (const [k, v] of Object.entries(drafts)) {
+          if (v?.text?.trim()) slim[k] = v.text
+        }
+        if (Object.keys(slim).length) window.sessionStorage.setItem(DRAFT_SESSION_KEY, JSON.stringify(slim))
+        else window.sessionStorage.removeItem(DRAFT_SESSION_KEY)
+      } catch {
+        // 存储配额受限时静默忽略
+      }
+    },
+    { deep: true },
+  )
+
+  function toggleSendShortcut() {
+    sendShortcut.value = sendShortcut.value === 'enter' ? 'ctrl-enter' : 'enter'
+    if (typeof window !== 'undefined') {
+      try { window.localStorage?.setItem(SEND_SHORTCUT_KEY, sendShortcut.value) } catch { /* ignore */ }
+    }
+  }
+
+  function toggleSoundCues() {
+    soundEnabled.value = !soundEnabled.value
+    saveSoundPref(soundEnabled.value)
+    if (soundEnabled.value) playCueSound('complete')
+  }
   const runSettings = ref<Record<string, RunOptions>>({})
   const catalogs = ref<Record<string, { models: FleetModel[]; message?: string }>>({})
   const agentsByTarget = ref<Record<string, AgentModeOption[]>>({})
   const mcpByTarget = ref<Record<string, McpServerInfo[]>>({})
   const rulesByTarget = ref<Record<string, WorkspaceRule[]>>({})
+  const skillsByTarget = ref<Record<string, WorkspaceSkill[]>>({})
   const filePreviewBySession = ref<Record<string, FilePreviewState>>({})
   const fileTextCacheBySession = ref<Record<string, Record<string, string[]>>>({})
   const silentFileReadRequests = new Set<string>()
+  const pendingDownloadRequests = new Map<string, string>()
   const pendingFormsById = ref<Record<string, MessageFormRequest>>({})
   const treeCacheByTarget = ref<Record<string, WorkspaceTreeEntry[]>>({})
   const trustPatternsByNode = ref<Record<string, string[]>>({})
   const terminalBySession = ref<Record<string, TerminalSessionState>>({})
   const bookmarkedIdsBySession = ref<Record<string, string[]>>({})
+  const diffAnnotationsBySession = ref<Record<string, DiffAnnotation[]>>({})
+  const unreadCountBySession = ref<Record<string, number>>({})
+  const firstUnreadMsgIdBySession = ref<Record<string, string>>({})
+  const interruptedBySession = ref<Record<string, boolean>>({})
+  const historyLimitBySession = ref<Record<string, number>>({})
+  const lastSeqBySession = ref<Record<string, number>>({})
+  const forkSeedBySession = ref<Record<string, string>>({})
+  const sideChatSessionKeyByParent = ref<Record<string, string>>({})
+  const composerModeBySession = ref<Record<string, ComposerMode>>({})
   const notificationsEnabled = ref(
     typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted',
   )
@@ -124,7 +201,7 @@ export const useFleetStore = defineStore('fleet', () => {
   const filesCacheByTarget = ref<Record<string, string[]>>({})
   const queuedPromptsBySession = ref<Record<string, QueuedPromptItem[]>>({})
   const imagePreviewByArtifactId = ref<Record<string, string>>({})
-  const pendingRunPrompts = new Map<string, { text: string; model?: string }>()
+  const pendingRunPrompts = new Map<string, { text: string; model?: string; startedAt?: number }>()
   const autoPulledNodes = new Set<string>()
   const sentRequestIds = new Set<string>()
   const steerSessionKeys = new Set<string>()
@@ -219,19 +296,33 @@ export const useFleetStore = defineStore('fleet', () => {
     sentRequestIds.clear()
     steerSessionKeys.clear()
     composerDrafts.value = {}
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try { window.sessionStorage.removeItem(DRAFT_SESSION_KEY) } catch { /* ignore */ }
+    }
     runSettings.value = {}
     catalogs.value = {}
     agentsByTarget.value = {}
     mcpByTarget.value = {}
     rulesByTarget.value = {}
+    skillsByTarget.value = {}
     filePreviewBySession.value = {}
     fileTextCacheBySession.value = {}
     silentFileReadRequests.clear()
+    pendingDownloadRequests.clear()
     pendingFormsById.value = {}
     treeCacheByTarget.value = {}
     trustPatternsByNode.value = {}
     terminalBySession.value = {}
     bookmarkedIdsBySession.value = {}
+    diffAnnotationsBySession.value = {}
+    unreadCountBySession.value = {}
+    firstUnreadMsgIdBySession.value = {}
+    interruptedBySession.value = {}
+    historyLimitBySession.value = {}
+    lastSeqBySession.value = {}
+    forkSeedBySession.value = {}
+    sideChatSessionKeyByParent.value = {}
+    composerModeBySession.value = {}
     unreadNotifyTitle.value = ''
     tokenUsageStateBySession.value = {}
     todosBySession.value = {}
@@ -593,6 +684,16 @@ export const useFleetStore = defineStore('fleet', () => {
       return
     }
 
+    if (etype === 'SkillsSnapshot' && nodeId && Array.isArray(frame.skills)) {
+      const target = frame.sessionId ? sessionKey(nodeId, provider, frame.sessionId) : `${nodeId}::${provider}`
+      skillsByTarget.value = {
+        ...skillsByTarget.value,
+        [`${nodeId}::${provider}`]: frame.skills,
+        [target]: frame.skills,
+      }
+      return
+    }
+
     if (etype === 'FilesSnapshot' && nodeId && Array.isArray(frame.files)) {
       const filePaths = (frame.files as unknown[]).filter((x): x is string => typeof x === 'string')
       const nextCache = {
@@ -634,12 +735,22 @@ export const useFleetStore = defineStore('fleet', () => {
         if (!s.sessionId) continue
         const p = (s.provider || provider) as AdapterProvider
         const k = sessionKey(nodeId, p, s.sessionId)
+        const existingTitle = next[k]?.title
+        let resolvedTitle = s.title || ''
+        if (isGenericSessionTitle(resolvedTitle)) {
+          if (existingTitle && !isGenericSessionTitle(existingTitle)) {
+            resolvedTitle = existingTitle
+          } else {
+            const firstUser = (messagesBySession.value[k] ?? []).find(m => m.role === 'user' && m.text.trim())
+            resolvedTitle = (firstUser ? deriveOptimisticSessionTitle(firstUser.text) : '') || '新对话'
+          }
+        }
         next[k] = {
           ...(next[k] ?? {}),
           sessionId: s.sessionId,
           nodeId,
           provider: p,
-          title: s.title || s.sessionId,
+          title: resolvedTitle,
           cwd: s.cwd || '',
         }
         added.push({ k, p })
@@ -653,13 +764,15 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'SessionOpened' && nodeId && frame.sessionId) {
       const k = sessionKey(nodeId, provider, frame.sessionId)
+      const initialTitle =
+        frame.title && !isGenericSessionTitle(frame.title) ? frame.title : '新对话'
       sessionsByKey.value = {
         ...sessionsByKey.value,
         [k]: {
           sessionId: frame.sessionId,
           nodeId,
           provider,
-          title: frame.title || `${provider} · ${frame.sessionId.slice(0, 8)}`,
+          title: initialTitle,
           cwd: frame.cwd || '',
           worktreePath: frame.worktreePath ?? null,
         },
@@ -673,13 +786,16 @@ export const useFleetStore = defineStore('fleet', () => {
       if (queuedIdx >= 0 && !pendingOpenQueue[queuedIdx].onOpened) activeSessionKey.value = k
       if (queuedIdx >= 0) {
         const [item] = pendingOpenQueue.splice(queuedIdx, 1)
-        item.onOpened?.(k)
-        if (item.options) runSettings.value[k] = { ...item.options }
+        // 先应用继承的模型与思考强度配置，再触发 onOpened，确保新会话/分屏/侧边问答首帧即显示继承模型
+        if (item.options) {
+          runSettings.value = { ...runSettings.value, [k]: { ...item.options } }
+        }
         if (!runSettings.value[k]?.model && runSettings.value[k]?.model !== '') {
           applyDefaultModelPref(k, nodeId, provider)
         }
+        item.onOpened?.(k)
         if (item.initialPrompt) {
-          void sendPromptToSession(k, item.initialPrompt, item.initialAttachments ?? [], item.options ?? runSettings.value[k])
+          void sendPromptToSession(k, item.initialPrompt, item.initialAttachments ?? [], runSettings.value[k] ?? item.options)
         }
       } else {
         applyDefaultModelPref(k, nodeId, provider)
@@ -689,7 +805,9 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'SessionHistory' && nodeId && frame.sessionId && Array.isArray(frame.messages)) {
       const k = sessionKey(nodeId, provider, frame.sessionId)
-      if (messagesBySession.value[k]?.length) return
+      const existingLen = messagesBySession.value[k]?.length ?? 0
+      // 支持向上分页加载更早历史：当新拉取条数多于当前内存条数时允许替换刷新
+      if (existingLen > 0 && frame.messages.length <= existingLen) return
       const hydrated: ChatMessage[] = frame.messages.map((m, idx) => {
         const mappedTools = Array.isArray(m.toolCalls) && m.toolCalls.length
           ? m.toolCalls.map((tc, tIdx) => ({
@@ -704,8 +822,17 @@ export const useFleetStore = defineStore('fleet', () => {
               error: tc.error,
               durationMs: tc.durationMs,
               subagentSessionId: tc.subagentSessionId,
+              ...(tc.media?.length ? { media: tc.media } : {}),
             }))
           : undefined
+        const combinedMedia: import('../types/fleet').MessageMediaItem[] = []
+        const seenMediaUrls = new Set<string>()
+        for (const item of [...(m.media ?? []), ...(mappedTools?.flatMap(t => t.media ?? []) ?? [])]) {
+          if (item?.url && !seenMediaUrls.has(item.url)) {
+            seenMediaUrls.add(item.url)
+            combinedMedia.push(item)
+          }
+        }
         const mappedParts = Array.isArray(m.parts) && m.parts.length
           ? m.parts.reduce<import('../types/fleet').MessagePart[]>((acc, p) => {
               if (p.type === 'thought' && p.text) return appendMessagePart(acc, { type: 'thought', text: p.text })
@@ -723,11 +850,23 @@ export const useFleetStore = defineStore('fleet', () => {
           ...(m.thought ? { thought: m.thought } : {}),
           ...(mappedTools ? { toolCalls: mappedTools } : {}),
           ...(mappedParts?.length ? { parts: mappedParts } : {}),
+          ...(combinedMedia.length ? { media: combinedMedia } : {}),
           streaming: false,
           createdAt: Date.now(),
         }
       })
       messagesBySession.value = { ...messagesBySession.value, [k]: hydrated.slice(-MAX_MESSAGES_PER_SESSION) }
+      const curSess = sessionsByKey.value[k]
+      if (curSess && isGenericSessionTitle(curSess.title)) {
+        const firstUser = hydrated.find(x => x.role === 'user' && x.text.trim())
+        const derived = firstUser ? deriveOptimisticSessionTitle(firstUser.text) : ''
+        if (derived) {
+          sessionsByKey.value = {
+            ...sessionsByKey.value,
+            [k]: { ...curSess, title: derived },
+          }
+        }
+      }
       return
     }
 
@@ -748,16 +887,57 @@ export const useFleetStore = defineStore('fleet', () => {
 
     const effProvider = sessionsByKey.value[sKey]?.provider ?? provider
 
+    if (typeof frame.seq === 'number' && frame.seq > (lastSeqBySession.value[sKey] ?? 0)) {
+      lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.seq }
+    }
+
     if (etype === 'SessionStreamReplay' && sid && Array.isArray(frame.events)) {
       if (frame.active && frame.events.length) {
-        // 断线/刷新重连时先清理该会话未闭合的半截流式占位，避免回放重放重复拼接
-        const prevMsgs = messagesBySession.value[sKey] ?? []
-        const trimmed = prevMsgs.filter(m => !(m.role === 'assistant' && m.streaming))
-        if (trimmed.length !== prevMsgs.length) {
-          messagesBySession.value = { ...messagesBySession.value, [sKey]: trimmed }
+        // 仅在全量重放（非 lastSeq 增量模式）时清理半截占位，避免增量续传造成内容闪断
+        if (!frame.incremental) {
+          const prevMsgs = messagesBySession.value[sKey] ?? []
+          const trimmed = prevMsgs.filter(m => !(m.role === 'assistant' && m.streaming))
+          if (trimmed.length !== prevMsgs.length) {
+            messagesBySession.value = { ...messagesBySession.value, [sKey]: trimmed }
+          }
         }
         for (const sub of frame.events) {
           handleWsEvent({ ...sub, nodeId, provider: effProvider, sessionId: sid })
+        }
+      }
+      if (typeof frame.lastSeq === 'number') {
+        lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.lastSeq }
+      }
+      return
+    }
+
+    if (etype === 'FileWritten' && frame.path) {
+      const existing = filePreviewBySession.value[sKey]
+      if (existing && existing.path === frame.path) {
+        filePreviewBySession.value = {
+          ...filePreviewBySession.value,
+          [sKey]: {
+            ...existing,
+            saving: false,
+            lineCount: frame.lineCount ?? existing.lineCount,
+            sizeBytes: frame.sizeBytes ?? existing.sizeBytes,
+            updatedAt: Date.now(),
+          },
+        }
+      }
+      return
+    }
+
+    if (etype === 'FileBlameSnapshot' && frame.path && Array.isArray(frame.lines)) {
+      const existing = filePreviewBySession.value[sKey]
+      if (existing && existing.path === frame.path) {
+        filePreviewBySession.value = {
+          ...filePreviewBySession.value,
+          [sKey]: {
+            ...existing,
+            blame: frame.lines,
+            blameLoading: false,
+          },
         }
       }
       return
@@ -774,6 +954,30 @@ export const useFleetStore = defineStore('fleet', () => {
           },
         }
       }
+      if (frame.requestId && pendingDownloadRequests.has(frame.requestId)) {
+        const dlName = pendingDownloadRequests.get(frame.requestId) || frame.path.replace(/\\/g, '/').split('/').pop() || 'download'
+        pendingDownloadRequests.delete(frame.requestId)
+        silentFileReadRequests.delete(frame.requestId)
+        if (typeof document !== 'undefined') {
+          let href = ''
+          let revoke = false
+          if (frame.base64Data) {
+            href = `data:${frame.mime || 'application/octet-stream'};base64,${frame.base64Data}`
+          } else {
+            const blob = new Blob([frame.content || ''], { type: `${frame.mime || 'text/plain'};charset=utf-8` })
+            href = URL.createObjectURL(blob)
+            revoke = true
+          }
+          const a = document.createElement('a')
+          a.href = href
+          a.download = dlName
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          if (revoke) setTimeout(() => URL.revokeObjectURL(href), 1000)
+        }
+        return
+      }
       if (frame.requestId && silentFileReadRequests.has(frame.requestId)) {
         silentFileReadRequests.delete(frame.requestId)
         return
@@ -789,6 +993,8 @@ export const useFleetStore = defineStore('fleet', () => {
           truncated: Boolean(frame.truncated),
           sizeBytes: frame.sizeBytes || 0,
           isBinary: Boolean(frame.isBinary),
+          mime: frame.mime,
+          base64Data: frame.base64Data,
           loading: false,
           highlightLine: existing?.path === frame.path ? existing.highlightLine : undefined,
           updatedAt: Date.now(),
@@ -799,11 +1005,18 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'Accepted') {
       const rid = frame.runId || frame.requestId || createRequestId()
+      lastError.value = null
       if (frame.requestId && frame.runId && frame.runId !== frame.requestId) {
         const promptMeta = pendingRunPrompts.get(`${sKey}::${frame.requestId}`)
         if (promptMeta) pendingRunPrompts.set(`${sKey}::${frame.runId}`, promptMeta)
       }
       runningBySession.value = { ...runningBySession.value, [sKey]: rid }
+      if (interruptedBySession.value[sKey]) {
+        const nextInt = { ...interruptedBySession.value }
+        delete nextInt[sKey]
+        interruptedBySession.value = nextInt
+      }
+      lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: typeof frame.seq === 'number' ? frame.seq : 0 }
       ensureStreamingAssistantMessage(sKey, nodeId, effProvider, rid, frame.requestId)
       return
     }
@@ -838,11 +1051,20 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if ((etype === 'ToolCall' || etype === 'ToolCallUpdate') && (frame.name || frame.callId)) {
       const callKey = frame.callId || `legacy-${frame.name || 'tool'}`
-      updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
-        ...msg,
-        toolCalls: mergeToolCallUpdate(msg.toolCalls, frame),
-        parts: appendMessagePart(msg.parts, { type: 'tool', callId: callKey }),
-      }))
+      updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => {
+        let nextMedia = msg.media
+        if (frame.media?.length) {
+          const existingUrls = new Set((msg.media ?? []).map(m => m.url))
+          const added = frame.media.filter(m => m?.url && !existingUrls.has(m.url))
+          if (added.length) nextMedia = [...(msg.media ?? []), ...added]
+        }
+        return {
+          ...msg,
+          toolCalls: mergeToolCallUpdate(msg.toolCalls, frame),
+          parts: appendMessagePart(msg.parts, { type: 'tool', callId: callKey }),
+          ...(nextMedia ? { media: nextMedia } : {}),
+        }
+      })
       return
     }
 
@@ -926,6 +1148,7 @@ export const useFleetStore = defineStore('fleet', () => {
           sessionId: sid ?? '',
           cwd: frame.cwd || '',
           output: '',
+          pty: Boolean(frame.pty),
           closed: false,
         },
       }
@@ -1015,12 +1238,13 @@ export const useFleetStore = defineStore('fleet', () => {
         additions: files.reduce((acc, f) => acc + (f.additions || 0), 0),
         deletions: files.reduce((acc, f) => acc + (f.deletions || 0), 0),
       }
-      diffBySession.value = {
+        diffBySession.value = {
         ...diffBySession.value,
         [sKey]: {
           files,
           summary,
           isGitRepo: frame.isGitRepo,
+          branch: typeof frame.branch === 'string' ? frame.branch : diffBySession.value[sKey]?.branch,
           cwd: frame.cwd,
           perTurn: frame.perTurn,
           updatedAt: Date.now(),
@@ -1150,17 +1374,27 @@ export const useFleetStore = defineStore('fleet', () => {
         ...msg,
         artifacts: [...(msg.artifacts ?? []), artifact],
       }))
+      if (artifact.mime?.startsWith('image/')) {
+        void ensureArtifactImagePreview(artifact)
+      }
       return
     }
 
     if (etype === 'Completed') {
-      updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
-        ...msg,
-        streaming: false,
-      }))
       const promptMeta =
         (frame.runId ? pendingRunPrompts.get(`${sKey}::${frame.runId}`) : undefined) ??
         (frame.requestId ? pendingRunPrompts.get(`${sKey}::${frame.requestId}`) : undefined)
+      const durationMs = promptMeta?.startedAt ? Math.max(0, Date.now() - promptMeta.startedAt) : undefined
+      const modelIdEff = promptMeta?.model || runSettings.value[sKey]?.model
+      const modelLabel = modelIdEff
+        ? (catalogs.value[`${nodeId}::${effProvider}`]?.models.find(m => m.id === modelIdEff)?.label || modelIdEff)
+        : undefined
+      updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
+        ...msg,
+        streaming: false,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(modelLabel ? { modelLabel } : {}),
+      }))
       if (frame.usage && typeof frame.usage === 'object') {
         tokenUsageStateBySession.value = {
           ...tokenUsageStateBySession.value,
@@ -1193,15 +1427,36 @@ export const useFleetStore = defineStore('fleet', () => {
           }
         }
       }
+      const turnSummary = toSessionTokenSummary(tokenUsageStateBySession.value[sKey])
+      if (turnSummary?.lastTurnTokens) {
+        updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
+          ...msg,
+          turnTokens: turnSummary.lastTurnTokens,
+        }))
+      }
       if (frame.runId) pendingRunPrompts.delete(`${sKey}::${frame.runId}`)
       if (frame.requestId) pendingRunPrompts.delete(`${sKey}::${frame.requestId}`)
       const copy = { ...runningBySession.value }
       delete copy[sKey]
       runningBySession.value = copy
       steerSessionKeys.delete(sKey)
+      if (sKey !== activeSessionKey.value) {
+        unreadCountBySession.value = {
+          ...unreadCountBySession.value,
+          [sKey]: (unreadCountBySession.value[sKey] ?? 0) + 1,
+        }
+        if (!firstUnreadMsgIdBySession.value[sKey]) {
+          const listNow = messagesBySession.value[sKey] ?? []
+          const lastAssistant = [...listNow].reverse().find(m => m.role === 'assistant')
+          if (lastAssistant) {
+            firstUnreadMsgIdBySession.value = { ...firstUnreadMsgIdBySession.value, [sKey]: lastAssistant.id }
+          }
+        }
+      }
       notifyBackgroundEvent(
         'Studiolo 任务已完成',
         sessionsByKey.value[sKey]?.title || '代理回复已就绪',
+        'complete',
       )
       void drainNextQueuedPrompt(sKey)
       return
@@ -1209,6 +1464,36 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'Failed' || etype === 'NodeUnavailable' || etype === 'Error') {
       const errText = frame.message || frame.code || '执行失败'
+      if (frame.requestId && pendingDownloadRequests.has(frame.requestId)) {
+        pendingDownloadRequests.delete(frame.requestId)
+        silentFileReadRequests.delete(frame.requestId)
+        lastError.value = `无法下载文件：${errText}`
+        return
+      }
+      if (frame.requestId && silentFileReadRequests.has(frame.requestId)) {
+        silentFileReadRequests.delete(frame.requestId)
+        return
+      }
+      const isActiveRunError = Boolean(
+        frame.runId ||
+        runningBySession.value[sKey] ||
+        (frame.requestId && pendingRunPrompts.has(`${sKey}::${frame.requestId}`)),
+      )
+      if (!isActiveRunError) {
+        const curPreview = filePreviewBySession.value[sKey]
+        if (curPreview?.loading) {
+          filePreviewBySession.value = {
+            ...filePreviewBySession.value,
+            [sKey]: { ...curPreview, loading: false, error: errText },
+          }
+          return
+        }
+        if (frame.code === 'path_forbidden') {
+          return
+        }
+        lastError.value = errText
+        return
+      }
       lastError.value = errText
       updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
         ...msg,
@@ -1220,6 +1505,9 @@ export const useFleetStore = defineStore('fleet', () => {
       const copy = { ...runningBySession.value }
       delete copy[sKey]
       runningBySession.value = copy
+      if (frame.code === 'cancelled' || frame.code === 'stream_closed') {
+        interruptedBySession.value = { ...interruptedBySession.value, [sKey]: true }
+      }
       notifyBackgroundEvent('Studiolo 任务异常', errText)
       if (steerSessionKeys.has(sKey)) {
         steerSessionKeys.delete(sKey)
@@ -1230,6 +1518,7 @@ export const useFleetStore = defineStore('fleet', () => {
 
   // ---------------- 会话控制动作 ----------------
   function selectNode(nodeId: string) {
+    lastError.value = null
     selectedNodeId.value = nodeId
     const found = nodes.value.find(n => n.id === nodeId)
     if (found) syncProviderForNode(found)
@@ -1244,6 +1533,7 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   function selectProvider(provider: AdapterProvider) {
+    lastError.value = null
     selectedProvider.value = provider
     const nid = selectedNode.value?.id
     if (!nid) return
@@ -1311,6 +1601,60 @@ export const useFleetStore = defineStore('fleet', () => {
     })
   }
 
+  /**
+   * 为新开会话解析应继承的模型与思考强度：
+   * 优先级：显式指定 > 指定源会话/当前活跃同引擎会话 > 目标节点内存偏好 > 持久化偏好。
+   */
+  function resolveInheritedRunOptions(
+    nodeId: string,
+    provider: AdapterProvider,
+    sourceSessionKey?: string,
+  ): RunOptions | undefined {
+    const candidateKeys: string[] = []
+    const srcKey = sourceSessionKey || activeSessionKey.value
+    if (srcKey) {
+      const srcSess = sessionsByKey.value[srcKey]
+      if (srcSess && srcSess.provider === provider) {
+        candidateKeys.push(srcKey)
+      }
+    }
+    candidateKeys.push(`${nodeId}::${provider}`)
+
+    const cat = catalogs.value[`${nodeId}::${provider}`]
+    const isAvailableModel = (modelId: string) => {
+      if (!cat?.models?.length) return true
+      return Boolean(cat.models.find(m => m.id === modelId && !m.unavailable))
+    }
+
+    for (const key of candidateKeys) {
+      const cfg = runSettings.value[key]
+      if (cfg && cfg.model && isAvailableModel(cfg.model)) {
+        return {
+          model: cfg.model,
+          ...(cfg.effort ? { effort: cfg.effort } : {}),
+        }
+      }
+    }
+
+    const saved = resolveSavedModelPref(nodeId, provider)
+    if (saved?.model && isAvailableModel(saved.model)) {
+      return {
+        model: saved.model,
+        ...(saved.effort ? { effort: saved.effort } : {}),
+      }
+    }
+    return undefined
+  }
+
+  function isCwdWithinNodeRoots(node: AgentNode | undefined, candidateCwd?: string): boolean {
+    if (!candidateCwd || !node?.allowedRoots?.length) return false
+    const normCand = candidateCwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    return node.allowedRoots.some(r => {
+      const normRoot = r.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+      return Boolean(normRoot) && (normCand === normRoot || normCand.startsWith(`${normRoot}/`))
+    })
+  }
+
   function openSession(options: {
     nodeId?: string
     provider?: AdapterProvider
@@ -1319,14 +1663,28 @@ export const useFleetStore = defineStore('fleet', () => {
     requestId?: string
     onOpened?: (key: string) => void
     useWorktree?: boolean
+    inheritFromKey?: string
+    runOptions?: RunOptions
   } = {}) {
     const nid = options.nodeId ?? selectedNode.value?.id
     if (!nid) throw new Error('请先选择控制节点')
     const node = nodes.value.find(n => n.id === nid)
     const prov = options.provider ?? selectedProvider.value
-    const cwd = options.cwd ?? node?.allowedRoots[0] ?? ''
+    const cwd =
+      options.cwd && (!node?.allowedRoots?.length || isCwdWithinNodeRoots(node, options.cwd))
+        ? options.cwd
+        : (node?.allowedRoots?.[0] ?? options.cwd ?? '')
     const requestId = options.requestId ?? createRequestId()
-    if (!pendingOpenQueue.some(p => p.requestId === requestId)) pendingOpenQueue.push({ nodeId: nid, provider: prov, requestId, onOpened: options.onOpened })
+    const inheritedOptions = options.runOptions ?? resolveInheritedRunOptions(nid, prov, options.inheritFromKey)
+    if (!pendingOpenQueue.some(p => p.requestId === requestId)) {
+      pendingOpenQueue.push({
+        nodeId: nid,
+        provider: prov,
+        requestId,
+        onOpened: options.onOpened,
+        ...(inheritedOptions ? { options: inheritedOptions } : {}),
+      })
+    }
     const sent = sendWsCommand({
       type: 'session.open',
       nodeId: nid,
@@ -1344,8 +1702,14 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   function activateSession(sKey: string) {
+    lastError.value = null
     activeSessionKey.value = sKey
     const sess = sessionsByKey.value[sKey]
+    if (unreadCountBySession.value[sKey]) {
+      const nextUnread = { ...unreadCountBySession.value }
+      delete nextUnread[sKey]
+      unreadCountBySession.value = nextUnread
+    }
     if (sess) {
       selectedNodeId.value = sess.nodeId
       selectedProvider.value = sess.provider
@@ -1358,14 +1722,30 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   }
 
+  function markSessionRead(sKey: string) {
+    if (!sKey) return
+    if (unreadCountBySession.value[sKey]) {
+      const next = { ...unreadCountBySession.value }
+      delete next[sKey]
+      unreadCountBySession.value = next
+    }
+    if (firstUnreadMsgIdBySession.value[sKey]) {
+      const nextIds = { ...firstUnreadMsgIdBySession.value }
+      delete nextIds[sKey]
+      firstUnreadMsgIdBySession.value = nextIds
+    }
+  }
+
   function subscribeSession(sKey: string) {
     const sess = sessionsByKey.value[sKey]
     if (!sess || wsState.value !== 'online') return false
+    const lastSeq = lastSeqBySession.value[sKey] ?? 0
     return sendWsCommand({
       type: 'session.subscribe',
       nodeId: sess.nodeId,
       provider: sess.provider,
       sessionId: sess.sessionId,
+      ...(lastSeq > 0 ? { lastSeq } : {}),
       requestId: createRequestId(),
     })
   }
@@ -1373,9 +1753,33 @@ export const useFleetStore = defineStore('fleet', () => {
   function loadSessionHistory(sKey: string) {
     const sess = sessionsByKey.value[sKey]
     if (sess && !messagesBySession.value[sKey]?.length) {
-      sendWsCommand({ type: 'session.history', nodeId: sess.nodeId, provider: sess.provider,
-        sessionId: sess.sessionId, limit: 50, requestId: createRequestId() })
+      const limit = historyLimitBySession.value[sKey] ?? 60
+      historyLimitBySession.value = { ...historyLimitBySession.value, [sKey]: limit }
+      sendWsCommand({
+        type: 'session.history',
+        nodeId: sess.nodeId,
+        provider: sess.provider,
+        sessionId: sess.sessionId,
+        limit,
+        requestId: createRequestId(),
+      })
     }
+  }
+
+  function requestOlderHistory(sKey: string) {
+    const sess = sessionsByKey.value[sKey]
+    if (!sess) return false
+    const curLimit = historyLimitBySession.value[sKey] ?? Math.max(60, messagesBySession.value[sKey]?.length ?? 60)
+    const nextLimit = Math.min(MAX_MESSAGES_PER_SESSION, curLimit + 60)
+    historyLimitBySession.value = { ...historyLimitBySession.value, [sKey]: nextLimit }
+    return sendWsCommand({
+      type: 'session.history',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      limit: nextLimit,
+      requestId: createRequestId(),
+    })
   }
 
   async function sendPromptToSession(
@@ -1391,18 +1795,59 @@ export const useFleetStore = defineStore('fleet', () => {
     if (sentRequestIds.has(reqId)) return
     sentRequestIds.add(reqId)
 
+    // 消费真语义分叉的上下文种子（若存在），以及 Plan 模式约束前缀（前端气泡仍仅展示用户原话）
+    let wireText = text
+    const seed = forkSeedBySession.value[sKey]
+    if (seed) {
+      wireText = `${seed}\n\n---\n${wireText}`
+      const nextSeeds = { ...forkSeedBySession.value }
+      delete nextSeeds[sKey]
+      forkSeedBySession.value = nextSeeds
+    }
+    const mode = composerModeBySession.value[sKey]
+    if ((options?.planMode || mode === 'plan') && !wireText.startsWith('[Plan Mode]')) {
+      wireText = `[Plan Mode] 请先分析涉及的文件与影响范围，输出清晰的分步执行计划，待我确认后再修改代码或执行破坏性命令。\n\n${wireText}`
+    }
+
+    if (interruptedBySession.value[sKey]) {
+      const nextInt = { ...interruptedBySession.value }
+      delete nextInt[sKey]
+      interruptedBySession.value = nextInt
+    }
+    lastError.value = null
+    markSessionRead(sKey)
+
     const sent = sendWsCommand({
       type: 'prompt.send',
       options,
       nodeId: sess.nodeId,
       provider: sess.provider,
       sessionId: sess.sessionId,
-      text,
+      text: wireText,
       attachments: attachments.length ? attachments : undefined,
       requestId: reqId,
     })
     if (!sent) throw new Error(lastError.value || '节点连接不可用')
-    pendingRunPrompts.set(`${sKey}::${reqId}`, { text, model: options?.model })
+    pendingRunPrompts.set(`${sKey}::${reqId}`, { text: wireText, model: options?.model, startedAt: Date.now() })
+
+    // 首句发出瞬间乐观命名默认标题，并通知上游代理同步持久化，避免新标签长时间显示原始 sessionId
+    if (appendUser && isGenericSessionTitle(sess.title)) {
+      const optimisticTitle = deriveOptimisticSessionTitle(text)
+      if (optimisticTitle) {
+        sessionsByKey.value = {
+          ...sessionsByKey.value,
+          [sKey]: { ...sess, title: optimisticTitle },
+        }
+        sendWsCommand({
+          type: 'session.rename',
+          nodeId: sess.nodeId,
+          provider: sess.provider,
+          sessionId: sess.sessionId,
+          title: optimisticTitle,
+          requestId: createRequestId(),
+        })
+      }
+    }
 
     if (appendUser) {
       appendMessage(sKey, {
@@ -1545,6 +1990,7 @@ export const useFleetStore = defineStore('fleet', () => {
     const sess = sessionsByKey.value[targetKey]
     const runId = runningBySession.value[targetKey]
     if (!sess) return
+    interruptedBySession.value = { ...interruptedBySession.value, [targetKey]: true }
     sendWsCommand({
       type: 'prompt.cancel',
       nodeId: sess.nodeId,
@@ -1553,6 +1999,29 @@ export const useFleetStore = defineStore('fleet', () => {
       ...(runId ? { runId } : {}),
       requestId: createRequestId(),
     })
+  }
+
+  function reorderQueuedPrompt(sKey: string, queueId: string, delta: -1 | 1) {
+    const list = [...(queuedPromptsBySession.value[sKey] ?? [])]
+    const idx = list.findIndex(i => i.id === queueId)
+    const target = idx + delta
+    if (idx < 0 || target < 0 || target >= list.length) return
+    const [moved] = list.splice(idx, 1)
+    list.splice(target, 0, moved)
+    queuedPromptsBySession.value = { ...queuedPromptsBySession.value, [sKey]: list }
+  }
+
+  async function continueInterruptedRun(sKey: string) {
+    if (!sKey || runningBySession.value[sKey]) return
+    const nextInt = { ...interruptedBySession.value }
+    delete nextInt[sKey]
+    interruptedBySession.value = nextInt
+    await sendPromptToSession(sKey, '请从刚才中断的地方继续完成剩余步骤。', [], runSettings.value[sKey])
+  }
+
+  function setComposerMode(sKey: string, mode: ComposerMode) {
+    if (!sKey) return
+    composerModeBySession.value = { ...composerModeBySession.value, [sKey]: mode }
   }
 
   function cancelActiveRun() {
@@ -1667,6 +2136,33 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   }
 
+  async function ensureArtifactImagePreview(artifact: ArtifactRef) {
+    if (
+      !auth.token ||
+      !artifact?.artifactId ||
+      !artifact.keyB64 ||
+      !artifact.mime?.startsWith('image/') ||
+      imagePreviewByArtifactId.value[artifact.artifactId]
+    ) {
+      return
+    }
+    try {
+      const { blob } = await downloadAndDecryptBlob({
+        artifact,
+        token: auth.token,
+        apiBaseUrl: getApiBaseUrl(),
+      })
+      if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        imagePreviewByArtifactId.value = {
+          ...imagePreviewByArtifactId.value,
+          [artifact.artifactId]: URL.createObjectURL(blob),
+        }
+      }
+    } catch {
+      // 静默降级为普通附件卡片下载
+    }
+  }
+
   async function downloadArtifactToBrowser(artifact: ArtifactRef) {
     if (!auth.token) throw new Error('尚未登录')
     const { blob, transport, fileName } = await downloadAndDecryptBlob({
@@ -1756,6 +2252,210 @@ export const useFleetStore = defineStore('fleet', () => {
     })
   }
 
+  function requestSkills(sKey?: string) {
+    const key = sKey || activeSessionKey.value
+    const sess = key ? sessionsByKey.value[key] : null
+    const nid = sess?.nodeId ?? selectedNode.value?.id
+    const prov = sess?.provider ?? selectedProvider.value
+    if (!nid) return false
+    return sendWsCommand({
+      type: 'skills.list',
+      nodeId: nid,
+      provider: prov,
+      ...(sess ? { sessionId: sess.sessionId, cwd: sess.worktreePath || sess.cwd } : {}),
+      requestId: createRequestId(),
+    })
+  }
+
+  function saveWorkspaceFile(path: string, content: string, sKey?: string) {
+    const key = sKey || activeSessionKey.value
+    const sess = key ? sessionsByKey.value[key] : null
+    const clean = path.trim()
+    if (!sess || !clean) return false
+    const existing = filePreviewBySession.value[key]
+    if (existing && existing.path === clean) {
+      filePreviewBySession.value = {
+        ...filePreviewBySession.value,
+        [key]: { ...existing, content, saving: true },
+      }
+    }
+    return sendWsCommand({
+      type: 'file.write',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      ...(sess.worktreePath || sess.cwd ? { cwd: sess.worktreePath || sess.cwd } : {}),
+      path: clean,
+      content,
+      requestId: createRequestId(),
+    })
+  }
+
+  function requestFileBlame(path: string, sKey?: string) {
+    const key = sKey || activeSessionKey.value
+    const sess = key ? sessionsByKey.value[key] : null
+    const clean = path.trim()
+    if (!sess || !clean) return false
+    const existing = filePreviewBySession.value[key]
+    if (existing && existing.path === clean) {
+      filePreviewBySession.value = {
+        ...filePreviewBySession.value,
+        [key]: { ...existing, blameLoading: true },
+      }
+    }
+    return sendWsCommand({
+      type: 'file.blame',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      ...(sess.worktreePath || sess.cwd ? { cwd: sess.worktreePath || sess.cwd } : {}),
+      path: clean,
+      requestId: createRequestId(),
+    })
+  }
+
+  function addDiffAnnotation(
+    sKey: string,
+    payload: { filePath: string; lineNo: number; codeSnippet: string; comment: string },
+  ): DiffAnnotation | null {
+    const cleanComment = payload.comment.trim()
+    if (!sKey || !payload.filePath || !cleanComment) return null
+    const item: DiffAnnotation = {
+      id: `ann-${createRequestId()}`,
+      filePath: payload.filePath,
+      lineNo: Math.max(1, payload.lineNo),
+      codeSnippet: payload.codeSnippet,
+      comment: cleanComment,
+      resolved: false,
+      createdAt: Date.now(),
+    }
+    diffAnnotationsBySession.value = {
+      ...diffAnnotationsBySession.value,
+      [sKey]: [...(diffAnnotationsBySession.value[sKey] ?? []), item],
+    }
+    return item
+  }
+
+  function toggleDiffAnnotationResolved(sKey: string, annId: string) {
+    const list = diffAnnotationsBySession.value[sKey] ?? []
+    diffAnnotationsBySession.value = {
+      ...diffAnnotationsBySession.value,
+      [sKey]: list.map(a => (a.id === annId ? { ...a, resolved: !a.resolved } : a)),
+    }
+  }
+
+  function removeDiffAnnotation(sKey: string, annId: string) {
+    const list = diffAnnotationsBySession.value[sKey] ?? []
+    diffAnnotationsBySession.value = {
+      ...diffAnnotationsBySession.value,
+      [sKey]: list.filter(a => a.id !== annId),
+    }
+  }
+
+  function clearResolvedDiffAnnotations(sKey: string) {
+    const list = diffAnnotationsBySession.value[sKey] ?? []
+    diffAnnotationsBySession.value = {
+      ...diffAnnotationsBySession.value,
+      [sKey]: list.filter(a => !a.resolved),
+    }
+  }
+
+  async function sendDiffAnnotationsToAgent(sKey: string): Promise<number> {
+    const list = diffAnnotationsBySession.value[sKey] ?? []
+    const unresolved = list.filter(a => !a.resolved && a.comment.trim())
+    const prompt = buildDiffAnnotationsPrompt(unresolved)
+    if (!prompt) return 0
+    if (runningBySession.value[sKey]) {
+      enqueuePrompt(sKey, prompt, [], runSettings.value[sKey])
+    } else {
+      await sendPromptToSession(sKey, prompt, [], runSettings.value[sKey])
+    }
+    return unresolved.length
+  }
+
+  function sendTerminalSignal(sKey: string, signal = 'SIGINT') {
+    const sess = sessionsByKey.value[sKey]
+    const term = terminalBySession.value[sKey]
+    if (!sess || !term || term.closed) return false
+    return sendWsCommand({
+      type: 'terminal.signal',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      terminalId: term.terminalId,
+      signal,
+    })
+  }
+
+  function resizeTerminal(sKey: string, cols: number, rows: number) {
+    const sess = sessionsByKey.value[sKey]
+    const term = terminalBySession.value[sKey]
+    if (!sess || !term || term.closed) return false
+    return sendWsCommand({
+      type: 'terminal.resize',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      terminalId: term.terminalId,
+      cols,
+      rows,
+    })
+  }
+
+  async function openOrSendSideChat(parentKey: string, question?: string): Promise<string | null> {
+    const parentSess = sessionsByKey.value[parentKey]
+    if (!parentSess) return null
+    const existingKey = sideChatSessionKeyByParent.value[parentKey]
+    const cleanQ = (question || '').trim()
+    if (existingKey && sessionsByKey.value[existingKey]) {
+      if (cleanQ) {
+        if (runningBySession.value[existingKey]) {
+          enqueuePrompt(existingKey, cleanQ, [], { ...runSettings.value[parentKey], readOnly: false })
+        } else {
+          await sendPromptToSession(existingKey, cleanQ, [], runSettings.value[parentKey])
+        }
+      }
+      return existingKey
+    }
+
+    const parentMsgs = messagesBySession.value[parentKey] ?? []
+    const seed = buildForkContextSeed(parentMsgs, parentSess.title, 4200)
+    const sideSeed = seed
+      ? `[临时侧边问答 /btw · 只读参考主会话，不改动主会话任务进度]\n${seed}`
+      : `[临时侧边问答 /btw · 当前工作目录 ${parentSess.worktreePath || parentSess.cwd || '-'}]`
+
+    return new Promise(resolve => {
+      const requestId = createRequestId()
+      openSession({
+        nodeId: parentSess.nodeId,
+        provider: parentSess.provider,
+        cwd: parentSess.worktreePath || parentSess.cwd || undefined,
+        requestId,
+        inheritFromKey: parentKey,
+        onOpened(newKey) {
+          sideChatSessionKeyByParent.value = {
+            ...sideChatSessionKeyByParent.value,
+            [parentKey]: newKey,
+          }
+          forkSeedBySession.value = {
+            ...forkSeedBySession.value,
+            [newKey]: sideSeed,
+          }
+          if (sessionsByKey.value[newKey]) {
+            sessionsByKey.value = {
+              ...sessionsByKey.value,
+              [newKey]: { ...sessionsByKey.value[newKey], title: `侧边问答 · ${parentSess.title}` },
+            }
+          }
+          if (cleanQ) {
+            void sendPromptToSession(newKey, cleanQ, [], runSettings.value[newKey] ?? runSettings.value[parentKey])
+          }
+          resolve(newKey)
+        },
+      })
+    })
+  }
+
   function requestFileContent(path: string, sKey?: string, highlightLine?: number) {
     const key = sKey || activeSessionKey.value
     const sess = key ? sessionsByKey.value[key] : null
@@ -1784,6 +2484,26 @@ export const useFleetStore = defineStore('fleet', () => {
       ...(sess.worktreePath || sess.cwd ? { cwd: sess.worktreePath || sess.cwd } : {}),
       path: clean,
       requestId: createRequestId(),
+    })
+  }
+
+  function downloadWorkspaceFile(path: string, sKey?: string) {
+    const key = sKey || activeSessionKey.value
+    const sess = key ? sessionsByKey.value[key] : null
+    const clean = path.trim()
+    if (!sess || !clean) return false
+    const reqId = createRequestId()
+    const fileName = clean.replace(/\\/g, '/').split('/').pop() || 'download'
+    pendingDownloadRequests.set(reqId, fileName)
+    silentFileReadRequests.add(reqId)
+    return sendWsCommand({
+      type: 'file.read',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      ...(sess.worktreePath || sess.cwd ? { cwd: sess.worktreePath || sess.cwd } : {}),
+      path: clean,
+      requestId: reqId,
     })
   }
 
@@ -1928,16 +2648,31 @@ export const useFleetStore = defineStore('fleet', () => {
     await sendPromptToSession(sKey, clean, [], options ?? runSettings.value[sKey], false)
   }
 
-  async function regenerateAssistantMessage(sKey: string, assistantMsgIndex: number, options?: RunOptions) {
+  async function regenerateAssistantMessage(
+    sKey: string,
+    assistantMsgIndex: number,
+    options?: RunOptions,
+    revertCodeIfCheckpointed = true,
+  ) {
     const list = messagesBySession.value[sKey]
     if (!list || assistantMsgIndex <= 0) return
+    const targetAssistant = list[assistantMsgIndex]
+    if (revertCodeIfCheckpointed && targetAssistant?.checkpointId) {
+      const cp = (checkpointsBySession.value[sKey] ?? []).find(c => c.checkpointId === targetAssistant.checkpointId)
+      if (cp && !cp.reverted) {
+        revertCheckpoint(sKey, targetAssistant.checkpointId)
+      }
+    }
     let userIdx = assistantMsgIndex - 1
     while (userIdx >= 0 && list[userIdx].role !== 'user') {
       userIdx -= 1
     }
     if (userIdx < 0) return
     const userPrompt = list[userIdx].text
-    await editMessageAndBranch(sKey, userIdx, userPrompt, options)
+    const nextList = branchFromUserMessage(list, userIdx, userPrompt)
+    messagesBySession.value = { ...messagesBySession.value, [sKey]: nextList }
+    const wirePrompt = `[重新生成上一轮回答] 请忽略上一版回复，重新完整处理以下请求：\n${userPrompt}`
+    await sendPromptToSession(sKey, wirePrompt, [], options ?? runSettings.value[sKey], false)
   }
 
   function switchBranch(sKey: string, anchorIndex: number, targetBranchIndex: number) {
@@ -1958,19 +2693,14 @@ export const useFleetStore = defineStore('fleet', () => {
       streaming: false,
     }))
     const requestId = createRequestId()
-    const summaryContext = sliced
-      .slice(-6)
-      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.slice(0, 400)}`)
-      .join('\n')
-    const forkPrompt = followUpPrompt?.trim()
-      ? `基于以下分支上下文继续：\n${summaryContext}\n\n---\n${followUpPrompt.trim()}`
-      : undefined
+    const contextSeed = buildForkContextSeed(sliced, sess.title)
 
     openSession({
       nodeId: sess.nodeId,
       provider: sess.provider,
-      cwd: sess.cwd || undefined,
+      cwd: sess.worktreePath || sess.cwd || undefined,
       requestId,
+      inheritFromKey: sKey,
       onOpened(newKey) {
         messagesBySession.value = {
           ...messagesBySession.value,
@@ -1981,10 +2711,13 @@ export const useFleetStore = defineStore('fleet', () => {
               role: 'system',
               nodeId: sess.nodeId,
               provider: sess.provider,
-              text: `已从「${sess.title}」分叉出独立会话窗口`,
+              text: `已从「${sess.title}」分叉出独立会话（已自动继承前情上下文）`,
               createdAt: Date.now(),
             },
           ],
+        }
+        if (contextSeed) {
+          forkSeedBySession.value = { ...forkSeedBySession.value, [newKey]: contextSeed }
         }
         if (sessionsByKey.value[newKey]) {
           sessionsByKey.value = {
@@ -1993,8 +2726,8 @@ export const useFleetStore = defineStore('fleet', () => {
           }
         }
         activeSessionKey.value = newKey
-        if (forkPrompt) {
-          void sendPromptToSession(newKey, forkPrompt, [], runSettings.value[sKey], false)
+        if (followUpPrompt?.trim()) {
+          void sendPromptToSession(newKey, followUpPrompt.trim(), [], runSettings.value[sKey], true)
         }
       },
     })
@@ -2186,7 +2919,26 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   }
 
-  function notifyBackgroundEvent(title: string, body: string) {
+  function openExternalTarget(relPath = '', target: 'editor' | 'folder' = 'editor', sKey?: string) {
+    const key = sKey || activeSessionKey.value
+    const sess = key ? sessionsByKey.value[key] : null
+    if (!sess) return false
+    return sendWsCommand({
+      type: 'workspace.open_external',
+      nodeId: sess.nodeId,
+      provider: sess.provider,
+      sessionId: sess.sessionId,
+      ...(sess.worktreePath || sess.cwd ? { cwd: sess.worktreePath || sess.cwd } : {}),
+      path: relPath,
+      target,
+      requestId: createRequestId(),
+    })
+  }
+
+  function notifyBackgroundEvent(title: string, body: string, cueKind: 'complete' | 'approval' = 'approval') {
+    if (soundEnabled.value && (cueKind === 'approval' || (typeof document !== 'undefined' && document.hidden))) {
+      playCueSound(cueKind)
+    }
     if (typeof document === 'undefined') return
     if (document.hidden) {
       unreadNotifyTitle.value = title
@@ -2241,6 +2993,7 @@ export const useFleetStore = defineStore('fleet', () => {
     agentsByTarget,
     mcpByTarget,
     rulesByTarget,
+    skillsByTarget,
     filePreviewBySession,
     fileTextCacheBySession,
     pendingFormsById,
@@ -2248,6 +3001,14 @@ export const useFleetStore = defineStore('fleet', () => {
     trustPatternsByNode,
     terminalBySession,
     bookmarkedIdsBySession,
+    diffAnnotationsBySession,
+    unreadCountBySession,
+    firstUnreadMsgIdBySession,
+    interruptedBySession,
+    sideChatSessionKeyByParent,
+    composerModeBySession,
+    sendShortcut,
+    soundEnabled,
     notificationsEnabled,
     unreadNotifyTitle,
     tokenUsageBySession,
@@ -2267,15 +3028,22 @@ export const useFleetStore = defineStore('fleet', () => {
     requestAgents,
     requestMcpServers,
     requestRules,
+    requestSkills,
     requestFileContent,
+    downloadWorkspaceFile,
+    saveWorkspaceFile,
+    requestFileBlame,
     requestDiffFileContext,
     closeFilePreview,
     revertFiles,
     mergeSessionWorktree,
     replyForm,
     subscribeSession,
+    markSessionRead,
+    requestOlderHistory,
     applyDefaultModelPref,
     setModelPreference,
+    setComposerMode,
     requestSessionsList,
     openSession,
     activateSession,
@@ -2285,7 +3053,15 @@ export const useFleetStore = defineStore('fleet', () => {
     enqueuePrompt,
     removeQueuedPrompt,
     updateQueuedPrompt,
+    reorderQueuedPrompt,
     steerQueuedPrompt,
+    continueInterruptedRun,
+    addDiffAnnotation,
+    toggleDiffAnnotationResolved,
+    removeDiffAnnotation,
+    clearResolvedDiffAnnotations,
+    sendDiffAnnotationsToAgent,
+    openOrSendSideChat,
     requestFilesList,
     requestSessionDiff,
     revertCheckpoint,
@@ -2306,15 +3082,21 @@ export const useFleetStore = defineStore('fleet', () => {
     removeTrustPattern,
     openTerminal,
     sendTerminalInput,
+    sendTerminalSignal,
+    resizeTerminal,
     closeTerminal,
     toggleMessageBookmark,
     toggleDesktopNotifications,
+    toggleSoundCues,
+    toggleSendShortcut,
+    openExternalTarget,
     clearUnreadNotifyTitle,
     cancelSessionRun,
     cancelActiveRun,
     respondPermission,
     sendHandoff,
     sendFanout,
+    ensureArtifactImagePreview,
     downloadArtifactToBrowser,
   }
 })

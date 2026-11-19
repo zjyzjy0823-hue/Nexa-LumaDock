@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref } from 'vue'
 import { hasAnsiSequences, parseAnsiText } from '../../services/ansiParser'
 import { extractToolMiniDiff } from '../../services/diffHelpers'
-import type { ToolCallBadge } from '../../types/fleet'
+import { useFleetStore } from '../../stores/fleet'
+import type { MessageMediaItem, ToolCallBadge } from '../../types/fleet'
 import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{
@@ -13,6 +14,8 @@ const emit = defineEmits<{
   openFile: [filePath: string]
   openSubagent: [sessionId: string]
 }>()
+
+const fleet = useFleetStore()
 
 const userToggled = ref(false)
 const manualOpen = ref(false)
@@ -76,6 +79,32 @@ const durationText = computed(() => {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 })
 
+function triggerDownloadUrl(url: string, fileName: string) {
+  const cleanName = (fileName || 'download').replace(/\\/g, '/').split('/').pop() || 'download'
+  const a = document.createElement('a')
+  a.href = url
+  a.download = cleanName
+  a.target = '_blank'
+  a.rel = 'noopener noreferrer'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+function handleDownloadToolFile(item?: MessageMediaItem) {
+  if (item?.url) {
+    triggerDownloadUrl(item.url, item.fileName)
+    return
+  }
+  if (props.tool.media?.length && props.tool.media[0].url) {
+    triggerDownloadUrl(props.tool.media[0].url, props.tool.media[0].fileName)
+    return
+  }
+  if (targetFilePath.value) {
+    fleet.downloadWorkspaceFile(targetFilePath.value)
+  }
+}
+
 async function copyBlock(kind: 'input' | 'output', text: string) {
   if (!text || !navigator.clipboard?.writeText) return
   try {
@@ -126,6 +155,15 @@ onUnmounted(() => {
         @click.stop="emit('openFile', targetFilePath)"
       >
         查看文件
+      </button>
+      <button
+        v-if="tool.media?.length || targetFilePath"
+        type="button"
+        class="tool-pill-btn"
+        :title="`下载 ${tool.media?.[0]?.fileName || targetFilePath}`"
+        @click.stop="handleDownloadToolFile()"
+      >
+        下载
       </button>
       <span v-if="durationText" class="tool-dur num">{{ durationText }}</span>
       <span class="tool-status-badge" :class="`is-${tool.status || 'completed'}`">
@@ -190,6 +228,26 @@ onUnmounted(() => {
           }"
         >{{ sp.text }}</span></pre>
         <pre v-else class="tool-pre tool-pre--out">{{ tool.output }}</pre>
+      </div>
+
+      <div v-if="tool.media?.length" class="tool-section">
+        <div class="tool-sec-bar">
+          <span>工具产物 / 媒体 ({{ tool.media.length }})</span>
+        </div>
+        <div class="tool-media-list">
+          <div v-for="m in tool.media" :key="m.id" class="tool-media-item">
+            <img
+              v-if="m.mime.startsWith('image/') || m.url.startsWith('data:image/')"
+              :src="m.url"
+              :alt="m.fileName"
+              class="tool-media-img"
+            />
+            <div class="tool-media-foot">
+              <span class="tool-media-name" :title="m.fileName">{{ m.fileName }}</span>
+              <button type="button" class="tool-copy-btn" @click.stop="handleDownloadToolFile(m)">下载</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div v-if="tool.error" class="tool-err">
@@ -407,5 +465,43 @@ onUnmounted(() => {
   margin: 0;
   font-size: 11.5px;
   color: var(--text-3);
+}
+.tool-media-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  background: var(--solid);
+}
+.tool-media-item {
+  display: flex;
+  flex-direction: column;
+  max-width: min(260px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.tool-media-img {
+  display: block;
+  max-width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+}
+.tool-media-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--line);
+}
+.tool-media-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-2);
 }
 </style>

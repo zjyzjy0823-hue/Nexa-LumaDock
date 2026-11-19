@@ -9,6 +9,7 @@ export type MarkdownInline =
   | { type: 'strike'; text: string }
   | { type: 'code'; text: string }
   | { type: 'link'; text: string; href: string }
+  | { type: 'image'; alt: string; src: string }
 
 export type MarkdownBlock =
   | { type: 'heading'; level: 1 | 2 | 3 | 4; inlines: MarkdownInline[] }
@@ -36,8 +37,25 @@ export function isSafeMarkdownHref(rawUrl: string): string | null {
   return null
 }
 
+export function isSafeMarkdownImageSrc(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return null
+  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed
+  }
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 const INLINE_PATTERN =
-  /(`[^`]+`)|(\[([^\]]+)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(__([^_]+)__)|(~~([^~]+)~~)|(\*([^*]+)\*)|(https?:\/\/[^\s<>()]+)/g
+  /(`[^`]+`)|(!\[([^\]]*)\]\(([^)\s]+)\))|(\[([^\]]+)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(__([^_]+)__)|(~~([^~]+)~~)|(\*([^*]+)\*)|(https?:\/\/[^\s<>()]+)/g
 
 export function parseMarkdownInlines(text: string): MarkdownInline[] {
   if (!text) return []
@@ -53,19 +71,23 @@ export function parseMarkdownInlines(text: string): MarkdownInline[] {
     if (match[1]) {
       out.push({ type: 'code', text: match[1].slice(1, -1) })
     } else if (match[2]) {
-      const safe = isSafeMarkdownHref(match[4])
-      if (safe) out.push({ type: 'link', text: match[3], href: safe })
+      const safeImg = isSafeMarkdownImageSrc(match[4])
+      if (safeImg) out.push({ type: 'image', alt: match[3] || '图片', src: safeImg })
       else out.push({ type: 'text', text: match[0] })
     } else if (match[5]) {
-      out.push({ type: 'bold', text: match[6] })
-    } else if (match[7]) {
-      out.push({ type: 'bold', text: match[8] })
-    } else if (match[9]) {
-      out.push({ type: 'strike', text: match[10] })
-    } else if (match[11]) {
-      out.push({ type: 'italic', text: match[12] })
-    } else if (match[13]) {
-      let url = match[13]
+      const safe = isSafeMarkdownHref(match[7])
+      if (safe) out.push({ type: 'link', text: match[6], href: safe })
+      else out.push({ type: 'text', text: match[0] })
+    } else if (match[8]) {
+      out.push({ type: 'bold', text: match[9] })
+    } else if (match[10]) {
+      out.push({ type: 'bold', text: match[11] })
+    } else if (match[12]) {
+      out.push({ type: 'strike', text: match[13] })
+    } else if (match[14]) {
+      out.push({ type: 'italic', text: match[15] })
+    } else if (match[16]) {
+      let url = match[16]
       let tail = ''
       while (/[.,;:!?)]$/.test(url)) {
         tail = url.slice(-1) + tail

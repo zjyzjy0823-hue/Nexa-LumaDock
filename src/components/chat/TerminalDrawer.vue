@@ -14,6 +14,8 @@ const emit = defineEmits<{
 
 const fleet = useFleetStore()
 const cmdInput = ref('')
+const cmdHistory = ref<string[]>([])
+const historyCursor = ref(-1)
 const outEl = ref<HTMLElement | null>(null)
 
 const term = computed(() => (props.sessionKey ? fleet.terminalBySession[props.sessionKey] ?? null : null))
@@ -46,7 +48,48 @@ function sendLine(line?: string) {
   const payload = (line ?? cmdInput.value).trimEnd()
   if (!payload || !props.sessionKey || !term.value || term.value.closed) return
   fleet.sendTerminalInput(props.sessionKey, `${payload}\n`)
-  if (line === undefined) cmdInput.value = ''
+  if (line === undefined) {
+    if (cmdHistory.value[cmdHistory.value.length - 1] !== payload) {
+      cmdHistory.value = [...cmdHistory.value.slice(-49), payload]
+    }
+    historyCursor.value = -1
+    cmdInput.value = ''
+  }
+}
+
+function sendInterrupt() {
+  if (!props.sessionKey || !term.value || term.value.closed) return
+  fleet.sendTerminalSignal(props.sessionKey, 'SIGINT')
+}
+
+function sendTabKey() {
+  if (!props.sessionKey || !term.value || term.value.closed) return
+  fleet.sendTerminalInput(props.sessionKey, `${cmdInput.value}\t`)
+}
+
+function handleInputKeydown(ev: KeyboardEvent) {
+  if (ev.ctrlKey && ev.key.toLowerCase() === 'c' && !window.getSelection()?.toString()) {
+    ev.preventDefault()
+    sendInterrupt()
+    return
+  }
+  if (ev.key === 'ArrowUp' && cmdHistory.value.length) {
+    ev.preventDefault()
+    if (historyCursor.value === -1) historyCursor.value = cmdHistory.value.length - 1
+    else if (historyCursor.value > 0) historyCursor.value -= 1
+    cmdInput.value = cmdHistory.value[historyCursor.value] ?? ''
+    return
+  }
+  if (ev.key === 'ArrowDown' && historyCursor.value >= 0) {
+    ev.preventDefault()
+    if (historyCursor.value < cmdHistory.value.length - 1) {
+      historyCursor.value += 1
+      cmdInput.value = cmdHistory.value[historyCursor.value] ?? ''
+    } else {
+      historyCursor.value = -1
+      cmdInput.value = ''
+    }
+  }
 }
 
 function clearOutput() {
@@ -67,10 +110,26 @@ function restartTerminal() {
       <div class="term-title">
         <OpusIcon name="terminal" class="term-ic" />
         <span>受控终端</span>
+        <span v-if="term?.pty" class="term-badge is-pty">PTY</span>
         <span v-if="term?.closed" class="term-badge is-closed">已退出 ({{ term.exitCode ?? 0 }})</span>
         <span v-else-if="term" class="term-badge is-live">运行中</span>
       </div>
       <div class="term-actions">
+        <button
+          type="button"
+          class="btn btn-subtle btn-sm"
+          title="发送 SIGINT 中断当前运行命令 (Ctrl+C)"
+          :disabled="!term || term.closed"
+          @click="sendInterrupt"
+        >Ctrl+C</button>
+        <button
+          v-if="term?.pty"
+          type="button"
+          class="btn btn-subtle btn-sm"
+          title="发送 Tab 补全"
+          :disabled="term.closed"
+          @click="sendTabKey"
+        >Tab</button>
         <button type="button" class="btn btn-subtle btn-sm" @click="sendLine('git status -sb')">git status</button>
         <button type="button" class="icon-btn" title="清屏" aria-label="清空终端输出" @click="clearOutput">
           <OpusIcon name="trash" />
@@ -97,7 +156,7 @@ function restartTerminal() {
         fontWeight: sp.bold ? 600 : undefined,
         opacity: sp.dim ? 0.72 : undefined,
       }"
-    >{{ sp.text }}</span></template><span v-else class="faint">等待终端会话就绪… 可在下方输入命令（按 Enter 执行）。</span></pre>
+    >{{ sp.text }}</span></template><span v-else class="faint">等待终端会话就绪… 输入命令按 Enter 执行，支持 ↑/↓ 历史记录与 Ctrl+C 中断。</span></pre>
 
     <form class="term-input-bar" @submit.prevent="sendLine()">
       <span class="term-prompt">$</span>
@@ -106,8 +165,9 @@ function restartTerminal() {
         type="text"
         class="term-input"
         :disabled="!term || term.closed"
-        placeholder="输入命令后按 Enter（限工作区 allowedRoots 内）…"
+        placeholder="输入命令后按 Enter（↑/↓ 翻历史 · Ctrl+C 中断）…"
         aria-label="向节点终端发送命令"
+        @keydown="handleInputKeydown"
       >
       <button type="submit" class="btn btn-primary btn-sm" :disabled="!cmdInput.trim() || !term || term.closed">运行</button>
     </form>
@@ -141,6 +201,7 @@ function restartTerminal() {
   font-weight: 500;
 }
 .term-badge.is-live { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.term-badge.is-pty { background: var(--accent-soft); color: var(--accent); font-family: var(--font-mono, monospace); }
 .term-badge.is-closed { background: var(--surface-3); color: var(--text-3); }
 .term-actions { display: flex; align-items: center; gap: 4px; }
 .term-cwd {

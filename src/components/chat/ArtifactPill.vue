@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import type { ArtifactRef } from '../../types/fleet'
 import { useFleetStore } from '../../stores/fleet'
 import OpusIcon from '../ui/OpusIcon.vue'
@@ -11,6 +11,12 @@ const emit = defineEmits<{ handoff: [artifact: ArtifactRef]; status: [message: s
 const fleet = useFleetStore()
 const downloading = ref(false)
 const usedTransport = ref<string | null>(props.artifact.downloadedTransport ?? null)
+
+onMounted(() => {
+  if (props.artifact.mime?.startsWith('image/')) {
+    void fleet.ensureArtifactImagePreview(props.artifact)
+  }
+})
 
 const transportLabel: Record<string, string> = {
   lan: 'LAN 直连',

@@ -27,16 +27,20 @@ from .transfer import (
 )
 from .workspace_tools import (
     create_git_checkpoint,
+    discover_workspace_skills,
+    get_file_git_blame,
     get_workspace_diff,
     git_commit_changes,
     list_workspace_files,
     list_workspace_tree,
     load_workspace_rules,
     merge_worktree_to_base,
+    open_workspace_external,
     read_workspace_file,
     restore_git_checkpoint,
     revert_diff_hunk,
     revert_workspace_files,
+    write_workspace_file,
 )
 from .worktree import remove_session_worktree
 
@@ -67,6 +71,7 @@ class AgentNodeDaemon:
         self._checkpoint_order: dict[tuple[str, str], list[str]] = {}
         self._active_runs: set[tuple[str, str]] = set()
         self._run_buffers: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._run_seq: dict[tuple[str, str], int] = {}
         self._send_lock = asyncio.Lock()
 
     def _load_trust_patterns(self) -> list[str]:
@@ -119,9 +124,15 @@ class AgentNodeDaemon:
         fallback_cwd: Any = None,
     ) -> Path:
         if session_id and (provider, session_id) in self._session_cwds:
-            return ensure_allowed_path(self._session_cwds[(provider, session_id)], self.config.allowed_roots)
+            try:
+                return ensure_allowed_path(self._session_cwds[(provider, session_id)], self.config.allowed_roots)
+            except PathOutsideAllowedRootsError:
+                pass
         if fallback_cwd:
-            return ensure_allowed_path(str(fallback_cwd), self.config.allowed_roots)
+            try:
+                return ensure_allowed_path(str(fallback_cwd), self.config.allowed_roots)
+            except PathOutsideAllowedRootsError:
+                pass
         return ensure_allowed_path(self.config.allowed_roots[0], self.config.allowed_roots)
 
     async def probe_adapters(self) -> list[dict[str, Any]]:
@@ -401,17 +412,104 @@ class AgentNodeDaemon:
                         **file_data,
                     }
                 )
+            elif cmd == "file.write":
+                sid = str(frame.get("sessionId") or "")
+                rel_path = str(frame.get("path") or "").strip()
+                content = str(frame.get("content") or "")
+                if not rel_path:
+                    raise ValueError("文件路径不能为空")
+                target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))
+                write_res = await asyncio.to_thread(
+                    write_workspace_file, target_dir, self.config.allowed_roots, rel_path, content
+                )
+                await send_back(
+                    {
+                        "type": "FileWritten",
+                        "provider": provider,
+                        **({"sessionId": sid} if sid else {}),
+                        **write_res,
+                    }
+                )
+                diff_after = await asyncio.to_thread(get_workspace_diff, target_dir, self.config.allowed_roots)
+                await self._send_ws(
+                    ws,
+                    {
+                        "type": "DiffSnapshot",
+                        "provider": provider,
+                        **({"sessionId": sid} if sid else {}),
+                        "cwd": str(target_dir),
+                        "perTurn": False,
+                        **diff_after,
+                    },
+                )
+            elif cmd == "file.blame":
+                sid = str(frame.get("sessionId") or "")
+                rel_path = str(frame.get("path") or "").strip()
+                if not rel_path:
+                    raise ValueError("文件路径不能为空")
+                target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))
+                blame_data = await asyncio.to_thread(
+                    get_file_git_blame, target_dir, self.config.allowed_roots, rel_path
+                )
+                await send_back(
+                    {
+                        "type": "FileBlameSnapshot",
+                        "provider": provider,
+                        **({"sessionId": sid} if sid else {}),
+                        **blame_data,
+                    }
+                )
+            elif cmd == "skills.list":
+                sid = str(frame.get("sessionId") or "")
+                target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))
+                skills = await asyncio.to_thread(
+                    discover_workspace_skills, target_dir, self.config.allowed_roots
+                )
+                await send_back(
+                    {
+                        "type": "SkillsSnapshot",
+                        "provider": provider,
+                        **({"sessionId": sid} if sid else {}),
+                        "cwd": str(target_dir),
+                        "skills": skills,
+                    }
+                )
+            elif cmd == "workspace.open_external":
+                sid = str(frame.get("sessionId") or "")
+                target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))
+                rel_path = str(frame.get("path") or "")
+                target_app = str(frame.get("target") or "editor")
+                opened = await asyncio.to_thread(
+                    open_workspace_external,
+                    target_dir,
+                    self.config.allowed_roots,
+                    rel_path=rel_path,
+                    target=target_app,
+                )
+                await send_back(
+                    {
+                        "type": "ExternalOpened",
+                        "provider": provider,
+                        **({"sessionId": sid} if sid else {}),
+                        **opened,
+                    }
+                )
             elif cmd == "session.subscribe":
                 sid = str(frame.get("sessionId") or "")
                 key = (provider, sid)
                 is_active = key in self._active_runs
-                buffered = list(self._run_buffers.get(key, [])) if is_active else []
+                raw_last_seq = frame.get("lastSeq")
+                last_seq = int(raw_last_seq) if isinstance(raw_last_seq, (int, float)) else 0
+                raw_buf = self._run_buffers.get(key, []) if is_active else []
+                buffered = [dict(e) for e in raw_buf if int(e.get("seq") or 0) > last_seq] if last_seq > 0 else list(raw_buf)
                 await send_back(
                     {
                         "type": "SessionStreamReplay",
                         "provider": provider,
                         "sessionId": sid,
                         "active": is_active,
+                        "incremental": last_seq > 0,
+                        "lastSeq": self._run_seq.get(key, 0),
                         "events": buffered,
                     }
                 )
@@ -665,13 +763,26 @@ class AgentNodeDaemon:
                     await self._send_ws(ws, {"provider": provider, **evt})
 
                 opened = await self.terminal_manager.open_terminal(
-                    cwd=target_dir, session_id=sid, emit=_term_emit
+                    cwd=target_dir,
+                    session_id=sid,
+                    emit=_term_emit,
+                    cols=int(frame.get("cols") or 100),
+                    rows=int(frame.get("rows") or 28),
                 )
                 await send_back({"type": "TerminalOpened", "provider": provider, **opened})
             elif cmd == "terminal.input":
                 tid = str(frame.get("terminalId") or "")
                 data = str(frame.get("data") or "")
                 await self.terminal_manager.send_input(tid, data)
+            elif cmd == "terminal.signal":
+                tid = str(frame.get("terminalId") or "")
+                sig_name = str(frame.get("signal") or "SIGINT")
+                await self.terminal_manager.send_signal(tid, sig_name)
+            elif cmd == "terminal.resize":
+                tid = str(frame.get("terminalId") or "")
+                self.terminal_manager.resize_terminal(
+                    tid, int(frame.get("cols") or 100), int(frame.get("rows") or 28)
+                )
             elif cmd == "terminal.close":
                 tid = str(frame.get("terminalId") or "")
                 sid = str(frame.get("sessionId") or "")
@@ -780,16 +891,20 @@ class AgentNodeDaemon:
                 run_key = (provider, sid)
                 self._active_runs.add(run_key)
                 self._run_buffers[run_key] = []
+                self._run_seq[run_key] = 0
 
                 async def wrapped_emit(evt: dict[str, Any]) -> None:
                     if evt.get("runId"):
                         turn_state["runId"] = str(evt["runId"])
-                    # 缓存最近 250 帧流式事件，供前端断线重连或刷新页面后无缝续接输出
+                    next_seq = self._run_seq.get(run_key, 0) + 1
+                    self._run_seq[run_key] = next_seq
+                    stamped_evt = {**evt, "seq": next_seq}
+                    # 缓存最近 1000 帧带递增序号的流式事件，支持断线重连基于 lastSeq 增量续传
                     buf = self._run_buffers.get(run_key)
                     if buf is not None:
-                        buf.append(dict(evt))
-                        if len(buf) > 250:
-                            del buf[: len(buf) - 250]
+                        buf.append(dict(stamped_evt))
+                        if len(buf) > 1000:
+                            del buf[: len(buf) - 1000]
                     if evt.get("type") == "Completed" and not turn_state["checkpointed"]:
                         turn_state["checkpointed"] = True
                         if before_tree and not options.get("readOnly"):
@@ -838,7 +953,7 @@ class AgentNodeDaemon:
                                         **diff_data,
                                     }
                                 )
-                    await base_emit(evt)
+                    await base_emit(stamped_evt)
 
                 extra_kwargs = {"options": runtime} if runtime else {}
                 try:
@@ -854,10 +969,19 @@ class AgentNodeDaemon:
                 finally:
                     self._active_runs.discard(run_key)
                     self._run_buffers.pop(run_key, None)
+                    self._run_seq.pop(run_key, None)
             elif cmd == "prompt.cancel":
                 await adapter.cancel(session_id=str(frame.get("sessionId") or ""), run_id=frame.get("runId"))
         except PathOutsideAllowedRootsError as err:
-            await send_back({"type": "Failed", "code": "path_forbidden", "message": str(err)})
+            await send_back(
+                {
+                    "type": "Failed",
+                    "code": "path_forbidden",
+                    "provider": provider,
+                    **({"sessionId": frame.get("sessionId")} if frame.get("sessionId") else {}),
+                    "message": str(err),
+                }
+            )
         except Exception as err:
             await send_back({"type": "Failed", "code": "node_execution_error", "provider": provider, "sessionId": frame.get("sessionId"), "message": str(err)})
 

@@ -2,7 +2,12 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import OpusSegment from '../components/ui/OpusSegment.vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
-import { useWorkbenchTheme, workbenchThemeOptions } from '../composables/useWorkbenchTheme'
+import {
+  chatBubbleStyleOptions,
+  useWorkbenchTheme,
+  workbenchThemeOptions,
+  type ChatBubbleStyle,
+} from '../composables/useWorkbenchTheme'
 import Modal from '../components/ui/Modal.vue'
 import AccountSettings from '../components/settings/AccountSettings.vue'
 import SyncSettings from '../components/settings/SyncSettings.vue'
@@ -47,8 +52,9 @@ watch(() => props.openSync, open => {
   selectSection(open ? 'sync' : 'appearance')
   mobileDetail.value = open ? 'sync' : null
 })
-const { theme, setTheme } = useWorkbenchTheme()
+const { theme, setTheme, bubbleStyle, setBubbleStyle } = useWorkbenchTheme()
 const themes = workbenchThemeOptions
+const bubbleStyles = chatBubbleStyleOptions
 const modes = [{ id: 'auto', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' }] as const
 const searchQuery = ref('')
 const showTools = ref(false)
@@ -202,6 +208,26 @@ const mobileDetailLabel = computed(() => sections.find(item => item.id === mobil
       <template v-if="!mobileDetail">
         <div class="sec-t" style="margin-top:4px">主题</div>
         <OpusSegment class="mseg" role="group" aria-label="主题"><button v-for="item in themes" :key="item.id" type="button" :aria-pressed="theme === item.id" @click="setTheme(item.id)">{{ item.shortTitle }}</button></OpusSegment>
+        <div class="sec-t">对话气泡样式</div>
+        <div class="m-bubble-style-list mat-solid">
+          <button
+            v-for="bs in bubbleStyles"
+            :key="bs.id"
+            type="button"
+            class="m-bubble-opt"
+            :aria-pressed="bubbleStyle === bs.id"
+            @click="setBubbleStyle(bs.id)"
+          >
+            <div class="m-bopt-main">
+              <div class="m-bopt-top">
+                <span class="m-bopt-title">{{ bs.title }}</span>
+                <span class="m-bopt-badge">{{ bs.badge }}</span>
+              </div>
+              <div class="m-bopt-desc">{{ bs.description }}</div>
+            </div>
+            <OpusIcon v-if="bubbleStyle === bs.id" name="check" class="m-bopt-check" />
+          </button>
+        </div>
         <div class="kvl mat-solid">
           <div><span>外观模式</span><select class="input" style="width:auto;border:0;background:transparent;text-align:right" aria-label="外观模式" :value="appearance.theme" @change="setMode(($event.target as HTMLSelectElement).value as AppearanceConfig['theme'])"><option v-for="item in modes" :key="item.id" :value="item.id">{{ item.label }}</option></select></div>
           <div><span>减少透明度（关闭模糊）</span><button class="switch" type="button" role="switch" aria-label="减少透明度" :aria-checked="appearance.blur === 0" @click="toggleBlur"></button></div>
@@ -242,6 +268,30 @@ const mobileDetailLabel = computed(() => sections.find(item => item.id === mobil
           <section class="set-sec"><h2>主题</h2><div class="theme-cards">
             <button v-for="item in themes" :key="item.id" class="theme-card" type="button" :aria-pressed="theme === item.id" @click="setTheme(item.id)"><div class="pv" :class="item.id"><i style="left:8px;top:8px;bottom:8px;width:40px"></i><i style="left:56px;top:8px;right:8px;height:40px"></i><i style="left:56px;top:56px;right:8px;bottom:8px"></i></div><div class="nm">{{ item.title }}</div><div class="ds">{{ item.description }}</div></button>
           </div></section>
+          <section class="set-sec"><h2>对话气泡样式</h2><div class="bubble-style-cards">
+            <button
+              v-for="bs in bubbleStyles"
+              :key="bs.id"
+              class="theme-card bubble-style-card"
+              type="button"
+              :aria-pressed="bubbleStyle === bs.id"
+              @click="setBubbleStyle(bs.id as ChatBubbleStyle)"
+            >
+              <div class="bpv" :class="`bpv--${bs.id}`">
+                <span class="bpv-user" />
+                <span class="bpv-agent">
+                  <i class="bpv-tool" />
+                  <i class="bpv-line1" />
+                  <i class="bpv-line2" />
+                </span>
+              </div>
+              <div class="nm">
+                <span>{{ bs.title }}</span>
+                <span class="bs-badge">{{ bs.badge }}</span>
+              </div>
+              <div class="ds">{{ bs.description }}</div>
+            </button>
+          </div></section>
           <section class="set-sec"><h2>显示</h2><div class="mat-solid" style="border-radius:var(--r-lg)">
             <div class="set-row"><div class="grow"><div class="t">外观模式</div><div class="d">跟随系统或手动选择</div></div><OpusSegment><button v-for="item in modes" :key="item.id" type="button" :aria-pressed="appearance.theme === item.id" @click="setMode(item.id)">{{ item.label }}</button></OpusSegment></div>
             <div class="set-row"><div class="grow"><div class="t">减少透明度</div><div class="d">关闭模糊，玻璃材质改为不透明表面；低性能设备可开启</div></div><button class="switch" type="button" role="switch" aria-label="减少透明度" :aria-checked="appearance.blur === 0" @click="toggleBlur"></button></div>
@@ -276,4 +326,132 @@ const mobileDetailLabel = computed(() => sections.find(item => item.id === mobil
 
 <style scoped>
 .settings-content { min-width: 0; }
+.bubble-style-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 10px;
+}
+.bubble-style-card .nm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.bs-badge {
+  font-size: 10.5px;
+  font-weight: 550;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.bpv {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 76px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.bpv-user {
+  align-self: flex-end;
+  width: 58%;
+  height: 15px;
+  border-radius: 9px 9px 3px 9px;
+  background: var(--surface-3);
+}
+.bpv-agent {
+  display: grid;
+  gap: 4px;
+  width: 88%;
+  padding: 5px 7px;
+  border-radius: 8px;
+}
+.bpv-tool {
+  display: block;
+  width: 48%;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+.bpv-line1,
+.bpv-line2 {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-3) 35%, transparent);
+}
+.bpv-line1 { width: 92%; }
+.bpv-line2 { width: 66%; }
+.bpv--minimal .bpv-agent { padding-left: 2px; background: transparent; }
+.bpv--claude .bpv-user { border: 1px solid var(--line-strong); border-radius: 9px; }
+.bpv--claude .bpv-agent { padding-left: 7px; border-left: 2px solid var(--line-strong); border-radius: 0; }
+.bpv--lobe .bpv-user { background: var(--text); border-radius: 7px; }
+.bpv--lobe .bpv-agent { background: var(--surface-2); border-radius: 7px; }
+.bpv--antd .bpv-user { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 6px; }
+.bpv--antd .bpv-agent { background: var(--solid); border: 1px solid var(--line-strong); border-radius: 6px; }
+.bpv--timeline .bpv-user { width: 100%; border-radius: 5px; border-left: 2.5px solid var(--accent); }
+.bpv--timeline .bpv-agent { border-left: 2px solid var(--line-strong); border-radius: 0; padding-left: 8px; }
+
+.m-bubble-style-list {
+  border-radius: 20px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.m-bubble-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.m-bubble-opt + .m-bubble-opt {
+  border-top: 1px solid var(--line);
+}
+.m-bubble-opt:active {
+  background: var(--surface-3);
+}
+.m-bopt-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.m-bopt-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.m-bopt-title {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.m-bopt-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.m-bopt-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.m-bopt-check {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  flex: none;
+}
 </style>

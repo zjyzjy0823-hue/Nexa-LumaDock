@@ -12,6 +12,7 @@ const emit = defineEmits<{
   close: []
   openFile: [path: string]
   citeFile: [path: string]
+  openExternal: [path: string, target: 'editor' | 'folder']
 }>()
 
 const fleet = useFleetStore()
@@ -83,6 +84,15 @@ function formatSize(bytes: number): string {
         <span>工作区目录</span>
       </div>
       <div class="wt-actions">
+        <button
+          type="button"
+          class="icon-btn"
+          aria-label="在外部编辑器打开工作区"
+          title="在宿主机编辑器中打开此工作区"
+          @click="emit('openExternal', '', 'editor')"
+        >
+          <OpusIcon name="external" />
+        </button>
         <button
           type="button"
           class="icon-btn"

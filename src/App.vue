@@ -53,7 +53,7 @@ const android = desktopPlatform() === 'android'
 const desktop = isTauri() && !android
 const auth = useAuthStore()
 const settings = useSettingsStore()
-const { theme, setTheme } = useWorkbenchTheme()
+const { theme, setTheme, bubbleStyle } = useWorkbenchTheme()
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
 const prefersDark = ref(systemDark.matches)
 const syncSettings = ref(new URLSearchParams(window.location.search).get('section') === 'sync')
@@ -64,6 +64,10 @@ const storedMotion = localStorage.getItem('studiolo:reduced-motion')
 const motionReduced = ref(storedMotion === null ? motionMedia.matches : storedMotion === 'true')
 const libraryQuery = ref('')
 const libraryDetailOpen = ref(false)
+const hideMobileTabbar = ref(false)
+watch(currentPage, page => {
+  if (page !== 'Chat') hideMobileTabbar.value = false
+})
 const shellRef = ref<InstanceType<typeof OpusShell> | null>(null)
 const storedPreviewMode = localStorage.getItem('studiolo:preview-mode')
 const previewMode = ref<'light' | 'dark' | null>(
@@ -106,13 +110,14 @@ watch(() => auth.user?.id, (current, previous) => {
   }
   if (current !== undefined && auth.token) void settings.load(auth.token).catch(() => {})
 })
-watch([theme, mode, motionReduced, () => settings.settings.appearance], ([value, colorMode, reduced, appearance]) => {
+watch([theme, mode, motionReduced, bubbleStyle, () => settings.settings.appearance], ([value, colorMode, reduced, bStyle, appearance]) => {
   const root = document.documentElement
   const blur = appearance.blur ?? 26
   root.dataset.theme = root.dataset.workbenchTheme = value
   root.dataset.mode = root.dataset.workbenchMode = colorMode
   root.dataset.blur = root.dataset.workbenchBlur = blur > 0 ? 'on' : 'off'
   root.dataset.motion = reduced ? 'reduced' : 'full'
+  root.dataset.bubbleStyle = bStyle
   root.style.setProperty('--workbench-blur', blur + 'px')
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     'content',
@@ -298,11 +303,11 @@ onUnmounted(() => {
       </div>
     </div>
   </template>
-  <OpusShell v-else ref="shellRef" :page="currentPage" :mobile="mobile" :toast="toast" :toast-key="toastKey" :theme="theme" :mode="mode" :reduced-motion="motionReduced"
+  <OpusShell v-else ref="shellRef" :page="currentPage" :mobile="mobile" :hide-mobile-tabbar="hideMobileTabbar" :toast="toast" :toast-key="toastKey" :theme="theme" :mode="mode" :reduced-motion="motionReduced"
     @navigate="navigate" @create="create" @action="showToast" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
     <template #default="{ syncStatus, syncLabel, syncKind, openSync, openAdd, inLibrary }">
       <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @add="openAdd" @sync="openSync" @ask-agent="shellRef?.openDock()" />
-      <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" />
+      <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" @mobile-fullscreen="hideMobileTabbar = $event" />
       <OpusModulePage v-else-if="currentPage === 'Space'" :page="currentPage" :mobile="mobile" @navigate="navigate" @back="back" />
       <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">
         <template v-if="!libraryDetailOpen">

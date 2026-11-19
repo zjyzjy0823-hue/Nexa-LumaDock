@@ -6,9 +6,11 @@
 import type {
   ChatMessage,
   ChatSession,
+  DiffAnnotation,
   FleetWsEvent,
   MessageBranch,
   MessagePart,
+  PastedTextBlock,
   ToolCallBadge,
   ToolCallStatus,
 } from '../types/fleet'
@@ -88,6 +90,7 @@ export function mergeToolCallUpdate(
     | 'error'
     | 'durationMs'
     | 'subagentSessionId'
+    | 'media'
   >,
 ): ToolCallBadge[] {
   const list = [...(existing ?? [])]
@@ -112,6 +115,7 @@ export function mergeToolCallUpdate(
       error: evt.error,
       durationMs: evt.durationMs,
       subagentSessionId: evt.subagentSessionId,
+      ...(evt.media?.length ? { media: evt.media } : {}),
       startedAt: Date.now(),
     }
     list.push(created)
@@ -137,6 +141,7 @@ export function mergeToolCallUpdate(
     error: evt.error !== undefined ? evt.error : prev.error,
     durationMs: evt.durationMs ?? prev.durationMs,
     subagentSessionId: evt.subagentSessionId ?? prev.subagentSessionId,
+    media: evt.media?.length ? evt.media : prev.media,
   }
   return list
 }
@@ -371,4 +376,292 @@ export function buildSessionMarkdown(
     }
   }
   return lines.join('\n')
+}
+
+export interface GroupedToolRun {
+  type: 'tool-group'
+  id: string
+  callIds: string[]
+  tools: ToolCallBadge[]
+  summaryLabel: string
+  totalDurationMs: number
+  hasRunning: boolean
+  hasError: boolean
+}
+
+export type GroupedMessagePart =
+  | { type: 'thought'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'tool'; callId: string; tool: ToolCallBadge }
+  | GroupedToolRun
+
+function classifyToolKind(name: string): 'read' | 'edit' | 'cmd' | 'search' | 'subagent' | 'other' {
+  const n = name.toLowerCase()
+  if (n.includes('subagent') || n.includes('agent') || n.includes('delegate') || n.includes('task')) return 'subagent'
+  if (n.includes('edit') || n.includes('write') || n.includes('patch') || n.includes('replace') || n.includes('create')) return 'edit'
+  if (n.includes('bash') || n.includes('shell') || n.includes('command') || n.includes('exec') || n.includes('run')) return 'cmd'
+  if (n.includes('grep') || n.includes('search') || n.includes('glob') || n.includes('find') || n.includes('list')) return 'search'
+  if (n.includes('read') || n.includes('view') || n.includes('cat') || n.includes('file')) return 'read'
+  return 'other'
+}
+
+/**
+ * 将消息时间轴中的连续多步工具调用聚合成紧凑的 Work Run（>= 2 个连续 tool 时折叠分组），
+ * 减少长工具流刷屏并保留单步工具和错误/运行中状态可见性。
+ */
+export function groupMessageParts(
+  msg: Pick<ChatMessage, 'parts' | 'thought' | 'toolCalls' | 'text'>,
+): GroupedMessagePart[] {
+  const raw = extractMessageParts(msg)
+  const toolMap = new Map((msg.toolCalls ?? []).map(tc => [tc.callId || tc.id, tc]))
+  const out: GroupedMessagePart[] = []
+
+  let toolBucket: Array<{ callId: string; tool: ToolCallBadge }> = []
+
+  const flushBucket = () => {
+    if (!toolBucket.length) return
+    if (toolBucket.length === 1) {
+      out.push({ type: 'tool', callId: toolBucket[0].callId, tool: toolBucket[0].tool })
+      toolBucket = []
+      return
+    }
+    const counts = { read: 0, edit: 0, cmd: 0, search: 0, subagent: 0, other: 0 }
+    let totalDurationMs = 0
+    let hasRunning = false
+    let hasError = false
+    for (const item of toolBucket) {
+      const k = item.tool.subagentSessionId ? 'subagent' : classifyToolKind(item.tool.name)
+      counts[k] += 1
+      if (typeof item.tool.durationMs === 'number' && !Number.isNaN(item.tool.durationMs)) {
+        totalDurationMs += item.tool.durationMs
+      }
+      if (item.tool.status === 'running') hasRunning = true
+      if (item.tool.status === 'error') hasError = true
+    }
+    const parts: string[] = []
+    if (counts.read) parts.push(`读取 ${counts.read}`)
+    if (counts.search) parts.push(`检索 ${counts.search}`)
+    if (counts.edit) parts.push(`修改 ${counts.edit}`)
+    if (counts.cmd) parts.push(`命令 ${counts.cmd}`)
+    if (counts.subagent) parts.push(`子代理 ${counts.subagent}`)
+    if (counts.other) parts.push(`工具 ${counts.other}`)
+
+    out.push({
+      type: 'tool-group',
+      id: `grp-${toolBucket[0].callId}-${toolBucket.length}`,
+      callIds: toolBucket.map(x => x.callId),
+      tools: toolBucket.map(x => x.tool),
+      summaryLabel: parts.join(' · ') || `${toolBucket.length} 项操作`,
+      totalDurationMs,
+      hasRunning,
+      hasError,
+    })
+    toolBucket = []
+  }
+
+  for (const part of raw) {
+    if (part.type === 'tool') {
+      const tc = toolMap.get(part.callId)
+      if (tc) toolBucket.push({ callId: part.callId, tool: tc })
+      continue
+    }
+    flushBucket()
+    if (part.type === 'thought' && part.text) {
+      out.push({ type: 'thought', text: part.text })
+    } else if (part.type === 'text' && part.text) {
+      out.push({ type: 'text', text: part.text })
+    }
+  }
+  flushBucket()
+  return out
+}
+
+/**
+ * 为分叉会话生成结构化前情上下文种子，确保新开启的上游 Agent 承接原会话历史而不失忆。
+ */
+export function buildForkContextSeed(
+  messages: ChatMessage[],
+  sourceTitle: string,
+  maxChars = 6000,
+): string {
+  const relevant = messages.filter(m => m.role !== 'system' && (m.text?.trim() || m.toolCalls?.length))
+  if (!relevant.length) return ''
+  const chunks: string[] = []
+  let used = 0
+  for (let i = relevant.length - 1; i >= 0; i -= 1) {
+    const m = relevant[i]
+    const role = m.role === 'user' ? 'User' : 'Assistant'
+    const body = (m.text || '').trim().slice(0, 1200)
+    const toolsNote = m.toolCalls?.length
+      ? ` [已调用工具: ${m.toolCalls.slice(0, 6).map(t => t.name).join(', ')}]`
+      : ''
+    const line = `${role}: ${body}${toolsNote}`
+    if (used + line.length > maxChars && chunks.length > 0) break
+    chunks.unshift(line)
+    used += line.length + 2
+  }
+  return `[分支上下文 · 继承自「${sourceTitle}」]\n以下是分叉节点前的对话记录，请以此为上下文继续处理后续指令：\n\n${chunks.join('\n\n')}`
+}
+
+/**
+ * 将所有未解决的 Diff 行内批注按文件聚合成单次结构化评审修正 Prompt，避免逐条零散发送。
+ */
+export function buildDiffAnnotationsPrompt(annotations: DiffAnnotation[]): string {
+  const unresolved = annotations.filter(a => !a.resolved && a.comment.trim())
+  if (!unresolved.length) return ''
+  const byFile = new Map<string, DiffAnnotation[]>()
+  for (const item of unresolved) {
+    const list = byFile.get(item.filePath) ?? []
+    list.push(item)
+    byFile.set(item.filePath, list)
+  }
+  const sections: string[] = [
+    `请根据以下 ${unresolved.length} 条代码评审批注一次性修订工作区改动，修订完成后逐条说明改动结果：`,
+  ]
+  for (const [filePath, list] of byFile.entries()) {
+    const sorted = [...list].sort((a, b) => a.lineNo - b.lineNo)
+    sections.push(`\n### @${filePath}`)
+    for (const item of sorted) {
+      const code = item.codeSnippet.trim().slice(0, 100)
+      sections.push(`- **L${item.lineNo}**${code ? ` (\`${code}\`)` : ''}: ${item.comment.trim()}`)
+    }
+  }
+  return sections.join('\n')
+}
+
+export const LARGE_PASTE_CHAR_THRESHOLD = 1200
+export const LARGE_PASTE_LINE_THRESHOLD = 30
+
+/**
+ * 判断剪贴板粘贴纯文本是否应自动收纳为紧凑的「粘贴文本块芯片」，避免撑爆输入框。
+ */
+export function shouldConvertToPastedBlock(text: string): boolean {
+  if (!text) return false
+  if (text.length >= LARGE_PASTE_CHAR_THRESHOLD) return true
+  const lines = text.split(/\r\n|\r|\n/).length
+  return lines >= LARGE_PASTE_LINE_THRESHOLD
+}
+
+export function createPastedTextBlock(text: string, id: string): PastedTextBlock {
+  const normalized = text.replace(/\r\n/g, '\n')
+  const lines = normalized.split('\n')
+  const firstNonEmpty = lines.find(l => l.trim())?.trim() ?? '粘贴文本'
+  const title = firstNonEmpty.length > 26 ? `${firstNonEmpty.slice(0, 26)}…` : firstNonEmpty
+  return {
+    id,
+    title,
+    content: normalized,
+    lineCount: lines.length,
+    charCount: normalized.length,
+  }
+}
+
+/**
+ * 文件路径模糊子序列匹配打分（例如 `act` 命中 `AgentChatThread.vue`），越小越靠前，未命中返回 null。
+ */
+export function fuzzyMatchFileScore(query: string, filePath: string): number | null {
+  const q = query.trim().toLowerCase()
+  if (!q) return 0
+  const norm = filePath.replace(/\\/g, '/')
+  const baseName = norm.split('/').pop() || norm
+  const lowBase = baseName.toLowerCase()
+  const lowFull = norm.toLowerCase()
+
+  if (lowBase.startsWith(q)) return 0
+  const baseIdx = lowBase.indexOf(q)
+  if (baseIdx >= 0) return 10 + baseIdx
+  const fullIdx = lowFull.indexOf(q)
+  if (fullIdx >= 0) return 25 + Math.min(fullIdx, 40)
+
+  const scoreSubseq = (target: string, penalty: number): number | null => {
+    const low = target.toLowerCase()
+    let qi = 0
+    let score = 60 + penalty
+    let prev = -2
+    for (let i = 0; i < low.length; i += 1) {
+      if (low[i] === q[qi]) {
+        if (i === prev + 1) score -= 2
+        else if (i === 0 || '/_-.'.includes(target[i - 1]) || (target[i] >= 'A' && target[i] <= 'Z')) score -= 3
+        prev = i
+        qi += 1
+        if (qi === q.length) return Math.max(30, score + Math.floor(target.length / 8))
+      }
+    }
+    return null
+  }
+
+  return scoreSubseq(baseName, 0) ?? scoreSubseq(norm, 18)
+}
+
+/**
+ * 判断错误信息是否属于模型限额、配额耗尽或模型不可用类错误，以便在错误卡片上提供「一键换模型重试」。
+ */
+export function isQuotaOrModelError(errorText?: string): boolean {
+  const txt = String(errorText || '').toLowerCase()
+  if (!txt) return false
+  return /(usage limit|rate limit|quota|insufficient|credit|429|free usage|model.*not found|model.*unavailable|subscribe|switch model|额度|限流|配额)/i.test(txt)
+}
+
+/**
+ * 解析带文件路径的代码块语言标记，如 `ts:src/stores/fleet.ts` -> `{ lang: 'ts', filePath: 'src/stores/fleet.ts' }`。
+ */
+export function parseCodeBlockLang(rawLang?: string): { lang: string; filePath?: string } {
+  const raw = String(rawLang || '').trim()
+  if (!raw) return { lang: '' }
+  const colonIdx = raw.indexOf(':')
+  if (colonIdx > 0 && colonIdx < raw.length - 1) {
+    const head = raw.slice(0, colonIdx).trim()
+    const tail = raw.slice(colonIdx + 1).trim()
+    if (tail && !tail.includes('://') && /[/.]/.test(tail)) {
+      return { lang: head, filePath: tail }
+    }
+  }
+  return { lang: raw }
+}
+
+/**
+ * 根据当前工作区 Git Diff 自动拟定一条简洁规范的中文 Conventional Commit 提交说明。
+ */
+export function suggestCommitMessageFromDiff(
+  files: Array<{ path: string; status?: string; additions?: number; deletions?: number }>,
+): string {
+  if (!files.length) return ''
+  const paths = files.map(f => f.path.replace(/\\/g, '/'))
+  const allDocs = paths.every(p => /\.md$/i.test(p) || p.startsWith('docs/'))
+  const allTests = paths.every(p => /(?:^|\/)tests?\/|\.test\.|\.spec\./i.test(p))
+  const allStyles = paths.every(p => /\.(?:css|scss|less)$/i.test(p))
+  const allNew = files.every(f => (f.status || '').toUpperCase().startsWith('A') || (f.deletions ?? 0) === 0)
+
+  const prefix = allDocs ? 'docs' : allTests ? 'test' : allStyles ? 'style' : allNew ? 'feat' : 'feat'
+  const topNames = paths.slice(0, 2).map(p => p.split('/').pop() || p)
+  const scopeHint = topNames.join('、')
+  if (paths.length === 1) {
+    return `${prefix}: 更新 ${scopeHint}`
+  }
+  if (paths.length <= 3) {
+    return `${prefix}: 更新 ${scopeHint} 等 ${paths.length} 个文件`
+  }
+  const topDir = paths[0].includes('/') ? paths[0].split('/').slice(0, 2).join('/') : paths[0]
+  return `${prefix}: 优化 ${topDir} 等 ${paths.length} 个文件变更`
+}
+
+/**
+ * 从用户首句提炼简洁可读的乐观会话标题。
+ */
+export function deriveOptimisticSessionTitle(text: string): string {
+  const clean = text
+    .replace(/^\[附加上下文\][\s\S]*?\n\n/, '')
+    .replace(/^\[Plan Mode\][^\n]*\n+/, '')
+    .replace(/^\[重新生成上一轮回答\][^\n]*\n+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!clean) return ''
+  return clean.length > 22 ? `${clean.slice(0, 22)}…` : clean
+}
+
+export function isGenericSessionTitle(title?: string): boolean {
+  const t = String(title || '').trim()
+  if (!t) return true
+  return /^(?:codex|opencode|hermes|antigravity|dsh|openclaw|mock)\s*(?:·|\()\s*.+$/i.test(t)
+    || /^(?:new session|untitled|新建会话|新会话|新对话|ses_[a-z0-9]+|oc-[a-z0-9]+)$/i.test(t)
 }

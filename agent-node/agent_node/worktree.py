@@ -24,8 +24,14 @@ def resolve_repo_root(target: str | Path, allowed_roots: tuple[Path, ...]) -> Pa
     return ensure_allowed_path(top, allowed_roots)
 
 
-def create_session_worktree(repo_path: str | Path, session_id: str, allowed_roots: tuple[Path, ...]) -> Path:
-    """在 allowedRoots 范围内为并发会话创建隔离的分离头 Git Worktree。"""
+def create_session_worktree(
+    repo_path: str | Path,
+    session_id: str,
+    allowed_roots: tuple[Path, ...],
+    *,
+    branch_name: str | None = None,
+) -> Path:
+    """在 allowedRoots 范围内为并发会话创建隔离的 Git Worktree（支持指定分支名或默认分离头）。"""
     repo_root = resolve_repo_root(repo_path, allowed_roots)
     safe_id = _SAFE_ID_RE.sub("-", session_id).strip("-") or "session"
     worktree_dir = repo_root / ".studiolo-worktrees" / safe_id
@@ -34,7 +40,14 @@ def create_session_worktree(repo_path: str | Path, session_id: str, allowed_root
     worktree_dir.parent.mkdir(parents=True, exist_ok=True)
     if (worktree_dir / ".git").exists():
         return Path(os.path.realpath(worktree_dir))
-    _run_git(repo_root, "worktree", "add", "--detach", str(worktree_dir))
+    clean_branch = _SAFE_ID_RE.sub("-", str(branch_name or "").strip()).strip("-.")
+    if clean_branch:
+        try:
+            _run_git(repo_root, "worktree", "add", "-b", clean_branch, str(worktree_dir))
+        except RuntimeError:
+            _run_git(repo_root, "worktree", "add", "--detach", str(worktree_dir))
+    else:
+        _run_git(repo_root, "worktree", "add", "--detach", str(worktree_dir))
     return ensure_allowed_path(worktree_dir, allowed_roots)
 
 

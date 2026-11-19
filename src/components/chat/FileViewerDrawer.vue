@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { highlightCode, inferLanguageFromPath } from '../../services/syntaxHighlight'
-import type { FilePreviewState } from '../../types/fleet'
+import type { FileBlameLine, FilePreviewState } from '../../types/fleet'
 import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{
@@ -13,13 +13,76 @@ const emit = defineEmits<{
   refresh: [path: string]
   citeLines: [citation: string]
   askAboutFile: [path: string]
+  saveFile: [path: string, content: string]
+  requestBlame: [path: string]
+  openExternal: [path: string]
 }>()
 
 const selStart = ref<number | null>(null)
 const selEnd = ref<number | null>(null)
 const copied = ref(false)
+const editMode = ref(false)
+const editDraft = ref('')
+const showBlame = ref(false)
 const bodyRef = ref<HTMLElement | null>(null)
 let copyTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => props.preview?.path,
+  () => {
+    editMode.value = false
+    showBlame.value = false
+    editDraft.value = props.preview?.content ?? ''
+  },
+)
+
+const blameMap = computed(() => {
+  const map = new Map<number, FileBlameLine>()
+  for (const row of props.preview?.blame ?? []) {
+    map.set(row.line, row)
+  }
+  return map
+})
+
+function formatBlameDate(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function toggleEditMode() {
+  if (!props.preview || props.preview.isBinary || props.preview.truncated) return
+  if (!editMode.value) {
+    editDraft.value = props.preview.content
+    editMode.value = true
+  } else {
+    editMode.value = false
+  }
+}
+
+function handleSaveFile() {
+  if (!props.preview || props.preview.saving) return
+  emit('saveFile', props.preview.path, editDraft.value)
+  editMode.value = false
+}
+
+function handleEditorKeydown(ev: KeyboardEvent) {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
+    ev.preventDefault()
+    handleSaveFile()
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault()
+    editMode.value = false
+  }
+}
+
+function toggleBlameView() {
+  if (!props.preview || props.preview.isBinary) return
+  showBlame.value = !showBlame.value
+  if (showBlame.value && !props.preview.blame?.length && !props.preview.blameLoading) {
+    emit('requestBlame', props.preview.path)
+  }
+}
 
 watch(
   () => [props.preview?.path, props.preview?.highlightLine, props.preview?.loading] as const,
@@ -94,6 +157,44 @@ function citeSelection() {
   emit('citeLines', `@${props.preview.path}`)
 }
 
+const isImagePreview = computed(() =>
+  Boolean(props.preview?.mime?.startsWith('image/') && props.preview?.base64Data),
+)
+
+const imageDataUrl = computed(() =>
+  isImagePreview.value && props.preview
+    ? `data:${props.preview.mime};base64,${props.preview.base64Data}`
+    : '',
+)
+
+const canDownloadFile = computed(() =>
+  Boolean(props.preview && (props.preview.base64Data || (!props.preview.isBinary && props.preview.content !== undefined))),
+)
+
+function downloadCurrentFile() {
+  const p = props.preview
+  if (!p) return
+  const fileName = p.path.replace(/\\/g, '/').split('/').pop() || 'download'
+  let href = ''
+  let revokeNeeded = false
+  if (p.base64Data) {
+    href = `data:${p.mime || 'application/octet-stream'};base64,${p.base64Data}`
+  } else {
+    const blob = new Blob([p.content || ''], { type: `${p.mime || 'text/plain'};charset=utf-8` })
+    href = URL.createObjectURL(blob)
+    revokeNeeded = true
+  }
+  const a = document.createElement('a')
+  a.href = href
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  if (revokeNeeded) {
+    setTimeout(() => URL.revokeObjectURL(href), 1000)
+  }
+}
+
 async function copyContent() {
   if (!props.preview?.content || !navigator.clipboard?.writeText) return
   let payload = props.preview.content
@@ -131,17 +232,49 @@ onUnmounted(() => {
       </div>
       <div class="fv-actions">
         <button
-          v-if="preview"
+          v-if="preview && !preview.isBinary && !editMode"
+          type="button"
+          class="btn btn-subtle btn-sm"
+          :class="{ 'is-active-btn': showBlame }"
+          title="切换显示每行 Git Blame 提交信息"
+          @click="toggleBlameView"
+        >
+          <OpusIcon name="history" />
+          <span>{{ preview.blameLoading ? '加载…' : 'Blame' }}</span>
+        </button>
+        <button
+          v-if="preview && !preview.isBinary && !preview.truncated"
+          type="button"
+          class="btn btn-subtle btn-sm"
+          :class="{ 'is-active-btn': editMode }"
+          :title="editMode ? '退出编辑' : '快速编辑此文件 (Ctrl+S 保存)'"
+          @click="toggleEditMode"
+        >
+          <OpusIcon name="pencil" />
+          <span>{{ editMode ? '取消' : '编辑' }}</span>
+        </button>
+        <button
+          v-if="preview && editMode"
+          type="button"
+          class="btn btn-primary btn-sm"
+          :disabled="preview.saving"
+          @click="handleSaveFile"
+        >
+          <OpusIcon name="check" />
+          <span>{{ preview.saving ? '保存中…' : '保存' }}</span>
+        </button>
+        <button
+          v-if="preview && !editMode"
           type="button"
           class="btn btn-subtle btn-sm"
           title="将文件或选中行号插入到输入框"
           @click="citeSelection"
         >
           <OpusIcon name="braces" />
-          <span>{{ selectedRange ? `引用 L${selectedRange.start}${selectedRange.end !== selectedRange.start ? `-${selectedRange.end}` : ''}` : '引用路径' }}</span>
+          <span>{{ selectedRange ? `引用 L${selectedRange.start}${selectedRange.end !== selectedRange.start ? `-${selectedRange.end}` : ''}` : '引用' }}</span>
         </button>
         <button
-          v-if="preview"
+          v-if="preview && !editMode"
           type="button"
           class="btn btn-subtle btn-sm"
           title="让 AI 分析此文件"
@@ -149,6 +282,17 @@ onUnmounted(() => {
         >
           <OpusIcon name="chat" />
           <span>追问</span>
+        </button>
+        <button
+          v-if="canDownloadFile"
+          type="button"
+          class="btn btn-subtle btn-sm"
+          aria-label="下载此文件"
+          title="将此文件下载到本地浏览器"
+          @click="downloadCurrentFile"
+        >
+          <OpusIcon name="download" />
+          <span>下载</span>
         </button>
         <button
           v-if="preview && !preview.isBinary"
@@ -159,6 +303,16 @@ onUnmounted(() => {
           @click="copyContent"
         >
           <OpusIcon :name="copied ? 'check' : 'copy'" />
+        </button>
+        <button
+          v-if="preview"
+          type="button"
+          class="icon-btn"
+          aria-label="在外部编辑器打开"
+          title="在宿主机编辑器或文件管理器中打开"
+          @click="emit('openExternal', preview.path)"
+        >
+          <OpusIcon name="external" />
         </button>
         <button
           v-if="preview"
@@ -193,15 +347,37 @@ onUnmounted(() => {
         <OpusIcon name="alert" />
         <span>{{ preview.error }}</span>
       </div>
+      <div v-else-if="isImagePreview" class="fv-image-stage">
+        <img :src="imageDataUrl" :alt="preview.path" class="fv-image-preview" />
+        <div class="fv-image-bar">
+          <span class="faint">{{ preview.mime }} · {{ sizeText }}</span>
+          <button type="button" class="btn btn-primary btn-sm" @click="downloadCurrentFile">
+            <OpusIcon name="download" />
+            <span>下载图片</span>
+          </button>
+        </div>
+      </div>
       <div v-else-if="preview.isBinary" class="fv-empty faint">
         <OpusIcon name="info" />
         <span>二进制文件（{{ sizeText }}），已跳过文本渲染。</span>
+        <button v-if="canDownloadFile" type="button" class="btn btn-primary btn-sm" @click="downloadCurrentFile">
+          <OpusIcon name="download" />
+          <span>下载文件</span>
+        </button>
       </div>
       <template v-else>
         <div v-if="preview.truncated" class="fv-trunc-banner">
-          文件超过预览阈值，仅展示前 256 KB 内容。
+          文件超过预览阈值，仅展示前 256 KB 内容（不可直接编辑）。
         </div>
-        <div class="fv-code" role="region" aria-label="代码内容（点击行号可引用行范围）">
+        <textarea
+          v-if="editMode"
+          v-model="editDraft"
+          class="fv-editor"
+          spellcheck="false"
+          aria-label="编辑文件内容"
+          @keydown="handleEditorKeydown"
+        />
+        <div v-else class="fv-code" role="region" aria-label="代码内容（点击行号可引用行范围）">
           <div
             v-for="(spans, idx) in highlightedLines"
             :key="idx"
@@ -209,6 +385,11 @@ onUnmounted(() => {
             class="fv-line"
             :class="{ 'is-sel': isLineSelected(idx + 1) }"
           >
+            <span v-if="showBlame" class="fv-blame num" :title="blameMap.get(idx + 1) ? `${blameMap.get(idx + 1)!.sha} · ${blameMap.get(idx + 1)!.author}` : ''">
+              <template v-if="blameMap.get(idx + 1)">
+                {{ blameMap.get(idx + 1)!.author.slice(0, 8) }} · {{ formatBlameDate(blameMap.get(idx + 1)!.time) }}
+              </template>
+            </span>
             <button
               type="button"
               class="fv-ln num"
@@ -302,6 +483,38 @@ onUnmounted(() => {
   line-height: 1.55;
   padding: 8px 0;
 }
+.fv-editor {
+  flex: 1;
+  width: 100%;
+  min-height: 260px;
+  padding: 12px 14px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: var(--solid);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+.fv-blame {
+  flex: none;
+  width: 112px;
+  padding: 0 8px;
+  font-size: 10.5px;
+  color: var(--text-3);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+.is-active-btn {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 .fv-line {
   display: flex;
   align-items: stretch;
@@ -343,4 +556,27 @@ onUnmounted(() => {
 .tok-diffAdd { color: var(--tok-diffAdd, var(--ok)); }
 .tok-diffDel { color: var(--tok-diffDel, var(--warn)); }
 .tok-diffMeta { color: var(--tok-diffMeta, var(--accent)); font-weight: 600; }
+.fv-image-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  min-height: 220px;
+}
+.fv-image-preview {
+  max-width: 100%;
+  max-height: 62dvh;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  object-fit: contain;
+}
+.fv-image-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
 </style>

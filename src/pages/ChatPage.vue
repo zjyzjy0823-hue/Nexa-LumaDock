@@ -4,6 +4,7 @@ import AgentChatThread from '../components/chat/AgentChatThread.vue'
 import CommandPaletteModal from '../components/chat/CommandPaletteModal.vue'
 import DiffReviewDrawer from '../components/chat/DiffReviewDrawer.vue'
 import FileViewerDrawer from '../components/chat/FileViewerDrawer.vue'
+import SideChatDrawer from '../components/chat/SideChatDrawer.vue'
 import TerminalDrawer from '../components/chat/TerminalDrawer.vue'
 import WorkspaceTreeDrawer from '../components/chat/WorkspaceTreeDrawer.vue'
 import { getPlatformIcon, getProviderMeta } from '../components/chat/providerMeta'
@@ -16,6 +17,7 @@ import {
   startColumnDrag,
 } from '../composables/useResizableShell'
 import { sessionKey, useFleetStore } from '../stores/fleet'
+import { chatBubbleStyleLabel, chatBubbleStyleOptions, useWorkbenchTheme } from '../composables/useWorkbenchTheme'
 import type { AdapterProvider, AgentNode, ArtifactRef, ChatSession } from '../types/fleet'
 
 const props = defineProps<{ mobile?: boolean }>()
@@ -23,9 +25,18 @@ const props = defineProps<{ mobile?: boolean }>()
 const emit = defineEmits<{
   navigate: [page: string]
   action: [message: string]
+  mobileFullscreen: [fullscreen: boolean]
 }>()
 
 const fleet = useFleetStore()
+const { bubbleStyle, setBubbleStyle } = useWorkbenchTheme()
+
+function cycleBubbleStyle() {
+  const idx = chatBubbleStyleOptions.findIndex(o => o.id === bubbleStyle.value)
+  const next = chatBubbleStyleOptions[(idx + 1) % chatBubbleStyleOptions.length]
+  setBubbleStyle(next.id)
+  emit('action', `对话气泡样式已切换为「${next.title}」`)
+}
 
 const TREE_DEFAULT_W = 244
 const TREE_MIN_W = 128
@@ -35,8 +46,12 @@ const workspace = ref<HTMLElement>()
 const primaryThreadRef = ref<InstanceType<typeof AgentChatThread> | null>(null)
 const treeOpen = ref(true)
 const treeWidth = ref(readStoredWidth('studiolo:chat-tree-w', TREE_DEFAULT_W, TREE_MIN_W, TREE_MAX_W))
-const rightMode = ref<'none' | 'split' | 'diff' | 'file' | 'tree' | 'terminal'>('none')
-const lastWorkbenchTab = ref<'split' | 'diff' | 'file' | 'tree' | 'terminal'>('diff')
+type RightPaneMode = 'none' | 'split' | 'diff' | 'file' | 'tree' | 'terminal' | 'side' | 'subagent'
+const rightMode = ref<RightPaneMode>('none')
+const lastWorkbenchTab = ref<Exclude<RightPaneMode, 'none'>>('diff')
+const sideChatSessionKey = ref<string>('')
+const focusedSubagentKey = ref<string>('')
+const mobileWorkbench = ref<'none' | 'diff' | 'tree' | 'file' | 'terminal'>('none')
 const diffFocusFile = ref<string | undefined>(undefined)
 const autoCollapsedLeft = ref(false)
 const selectedCheckpointId = ref<string>('')
@@ -62,6 +77,9 @@ function closeActions() {
 
 // 标签页与分屏独立会话路由
 const openTabKeys = ref<string[]>([])
+const pinnedTabKeys = ref<string[]>([])
+const tabContextMenu = ref<{ key: string; x: number; y: number } | null>(null)
+const treeFilterMode = ref<'all' | 'running' | 'approval' | 'diff'>('all')
 const secondaryTabKey = ref<string>('')
 watch(secondaryTabKey, key => { if (key) fleet.loadSessionHistory(key) })
 const createInSplit = ref(false)
@@ -82,7 +100,71 @@ const handoffArtifact = ref<ArtifactRef | undefined>(undefined)
 const showFanout = ref(false)
 const fanoutTargets = ref<Array<{ nodeId: string; provider: AdapterProvider }>>([])
 const fanoutPrompt = ref('')
-const showMobilePicker = ref(false)
+const mobileView = ref<'inbox' | 'thread'>('inbox')
+const mobileNodeFilter = ref<string>('all')
+const mobileStatusFilter = ref<'all' | 'running' | 'diff'>('all')
+const mobileInboxQuery = ref('')
+const mobileSearchOpen = ref(false)
+const mobileSearchInputRef = ref<HTMLInputElement | null>(null)
+const mobileFilterMenuOpen = ref(false)
+const mobileFilterSub = ref<'node' | 'status' | null>(null)
+const mobileSessionSheetRef = ref<HTMLDialogElement | null>(null)
+const mobileRenameDraft = ref('')
+const mobileRenaming = ref(false)
+
+const mobileHasActiveFilter = computed(() =>
+  mobileNodeFilter.value !== 'all' || mobileStatusFilter.value !== 'all',
+)
+
+const mobileActiveFilterLabel = computed(() => {
+  const parts: string[] = []
+  if (mobileNodeFilter.value !== 'all') {
+    const n = fleet.nodes.find(item => item.id === mobileNodeFilter.value)
+    if (n) parts.push(n.name)
+  }
+  if (mobileStatusFilter.value === 'running') parts.push('运行中')
+  else if (mobileStatusFilter.value === 'diff') parts.push('有改动')
+  return parts.join(' · ')
+})
+
+function toggleMobileSearch() {
+  mobileFilterMenuOpen.value = false
+  mobileSearchOpen.value = !mobileSearchOpen.value
+  if (!mobileSearchOpen.value) {
+    mobileInboxQuery.value = ''
+  } else {
+    void nextTick(() => mobileSearchInputRef.value?.focus())
+  }
+}
+
+function toggleMobileFilterMenu() {
+  mobileFilterMenuOpen.value = !mobileFilterMenuOpen.value
+  if (!mobileFilterMenuOpen.value) {
+    mobileFilterSub.value = null
+  }
+}
+
+function closeMobileFilterMenu() {
+  mobileFilterMenuOpen.value = false
+  mobileFilterSub.value = null
+}
+
+function toggleMobileFilterSub(sub: 'node' | 'status') {
+  mobileFilterSub.value = mobileFilterSub.value === sub ? null : sub
+}
+
+function resetMobileFilters() {
+  mobileNodeFilter.value = 'all'
+  mobileStatusFilter.value = 'all'
+}
+
+watch(
+  [() => props.mobile, mobileView],
+  ([isMob, view]) => {
+    emit('mobileFullscreen', Boolean(isMob && view === 'thread'))
+  },
+  { immediate: true },
+)
 
 watch(
   [treeOpen, treeWidth, rightMode, () => props.mobile],
@@ -117,6 +199,7 @@ watch(
 
 onUnmounted(() => {
   sharedChatOccupiedWidth.value = 0
+  emit('mobileFullscreen', false)
   if (typeof window !== 'undefined') window.removeEventListener('keydown', handleGlobalKeydown)
   if (typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -131,7 +214,107 @@ function handleGlobalKeydown(ev: KeyboardEvent) {
     if (showCommandPalette.value && fleet.activeSessionKey && fleet.selectedNode?.status === 'online') {
       fleet.requestFilesList('', 80, fleet.activeSessionKey)
     }
+    return
   }
+  // Ctrl/Cmd + 1~9 快速切换已打开会话标签
+  if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && /^[1-9]$/.test(ev.key)) {
+    const idx = Number(ev.key) - 1
+    const targetTab = openTabs.value[idx]
+    if (targetTab) {
+      ev.preventDefault()
+      fleet.activateSession(targetTab.key)
+    }
+  }
+}
+
+function dismissTabMenu() {
+  tabContextMenu.value = null
+}
+
+function openTabContextMenu(key: string, ev: MouseEvent) {
+  ev.preventDefault()
+  tabContextMenu.value = { key, x: ev.clientX, y: ev.clientY }
+}
+
+function togglePinTab(key: string) {
+  if (pinnedTabKeys.value.includes(key)) {
+    pinnedTabKeys.value = pinnedTabKeys.value.filter(k => k !== key)
+  } else {
+    pinnedTabKeys.value = [...pinnedTabKeys.value, key]
+  }
+  dismissTabMenu()
+}
+
+function closeOtherTabs(keepKey: string) {
+  openTabKeys.value = openTabKeys.value.filter(k => k === keepKey || pinnedTabKeys.value.includes(k))
+  if (!openTabKeys.value.includes(fleet.activeSessionKey)) {
+    fleet.activateSession(keepKey)
+  }
+  dismissTabMenu()
+}
+
+function closeRightTabs(anchorKey: string) {
+  const idx = openTabKeys.value.indexOf(anchorKey)
+  if (idx >= 0) {
+    openTabKeys.value = openTabKeys.value.filter((k, i) => i <= idx || pinnedTabKeys.value.includes(k))
+    if (!openTabKeys.value.includes(fleet.activeSessionKey)) {
+      fleet.activateSession(anchorKey)
+    }
+  }
+  dismissTabMenu()
+}
+
+function resolveAllowedSessionCwd(node: AgentNode | null | undefined, candidateCwd?: string): string {
+  if (!node) return candidateCwd || ''
+  if (
+    candidateCwd &&
+    (!node.allowedRoots?.length ||
+      node.allowedRoots.some(r => sessionBelongsToRoot({ cwd: candidateCwd } as ChatSession, r)))
+  ) {
+    return candidateCwd
+  }
+  return node.allowedRoots?.[0] ?? ''
+}
+
+function quickCreateSession(ev?: MouseEvent) {
+  if (ev?.shiftKey) {
+    openCreateSession()
+    return
+  }
+  const node =
+    (fleet.selectedNode?.status === 'online' ? fleet.selectedNode : null) ??
+    fleet.nodes.find(n => n.status === 'online') ??
+    fleet.selectedNode
+  if (!node || node.status !== 'online') {
+    openCreateSession()
+    return
+  }
+  const prevSess = fleet.currentSession
+  const sourceKey = fleet.activeSessionKey || undefined
+  const preferredProv = prevSess?.provider ?? fleet.selectedProvider
+  const readyAdapter =
+    node.adapters.find(a => a.provider === preferredProv && a.status === 'ready') ??
+    node.adapters.find(a => a.status === 'ready')
+  if (!readyAdapter) {
+    openCreateSession(node)
+    return
+  }
+  const sameNodeCwd = prevSess?.nodeId === node.id ? prevSess?.cwd : undefined
+  const cwd = resolveAllowedSessionCwd(node, sameNodeCwd) || undefined
+  fleet.activeSessionKey = ''
+  fleet.openSession({
+    nodeId: node.id,
+    provider: readyAdapter.provider,
+    cwd,
+    inheritFromKey: sourceKey,
+    onOpened: k => {
+      if (!openTabKeys.value.includes(k)) {
+        openTabKeys.value = [...openTabKeys.value, k]
+      }
+      fleet.activateSession(k)
+    },
+  })
+  emit('action', `已创建 ${getProviderMeta(readyAdapter.provider).label} 新会话`)
 }
 
 onMounted(async () => {
@@ -223,10 +406,24 @@ function searchSnippetFor(sess: ChatSession): string | undefined {
   return searchHits.value.get(key)?.snippet
 }
 
+function sessionMatchesStateFilter(sess: ChatSession): boolean {
+  if (treeFilterMode.value === 'all') return true
+  const k = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
+  if (treeFilterMode.value === 'running') return Boolean(fleet.runningBySession[k])
+  if (treeFilterMode.value === 'approval') {
+    return fleet.pendingApprovalsList.some(c => c.nodeId === sess.nodeId && c.sessionId === sess.sessionId)
+  }
+  if (treeFilterMode.value === 'diff') {
+    return Boolean(sess.hasDiff || fleet.diffBySession[k]?.files?.length)
+  }
+  return true
+}
+
 function sessionsForNodeRoot(nodeId: string, root: string): ChatSession[] {
   const term = treeQuery.value.trim()
   return fleet.allSessions.filter(s => {
     if (s.nodeId !== nodeId || !sessionBelongsToRoot(s, root)) return false
+    if (!sessionMatchesStateFilter(s)) return false
     if (!term) return true
     return searchHits.value.has(sessionKey(s.nodeId, s.provider, s.sessionId))
   })
@@ -237,6 +434,7 @@ function orphanSessionsForNode(node: AgentNode): ChatSession[] {
   return fleet.allSessions.filter(s => {
     if (s.nodeId !== node.id) return false
     if (node.allowedRoots.some(r => sessionBelongsToRoot(s, r))) return false
+    if (!sessionMatchesStateFilter(s)) return false
     if (!term) return true
     return searchHits.value.has(sessionKey(s.nodeId, s.provider, s.sessionId))
   })
@@ -283,6 +481,7 @@ function openSessionTab(sess: ChatSession) {
 }
 
 function closeSessionTab(sKey: string) {
+  if (pinnedTabKeys.value.includes(sKey)) return
   openTabKeys.value = openTabKeys.value.filter(k => k !== sKey)
   if (fleet.activeSessionKey === sKey) {
     const fallback = openTabKeys.value[openTabKeys.value.length - 1]
@@ -291,8 +490,20 @@ function closeSessionTab(sKey: string) {
   }
 }
 
+const backgroundApprovals = computed(() =>
+  fleet.pendingApprovalsList.filter(
+    c => sessionKey(c.nodeId, c.provider, c.sessionId) !== fleet.activeSessionKey,
+  ),
+)
+
+function jumpToApprovalSession(nodeId: string, provider: AdapterProvider, sessionId: string) {
+  const k = sessionKey(nodeId, provider, sessionId)
+  if (!openTabKeys.value.includes(k)) openTabKeys.value = [...openTabKeys.value, k]
+  fleet.activateSession(k)
+}
+
 function setRightPane(
-  mode: 'none' | 'split' | 'diff' | 'file' | 'tree' | 'terminal',
+  mode: RightPaneMode,
   opts?: { focusFile?: string },
 ) {
   if (mode === 'none') {
@@ -305,11 +516,14 @@ function setRightPane(
   }
 
   const wasOpen = rightMode.value !== 'none'
-  if (!wasOpen && !props.mobile && treeOpen.value) {
+  const narrowViewport = (workspace.value?.clientWidth ?? window.innerWidth) < 1180
+  if (!wasOpen && !props.mobile && treeOpen.value && narrowViewport) {
     autoCollapsedLeft.value = true
     treeOpen.value = false
   }
-  lastWorkbenchTab.value = mode
+  if (mode !== 'side' && mode !== 'subagent') {
+    lastWorkbenchTab.value = mode
+  }
 
   if (mode === 'split' && !secondaryTabKey.value) {
     const alt = fleet.allSessions.find(
@@ -338,12 +552,43 @@ function openSessionInSplit(sess: ChatSession) {
   setRightPane('split')
 }
 
-function toggleRightMode(target: 'split' | 'diff' | 'tree' | 'terminal' | 'file') {
+function toggleRightMode(target: Exclude<RightPaneMode, 'none'>) {
   if (rightMode.value === target) {
     setRightPane('none')
     return
   }
   setRightPane(target)
+}
+
+function openMobileWorkbench(mode: 'diff' | 'tree' | 'file' | 'terminal') {
+  if (!fleet.activeSessionKey) {
+    emit('action', '请先进入一个活跃会话')
+    return
+  }
+  mobileWorkbench.value = mode
+  if (mode === 'diff') fleet.requestSessionDiff(fleet.activeSessionKey)
+  else if (mode === 'tree') fleet.requestWorkspaceTree('', fleet.activeSessionKey)
+  else if (mode === 'terminal' && !fleet.terminalBySession[fleet.activeSessionKey]) {
+    fleet.openTerminal(fleet.activeSessionKey)
+  }
+}
+
+async function handleOpenSideChat(question?: string) {
+  const parentKey = fleet.activeSessionKey
+  if (!parentKey) {
+    emit('action', '请先进入一个活跃会话再开启 /btw 侧边问答')
+    return
+  }
+  setRightPane('side')
+  const key = await fleet.openOrSendSideChat(parentKey, question)
+  if (key) sideChatSessionKey.value = key
+}
+
+function promoteSideToMain(sKey: string) {
+  if (!sKey) return
+  if (!openTabKeys.value.includes(sKey)) openTabKeys.value = [...openTabKeys.value, sKey]
+  fleet.activateSession(sKey)
+  setRightPane('none')
 }
 
 function toggleWorkbenchDrawer() {
@@ -359,6 +604,11 @@ function toggleWorkbenchDrawer() {
 }
 
 function openDiffPanel(focusFile?: string) {
+  if (props.mobile) {
+    diffFocusFile.value = focusFile
+    openMobileWorkbench('diff')
+    return
+  }
   setRightPane('diff', { focusFile })
 }
 
@@ -368,6 +618,10 @@ function openFilePreview(filePath: string, line?: number) {
     return
   }
   fleet.requestFileContent(filePath, fleet.activeSessionKey, line)
+  if (props.mobile) {
+    mobileWorkbench.value = 'file'
+    return
+  }
   setRightPane('file')
 }
 
@@ -376,7 +630,13 @@ function handleOpenSubagent(subSessionId: string) {
   if (!cur || !subSessionId) return
   const existingKey = sessionKey(cur.nodeId, cur.provider, subSessionId)
   if (fleet.sessionsByKey[existingKey]) {
-    openSessionTab(fleet.sessionsByKey[existingKey])
+    if (!props.mobile) {
+      focusedSubagentKey.value = existingKey
+      fleet.loadSessionHistory(existingKey)
+      setRightPane('subagent')
+    } else {
+      openSessionTab(fleet.sessionsByKey[existingKey])
+    }
     return
   }
   fleet.openSession({
@@ -385,8 +645,14 @@ function handleOpenSubagent(subSessionId: string) {
     cwd: cur.cwd || undefined,
     sessionId: subSessionId,
     onOpened: k => {
-      if (!openTabKeys.value.includes(k)) openTabKeys.value = [...openTabKeys.value, k]
-      fleet.activateSession(k)
+      if (!props.mobile) {
+        focusedSubagentKey.value = k
+        fleet.loadSessionHistory(k)
+        setRightPane('subagent')
+      } else {
+        if (!openTabKeys.value.includes(k)) openTabKeys.value = [...openTabKeys.value, k]
+        fleet.activateSession(k)
+      }
     },
   })
 }
@@ -604,10 +870,14 @@ function openCreateSession(node?: AgentNode, presetCwd?: string, presetProvider?
   if (presetProvider) {
     newSessionProvider.value = presetProvider
   } else {
-    const ready = targetNode?.adapters.find(a => a.status === 'ready')
-    newSessionProvider.value = ready?.provider ?? fleet.selectedProvider
+    // 优先继承当前活跃会话/当前选中的可用引擎，而非总是回退到节点首个引擎
+    const preferredProv = fleet.currentSession?.provider ?? fleet.selectedProvider
+    const preferredReady = targetNode?.adapters.find(a => a.provider === preferredProv && a.status === 'ready')
+    const firstReady = targetNode?.adapters.find(a => a.status === 'ready')
+    newSessionProvider.value = preferredReady?.provider ?? firstReady?.provider ?? preferredProv
   }
-  newSessionCwd.value = presetCwd ?? targetNode?.allowedRoots?.[0] ?? ''
+  const sameNodeCwd = fleet.currentSession?.nodeId === targetNode?.id ? fleet.currentSession?.cwd : undefined
+  newSessionCwd.value = presetCwd ?? resolveAllowedSessionCwd(targetNode, sameNodeCwd)
   showNewSession.value = true
 }
 
@@ -617,19 +887,183 @@ function submitNewSession() {
     emit('action', '请先选择在线节点')
     return
   }
+  const targetNode = fleet.nodes.find(n => n.id === targetId)
+  const sourceSessionKey = fleet.activeSessionKey || undefined
+  const resolvedCwd = resolveAllowedSessionCwd(targetNode, newSessionCwd.value.trim()) || undefined
   if (!createInSplit.value) {
-    fleet.selectNode(targetId)
-    fleet.selectProvider(newSessionProvider.value)
+    fleet.activeSessionKey = ''
   }
   fleet.openSession({
     nodeId: targetId,
     provider: newSessionProvider.value,
-    cwd: newSessionCwd.value.trim() || undefined,
+    cwd: resolvedCwd,
     useWorktree: newSessionWorktree.value,
-    onOpened: createInSplit.value ? key => { secondaryTabKey.value = key } : undefined,
+    inheritFromKey: sourceSessionKey,
+    onOpened: createInSplit.value
+      ? key => { secondaryTabKey.value = key }
+      : key => {
+          if (!openTabKeys.value.includes(key)) {
+            openTabKeys.value = [...openTabKeys.value, key]
+          }
+          fleet.activateSession(key)
+        },
   })
   showNewSession.value = false
+  if (props.mobile) {
+    mobileView.value = 'thread'
+  }
   emit('action', `已请求创建 ${getProviderMeta(newSessionProvider.value).label} 会话`)
+}
+
+const mobileOnlineCount = computed(() => fleet.nodes.filter(n => n.status === 'online').length)
+
+const mobileOtherApprovalsCount = computed(() =>
+  fleet.pendingApprovalsList.filter(item => sessionKey(item.nodeId, item.provider, item.sessionId) !== fleet.activeSessionKey).length,
+)
+
+const mobileBackgroundApprovals = computed(() =>
+  fleet.pendingApprovalsList
+    .filter(item => sessionKey(item.nodeId, item.provider, item.sessionId) !== fleet.activeSessionKey)
+    .map(card => {
+      const key = sessionKey(card.nodeId, card.provider, card.sessionId)
+      return {
+        card,
+        key,
+        sessionTitle: fleet.sessionsByKey[key]?.title || getProviderMeta(card.provider).label,
+      }
+    }),
+)
+
+const mobileInboxSessions = computed(() => {
+  const term = mobileInboxQuery.value.trim().toLowerCase()
+  const rows = fleet.allSessions
+    .filter(sess => {
+      if (mobileNodeFilter.value !== 'all' && sess.nodeId !== mobileNodeFilter.value) return false
+      const k = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
+      if (mobileStatusFilter.value === 'running' && !fleet.runningBySession[k]) return false
+      if (mobileStatusFilter.value === 'diff' && !(sess.hasDiff || fleet.diffBySession[k]?.files?.length)) return false
+      if (term) {
+        const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? ''
+        const hay = `${sess.title} ${nodeName} ${sess.provider} ${sess.cwd || ''}`.toLowerCase()
+        if (!hay.includes(term)) return false
+      }
+      return true
+    })
+    .map(sess => {
+      const key = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
+      const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? sess.nodeId
+      const hasApproval = fleet.pendingApprovalsList.some(a => sessionKey(a.nodeId, a.provider, a.sessionId) === key)
+      const isRunning = Boolean(fleet.runningBySession[key])
+      const unread = fleet.unreadCountBySession[key] ?? 0
+      const diff = fleet.diffBySession[key]
+      const diffCount = diff?.summary?.filesChanged ?? (sess.hasDiff ? 1 : 0)
+      const branchName = diff?.branch || (sess.worktreePath ? leafPathName(sess.worktreePath) : '')
+      const dirLabel = sess.cwd ? leafPathName(sess.cwd) : ''
+      const msgs = fleet.messagesBySession[key] ?? []
+      const lastAt = msgs.length ? msgs[msgs.length - 1].createdAt : 0
+      return { key, session: sess, nodeName, hasApproval, isRunning, unread, diffCount, branchName, dirLabel, lastAt }
+    })
+
+  rows.sort((a, b) => {
+    if (a.hasApproval !== b.hasApproval) return a.hasApproval ? -1 : 1
+    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+    if ((a.unread > 0) !== (b.unread > 0)) return a.unread > 0 ? -1 : 1
+    return b.lastAt - a.lastAt
+  })
+  return rows
+})
+
+function formatShortTime(ts?: number): string {
+  if (!ts) return ''
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
+  if (diffSec < 60) return '刚刚'
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`
+  const d = new Date(ts)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function mobileOpenSession(key: string) {
+  fleet.activateSession(key)
+  fleet.markSessionRead(key)
+  mobileView.value = 'thread'
+}
+
+function mobileBackToInbox() {
+  mobileWorkbench.value = 'none'
+  closeMobileSessionSheet()
+  mobileView.value = 'inbox'
+}
+
+function mobileQuickNewSession() {
+  const targetNode =
+    (mobileNodeFilter.value !== 'all'
+      ? fleet.nodes.find(n => n.id === mobileNodeFilter.value && n.status === 'online')
+      : null) ??
+    (fleet.selectedNode?.status === 'online' ? fleet.selectedNode : null) ??
+    fleet.nodes.find(n => n.status === 'online')
+  if (!targetNode) {
+    emit('action', '暂无在线节点，请先配置节点')
+    emit('navigate', 'Agents')
+    return
+  }
+  const prevSess = fleet.currentSession
+  const sourceKey = fleet.activeSessionKey || undefined
+  const preferredProv = prevSess?.provider ?? fleet.selectedProvider
+  const readyAdapter =
+    targetNode.adapters.find(a => a.provider === preferredProv && a.status === 'ready') ??
+    targetNode.adapters.find(a => a.status === 'ready')
+  if (!readyAdapter) {
+    openCreateSession(targetNode)
+    return
+  }
+  const sameNodeCwd = prevSess?.nodeId === targetNode.id ? prevSess?.cwd : undefined
+  const cwd = resolveAllowedSessionCwd(targetNode, sameNodeCwd) || undefined
+  closeMobileSessionSheet()
+  fleet.activeSessionKey = ''
+  fleet.openSession({
+    nodeId: targetNode.id,
+    provider: readyAdapter.provider,
+    cwd,
+    inheritFromKey: sourceKey,
+    onOpened: k => {
+      if (!openTabKeys.value.includes(k)) {
+        openTabKeys.value = [...openTabKeys.value, k]
+      }
+      fleet.activateSession(k)
+    },
+  })
+  mobileView.value = 'thread'
+  emit('action', `已创建 ${getProviderMeta(readyAdapter.provider).label} 新会话`)
+}
+
+function openMobileSessionSheet() {
+  mobileRenaming.value = false
+  mobileRenameDraft.value = fleet.currentSession?.title || ''
+  mobileSessionSheetRef.value?.showModal?.()
+}
+
+function closeMobileSessionSheet() {
+  mobileRenaming.value = false
+  mobileSessionSheetRef.value?.close?.()
+}
+
+function commitMobileRename() {
+  if (!fleet.activeSessionKey || !mobileRenameDraft.value.trim()) {
+    mobileRenaming.value = false
+    return
+  }
+  fleet.renameSession(fleet.activeSessionKey, mobileRenameDraft.value.trim())
+  mobileRenaming.value = false
+  emit('action', '已更新会话名称')
+}
+
+function mobileDeleteActiveSession() {
+  if (!fleet.activeSessionKey) return
+  const key = fleet.activeSessionKey
+  closeMobileSessionSheet()
+  handleDeleteSession(key)
+  mobileView.value = 'inbox'
 }
 
 function openHandoffDialog(payload?: { summary: string; artifact?: ArtifactRef }) {
@@ -698,79 +1132,602 @@ function handleClearMemory() {
 </script>
 
 <template>
-  <!-- 移动端保持紧凑单手视图 + 顶部并发多标签条 -->
-  <div v-if="mobile" class="chatpage">
-    <div class="mchat-head">
-      <header class="mchat-bar">
-        <button type="button" class="mpill" @click="showMobilePicker = !showMobilePicker">
-          <span class="conn" :class="fleet.wsState === 'online' ? 'online' : 'reconnecting'" />
-          <span>{{ fleet.selectedNode?.name || '选择节点' }} · {{ getProviderMeta(fleet.selectedProvider).label }}</span>
-          <OpusIcon name="chevD" />
-        </button>
-        <span class="spacer" />
-        <button type="button" class="icon-btn" title="新建会话" @click="openCreateSession()"><OpusIcon name="plus" /></button>
-        <button type="button" class="icon-btn" title="@Handoff" @click="openHandoffDialog()"><OpusIcon name="send" /></button>
-      </header>
+  <!-- 移动端（方案 B · 收件箱列表 → 全屏沉浸对话页，类似 Happy / Orca Mobile） -->
+  <div v-if="mobile" class="mchat-root">
+    <!-- 第一层：会话与审批收件箱（极简顶栏图标工具条 + 带状态微动画的会话卡片） -->
+    <div v-if="mobileView === 'inbox'" class="mpage m-inbox-page">
+      <div class="m-inbox-toolbar">
+        <div class="m-inbox-toolbar-left">
+          <button
+            type="button"
+            class="m-tool-ic-btn"
+            :class="{ 'is-active': mobileSearchOpen || Boolean(mobileInboxQuery) }"
+            aria-label="搜索会话"
+            title="搜索会话"
+            @click="toggleMobileSearch"
+          >
+            <OpusIcon name="search" />
+          </button>
+          <div class="m-filter-anchor">
+            <button
+              type="button"
+              class="m-tool-ic-btn"
+              :class="{ 'is-active': mobileHasActiveFilter || mobileFilterMenuOpen }"
+              aria-label="筛选节点与状态"
+              :aria-expanded="mobileFilterMenuOpen"
+              title="筛选与更多"
+              @click="toggleMobileFilterMenu"
+            >
+              <OpusIcon name="filter" />
+              <span v-if="mobileHasActiveFilter" class="m-tool-dot" />
+            </button>
 
-      <div v-if="openTabs.length > 1" class="m-tabs-row">
+            <!-- 顶部筛选二级菜单浮层 -->
+            <div v-if="mobileFilterMenuOpen" class="m-filter-backdrop" @click="closeMobileFilterMenu" />
+            <div v-if="mobileFilterMenuOpen" class="m-filter-dropdown" role="menu" aria-label="筛选菜单">
+              <!-- 一级：控制节点（可展开二级） -->
+              <button
+                type="button"
+                class="m-fmenu-item"
+                :class="{ 'is-open': mobileFilterSub === 'node' }"
+                @click="toggleMobileFilterSub('node')"
+              >
+                <OpusIcon name="server" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">控制节点</span>
+                <span class="m-fmenu-val">
+                  {{ mobileNodeFilter === 'all' ? '全部' : (fleet.nodes.find(n => n.id === mobileNodeFilter)?.name || '节点') }}
+                </span>
+                <OpusIcon name="chevR" class="m-fmenu-chev" />
+              </button>
+              <div v-if="mobileFilterSub === 'node'" class="m-fmenu-sub" role="group" aria-label="选择节点">
+                <button
+                  type="button"
+                  class="m-fmenu-subitem"
+                  :class="{ 'is-selected': mobileNodeFilter === 'all' }"
+                  @click="mobileNodeFilter = 'all'; closeMobileFilterMenu()"
+                >
+                  <span>全部节点 ({{ mobileOnlineCount }} 在线)</span>
+                  <OpusIcon v-if="mobileNodeFilter === 'all'" name="check" class="m-fmenu-check" />
+                </button>
+                <button
+                  v-for="n in sortedNodes"
+                  :key="n.id"
+                  type="button"
+                  class="m-fmenu-subitem"
+                  :class="{ 'is-selected': mobileNodeFilter === n.id }"
+                  @click="mobileNodeFilter = n.id; fleet.selectNode(n.id); closeMobileFilterMenu()"
+                >
+                  <span class="conn" :class="nodeIndicatorStatus(n.id, n.status)" />
+                  <span class="m-fmenu-subtxt">{{ n.name }}</span>
+                  <OpusIcon v-if="mobileNodeFilter === n.id" name="check" class="m-fmenu-check" />
+                </button>
+                <button
+                  type="button"
+                  class="m-fmenu-subitem is-link"
+                  @click="closeMobileFilterMenu(); emit('navigate', 'Agents')"
+                >
+                  <OpusIcon name="plus" class="m-fmenu-ic" />
+                  <span>管理控制节点</span>
+                </button>
+              </div>
+
+              <!-- 一级：会话状态（可展开二级） -->
+              <button
+                type="button"
+                class="m-fmenu-item"
+                :class="{ 'is-open': mobileFilterSub === 'status' }"
+                @click="toggleMobileFilterSub('status')"
+              >
+                <OpusIcon name="tasks" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">会话状态</span>
+                <span class="m-fmenu-val">
+                  {{ mobileStatusFilter === 'all' ? '全部' : mobileStatusFilter === 'running' ? '运行中' : '有改动' }}
+                </span>
+                <OpusIcon name="chevR" class="m-fmenu-chev" />
+              </button>
+              <div v-if="mobileFilterSub === 'status'" class="m-fmenu-sub" role="group" aria-label="选择状态">
+                <button
+                  type="button"
+                  class="m-fmenu-subitem"
+                  :class="{ 'is-selected': mobileStatusFilter === 'all' }"
+                  @click="mobileStatusFilter = 'all'; closeMobileFilterMenu()"
+                >
+                  <span>全部状态</span>
+                  <OpusIcon v-if="mobileStatusFilter === 'all'" name="check" class="m-fmenu-check" />
+                </button>
+                <button
+                  type="button"
+                  class="m-fmenu-subitem"
+                  :class="{ 'is-selected': mobileStatusFilter === 'running' }"
+                  @click="mobileStatusFilter = 'running'; closeMobileFilterMenu()"
+                >
+                  <span>运行中</span>
+                  <OpusIcon v-if="mobileStatusFilter === 'running'" name="check" class="m-fmenu-check" />
+                </button>
+                <button
+                  type="button"
+                  class="m-fmenu-subitem"
+                  :class="{ 'is-selected': mobileStatusFilter === 'diff' }"
+                  @click="mobileStatusFilter = 'diff'; closeMobileFilterMenu()"
+                >
+                  <span>有代码改动</span>
+                  <OpusIcon v-if="mobileStatusFilter === 'diff'" name="check" class="m-fmenu-check" />
+                </button>
+              </div>
+
+              <div class="m-fmenu-sep" />
+
+              <button
+                type="button"
+                class="m-fmenu-item"
+                @click="closeMobileFilterMenu(); openCreateSession()"
+              >
+                <OpusIcon name="plus" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">自定义目录 / Worktree</span>
+              </button>
+              <button
+                type="button"
+                class="m-fmenu-item"
+                @click="closeMobileFilterMenu(); showFanout = true"
+              >
+                <OpusIcon name="layers" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">多模型并发对比</span>
+              </button>
+              <button
+                v-if="mobileHasActiveFilter"
+                type="button"
+                class="m-fmenu-item is-reset"
+                @click="resetMobileFilters(); closeMobileFilterMenu()"
+              >
+                <OpusIcon name="sync" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">重置筛选条件</span>
+              </button>
+            </div>
+          </div>
+          <button
+            v-if="mobileHasActiveFilter"
+            type="button"
+            class="m-active-filter-chip"
+            aria-label="清空当前筛选"
+            @click="resetMobileFilters"
+          >
+            <span>{{ mobileActiveFilterLabel }}</span>
+            <OpusIcon name="x" />
+          </button>
+        </div>
+        <div class="m-inbox-toolbar-icons">
+          <button
+            type="button"
+            class="m-tool-ic-btn is-primary"
+            aria-label="快速新建对话"
+            title="快速新建对话"
+            @click="mobileQuickNewSession"
+          >
+            <OpusIcon name="plus" />
+          </button>
+        </div>
+      </div>
+
+      <!-- 按需展开的紧凑搜索栏 -->
+      <div v-if="mobileSearchOpen || mobileInboxQuery" class="msearch m-inbox-search">
+        <OpusIcon name="search" />
+        <input
+          ref="mobileSearchInputRef"
+          v-model="mobileInboxQuery"
+          placeholder="搜索会话、目录或节点…"
+          aria-label="搜索会话"
+        />
         <button
-          v-for="tab in openTabs"
-          :key="tab.key"
           type="button"
-          class="m-tab-chip"
-          :aria-pressed="fleet.activeSessionKey === tab.key"
-          @click="fleet.activateSession(tab.key)"
+          class="m-search-clear"
+          aria-label="关闭搜索"
+          @click="mobileInboxQuery = ''; mobileSearchOpen = false"
         >
-          <span class="tree-dot" :class="sessionDotClass(tab.session)" />
-          <span>{{ tab.session.title }}</span>
+          <OpusIcon name="x" />
         </button>
       </div>
 
-      <div v-if="showMobilePicker" class="mchat-drawer card">
-        <div class="mchat-sec">控制节点</div>
-        <div class="mchat-chips">
-          <button
-            v-for="n in sortedNodes"
-            :key="n.id"
-            type="button"
-            class="chip"
-            :aria-pressed="fleet.selectedNode?.id === n.id"
-            @click="fleet.selectNode(n.id)"
-          >
-            <span class="conn" :class="nodeIndicatorStatus(n.id, n.status)" />
-            <span>{{ n.name }}</span>
-          </button>
-          <button type="button" class="chip" @click="emit('navigate', 'Agents')">+ 管理节点</button>
-        </div>
-        <div class="mchat-sec">可用引擎</div>
-        <div class="mchat-chips">
-          <button
-            v-for="ad in selectedNodeAdapters"
-            :key="ad.provider"
-            type="button"
-            class="chip"
-            :aria-pressed="fleet.selectedProvider === ad.provider"
-            @click="fleet.selectProvider(ad.provider); showMobilePicker = false"
-          >
-            <OpusIcon :name="getProviderMeta(ad.provider).icon" />
-            <span>{{ getProviderMeta(ad.provider).label }}</span>
-          </button>
-        </div>
+      <!-- 离线提示条 -->
+      <div v-if="fleet.wsState !== 'online'" class="mbanner show warn">
+        <OpusIcon name="alert" />
+        <span>Fleet Relay 状态：{{ fleet.wsState }}</span>
       </div>
 
-      <div class="mbanner" :class="{ show: fleet.wsState !== 'online' || fleet.pendingApprovalsList.length > 0, warn: true }">
-        <OpusIcon name="alert" />
-        <span v-if="fleet.pendingApprovalsList.length">有 {{ fleet.pendingApprovalsList.length }} 项待批准工具调用</span>
-        <span v-else>Fleet Relay 状态：{{ fleet.wsState }}</span>
+      <!-- 待审批优先收件箱（单手拇指秒批） -->
+      <section v-if="fleet.pendingApprovalsList.length" class="m-inbox-approvals" aria-label="待审批请求">
+        <div class="sec-t" style="margin-top:4px">
+          <span>待审批 ({{ fleet.pendingApprovalsList.length }})</span>
+          <span class="spacer" />
+          <span>高优先级</span>
+        </div>
+        <div
+          v-for="card in fleet.pendingApprovalsList"
+          :key="card.callId"
+          class="m-approval-card"
+        >
+          <div class="m-appr-top">
+            <OpusIcon name="shield" class="m-appr-ic" />
+            <div class="m-appr-copy">
+              <strong>{{ card.title }}</strong>
+              <span>{{ fleet.sessionsByKey[sessionKey(card.nodeId, card.provider, card.sessionId)]?.title || getProviderMeta(card.provider).label }}</span>
+            </div>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="mobileOpenSession(sessionKey(card.nodeId, card.provider, card.sessionId))"
+            >查看</button>
+          </div>
+          <code v-if="card.command" class="m-appr-cmd">{{ card.command }}</code>
+          <div class="m-appr-actions">
+            <button type="button" class="btn btn-danger" @click="fleet.respondPermission(card.callId, 'deny')">拒绝</button>
+            <button type="button" class="btn btn-primary" @click="fleet.respondPermission(card.callId, 'allow_once')">允许一次</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 会话列表卡片（去头像绿点、去右箭头、精简副标题、角落带动画状态徽章） -->
+      <div v-if="mobileInboxSessions.length" class="mlist mat-solid m-inbox-list">
+        <button
+          v-for="item in mobileInboxSessions"
+          :key="item.key"
+          type="button"
+          class="mrow m-inbox-row"
+          @click="mobileOpenSession(item.key)"
+        >
+          <span
+            class="m-sess-avatar"
+            :class="[
+              getProviderMeta(item.session.provider).accentClass,
+              { 'is-running': item.isRunning, 'is-approval': item.hasApproval },
+            ]"
+          >
+            <OpusIcon :name="getProviderMeta(item.session.provider).icon" />
+          </span>
+          <span class="grow">
+            <span class="m-sess-top">
+              <span class="title">{{ item.session.title }}</span>
+              <span v-if="item.lastAt" class="m-sess-time num">{{ formatShortTime(item.lastAt) }}</span>
+            </span>
+            <span class="m-sess-bottom">
+              <span class="m-sess-sub-mini">
+                <span>{{ item.nodeName }}</span>
+                <template v-if="item.branchName || item.dirLabel"> · {{ item.branchName || item.dirLabel }}</template>
+                <span v-if="item.diffCount > 0" class="m-sess-diff-num num"> · {{ item.diffCount }} 改动</span>
+              </span>
+              <span
+                v-if="item.hasApproval || item.isRunning || item.unread > 0"
+                class="m-sess-state-pill"
+                :class="item.hasApproval ? 'is-approval' : item.isRunning ? 'is-running' : 'is-unread'"
+              >
+                <span v-if="item.isRunning" class="m-state-spinner" aria-hidden="true" />
+                <OpusIcon v-else-if="item.hasApproval" name="shield" class="m-state-ic is-pulse" />
+                <OpusIcon v-else name="check" class="m-state-ic is-pop" />
+                <span>{{ item.hasApproval ? '待审批' : item.isRunning ? '运行中' : '已完成' }}</span>
+              </span>
+            </span>
+          </span>
+        </button>
+      </div>
+
+      <!-- 空状态引导卡片 -->
+      <div v-else class="mcard mat-solid m-inbox-empty">
+        <div class="m-empty-ic"><OpusIcon name="chat" /></div>
+        <h3>{{ mobileInboxQuery || mobileHasActiveFilter ? '没有匹配的会话' : '开始你的 Agent 任务' }}</h3>
+        <p class="faint">
+          {{ mobileInboxQuery || mobileHasActiveFilter ? '换个关键词或清空筛选条件看看。' : '连接家中 Mac、桌面或云端节点，随时在手机上跟进代码、评审 Diff 与审批命令。' }}
+        </p>
+        <div class="m-empty-actions">
+          <button v-if="mobileHasActiveFilter" type="button" class="btn btn-primary" @click="resetMobileFilters">
+            <span>重置筛选</span>
+          </button>
+          <button v-else type="button" class="btn btn-primary" @click="mobileQuickNewSession">
+            <OpusIcon name="plus" />
+            <span>快速开始对话</span>
+          </button>
+          <button type="button" class="btn btn-ghost" @click="openCreateSession()">
+            <span>选择目录 / Worktree</span>
+          </button>
+        </div>
       </div>
     </div>
 
-    <AgentChatThread
-      class="mchat-thread"
-      :mobile="true"
-      @action="emit('action', $event)"
-      @open-handoff="openHandoffDialog"
-    />
+    <!-- 第二层：全屏沉浸对话页（自动隐藏底部主 TabBar，最大化对话与键盘视野） -->
+    <div v-else class="m-thread-shell">
+      <header class="m-thread-bar">
+        <button
+          type="button"
+          class="m-bar-btn m-back-btn"
+          aria-label="返回会话列表"
+          @click="mobileBackToInbox"
+        >
+          <OpusIcon name="chevL" />
+          <span v-if="mobileOtherApprovalsCount" class="m-wb-dot num">{{ mobileOtherApprovalsCount }}</span>
+        </button>
+
+        <button
+          type="button"
+          class="m-thread-title-btn"
+          aria-haspopup="dialog"
+          @click="openMobileSessionSheet"
+        >
+          <span class="m-tt-main">{{ fleet.currentSession?.title || `新对话 · ${getProviderMeta(fleet.selectedProvider).label}` }}</span>
+          <span class="m-tt-sub">
+            <span class="conn" :class="fleet.wsState === 'online' ? 'online' : 'reconnecting'" />
+            <span>{{ fleet.selectedNode?.name || '未选节点' }}</span>
+            <template v-if="fleet.currentDiff?.branch"> · {{ fleet.currentDiff.branch }}</template>
+            <template v-else-if="fleet.currentSession?.cwd"> · {{ leafPathName(fleet.currentSession.cwd) }}</template>
+            <OpusIcon name="chevD" class="m-tt-chev" />
+          </span>
+        </button>
+
+        <div class="m-thread-actions">
+          <button
+            type="button"
+            class="m-bar-btn"
+            aria-label="新建会话"
+            title="新建会话"
+            @click="mobileQuickNewSession"
+          >
+            <OpusIcon name="plus" />
+          </button>
+          <button
+            type="button"
+            class="m-bar-btn m-wb-trigger"
+            aria-label="打开工作台（Diff / 文件 / 终端）"
+            title="工作台（代码评审 · 目录 · 终端）"
+            :disabled="!fleet.currentSession"
+            @click="openMobileWorkbench(fleet.currentDiff?.files?.length ? 'diff' : 'tree')"
+          >
+            <OpusIcon name="panel" />
+            <span v-if="fleet.currentDiff?.summary?.filesChanged" class="m-wb-dot num">
+              {{ fleet.currentDiff.summary.filesChanged }}
+            </span>
+          </button>
+        </div>
+      </header>
+
+      <!-- 后台其他会话待审批横幅 -->
+      <div v-if="mobileBackgroundApprovals.length" class="m-bg-approval-bar">
+        <OpusIcon name="shield" class="bga-ic" />
+        <span class="m-bga-copy">
+          <strong>{{ mobileBackgroundApprovals[0].sessionTitle }}</strong> 待审批
+        </span>
+        <button
+          type="button"
+          class="btn btn-primary btn-sm"
+          @click="mobileOpenSession(mobileBackgroundApprovals[0].key)"
+        >前往审批</button>
+      </div>
+
+      <AgentChatThread
+        class="mchat-thread"
+        :mobile="true"
+        @action="emit('action', $event)"
+        @open-handoff="openHandoffDialog"
+        @open-diff="openDiffPanel"
+        @open-file="openFilePreview"
+        @open-subagent="handleOpenSubagent"
+      />
+    </div>
+
+    <!-- 移动端会话与节点控制底部抽屉（原生 <dialog> + 滚动隔离） -->
+    <dialog ref="mobileSessionSheetRef" class="msheet-dlg" aria-label="会话与节点设置" closedby="any">
+      <div class="msheet-panel">
+        <div class="msheet-grab" aria-hidden="true" />
+        <div class="msheet-hdr">
+          <h3>会话与节点</h3>
+          <button type="button" class="icon-btn" aria-label="关闭" @click="closeMobileSessionSheet">
+            <OpusIcon name="x" />
+          </button>
+        </div>
+
+        <div v-if="fleet.currentSession" class="msheet-sec">
+          <div class="msheet-label">当前会话名称</div>
+          <div v-if="mobileRenaming" class="msheet-rename-row">
+            <input
+              v-model="mobileRenameDraft"
+              class="input"
+              placeholder="输入会话名称"
+              @keydown.enter.prevent="commitMobileRename"
+            />
+            <button type="button" class="btn btn-primary" @click="commitMobileRename">保存</button>
+          </div>
+          <button v-else type="button" class="msheet-row" @click="mobileRenaming = true">
+            <OpusIcon name="pencil" />
+            <span class="msheet-row-text">{{ fleet.currentSession.title }}</span>
+            <span class="faint">重命名</span>
+          </button>
+        </div>
+
+        <div class="msheet-sec">
+          <div class="msheet-label">控制节点</div>
+          <div class="mchat-chips">
+            <button
+              v-for="n in sortedNodes"
+              :key="n.id"
+              type="button"
+              class="chip"
+              :aria-pressed="fleet.selectedNode?.id === n.id"
+              @click="fleet.selectNode(n.id)"
+            >
+              <span class="conn" :class="nodeIndicatorStatus(n.id, n.status)" />
+              <span>{{ n.name }}</span>
+            </button>
+            <button type="button" class="chip" @click="closeMobileSessionSheet(); emit('navigate', 'Agents')">+ 管理节点</button>
+          </div>
+        </div>
+
+        <div class="msheet-sec">
+          <div class="msheet-label">代理引擎</div>
+          <div class="mchat-chips">
+            <button
+              v-for="ad in selectedNodeAdapters"
+              :key="ad.provider"
+              type="button"
+              class="chip"
+              :aria-pressed="fleet.selectedProvider === ad.provider"
+              @click="fleet.selectProvider(ad.provider)"
+            >
+              <OpusIcon :name="getProviderMeta(ad.provider).icon" />
+              <span>{{ getProviderMeta(ad.provider).label }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="msheet-sec">
+          <div class="msheet-label">对话气泡样式</div>
+          <div class="mchat-chips">
+            <button
+              v-for="opt in chatBubbleStyleOptions"
+              :key="opt.id"
+              type="button"
+              class="chip"
+              :aria-pressed="bubbleStyle === opt.id"
+              @click="setBubbleStyle(opt.id)"
+            >
+              <span>{{ opt.title }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="msheet-sec">
+          <div class="msheet-label">会话操作</div>
+          <div class="msheet-actions">
+            <button type="button" class="msheet-row" @click="closeMobileSessionSheet(); openCreateSession()">
+              <OpusIcon name="plus" />
+              <span class="msheet-row-text">自定义目录 / Worktree 新建</span>
+            </button>
+            <button
+              v-if="fleet.currentSession"
+              type="button"
+              class="msheet-row"
+              @click="closeMobileSessionSheet(); openMobileWorkbench(fleet.currentDiff?.files?.length ? 'diff' : 'tree')"
+            >
+              <OpusIcon name="panel" />
+              <span class="msheet-row-text">打开工作台（Diff · 目录 · 终端）</span>
+            </button>
+            <button type="button" class="msheet-row" @click="closeMobileSessionSheet(); openHandoffDialog()">
+              <OpusIcon name="send" />
+              <span class="msheet-row-text">@Handoff 跨节点转交</span>
+            </button>
+            <button v-if="fleet.currentSession" type="button" class="msheet-row" @click="closeMobileSessionSheet(); handleCompactActive()">
+              <OpusIcon name="layers" />
+              <span class="msheet-row-text">压缩会话上下文 (/compact)</span>
+            </button>
+            <button v-if="fleet.currentSession" type="button" class="msheet-row" @click="closeMobileSessionSheet(); handleExportActive()">
+              <OpusIcon name="file" />
+              <span class="msheet-row-text">导出 Markdown 记录</span>
+            </button>
+            <button type="button" class="msheet-row" @click="fleet.toggleSoundCues()">
+              <OpusIcon name="sparkle" />
+              <span class="msheet-row-text">后台完成 / 审批提示音</span>
+              <span class="faint">{{ fleet.soundEnabled ? '已开启' : '已关闭' }}</span>
+            </button>
+            <button v-if="fleet.currentSession" type="button" class="msheet-row is-danger" @click="mobileDeleteActiveSession">
+              <OpusIcon name="x" />
+              <span class="msheet-row-text">删除当前会话</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- 移动端全屏工作台 Sheet（Diff 评审 / 目录 / 代码预览 / 受控终端） -->
+    <div v-if="mobileWorkbench !== 'none'" class="m-wb-sheet">
+      <div class="wb-tabs-bar" role="tablist" aria-label="移动端工作台切换">
+        <div class="wb-tabs-list">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mobileWorkbench === 'diff'"
+            class="wb-tab-btn"
+            :class="{ 'is-active': mobileWorkbench === 'diff' }"
+            @click="openMobileWorkbench('diff')"
+          >
+            <OpusIcon name="branch" />
+            <span>评审</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mobileWorkbench === 'tree'"
+            class="wb-tab-btn"
+            :class="{ 'is-active': mobileWorkbench === 'tree' }"
+            @click="openMobileWorkbench('tree')"
+          >
+            <OpusIcon name="layers" />
+            <span>目录</span>
+          </button>
+          <button
+            v-if="fleet.activeSessionKey && fleet.filePreviewBySession[fleet.activeSessionKey]"
+            type="button"
+            role="tab"
+            :aria-selected="mobileWorkbench === 'file'"
+            class="wb-tab-btn"
+            :class="{ 'is-active': mobileWorkbench === 'file' }"
+            @click="mobileWorkbench = 'file'"
+          >
+            <OpusIcon name="file" />
+            <span>预览</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mobileWorkbench === 'terminal'"
+            class="wb-tab-btn"
+            :class="{ 'is-active': mobileWorkbench === 'terminal' }"
+            @click="openMobileWorkbench('terminal')"
+          >
+            <OpusIcon name="terminal" />
+            <span>终端</span>
+          </button>
+        </div>
+        <button type="button" class="icon-btn wb-close-btn" aria-label="关闭工作台" @click="mobileWorkbench = 'none'">
+          <OpusIcon name="x" />
+        </button>
+      </div>
+      <div class="wb-pane-body">
+        <DiffReviewDrawer
+          v-if="mobileWorkbench === 'diff'"
+          :embedded="true"
+          :session-key="fleet.activeSessionKey"
+          :diff="fleet.currentDiff"
+          :checkpoints="fleet.currentCheckpoints"
+          :focus-file-path="diffFocusFile"
+          :is-worktree="Boolean(fleet.currentSession?.worktreePath)"
+          @refresh="fleet.requestSessionDiff(fleet.activeSessionKey)"
+          @close="mobileWorkbench = 'none'"
+          @revert-latest="fleet.revertCheckpoint(fleet.activeSessionKey, $event)"
+          @revert-files="(paths, cpId) => fleet.revertFiles(fleet.activeSessionKey, paths, cpId)"
+          @revert-hunk="(fp, patch) => fleet.revertDiffHunk(fleet.activeSessionKey, fp, patch)"
+          @commit-changes="(msg, paths) => fleet.commitWorkspaceChanges(fleet.activeSessionKey, msg, paths)"
+          @open-file="openFilePreview"
+          @merge-worktree="fleet.mergeSessionWorktree(fleet.activeSessionKey)"
+          @action="emit('action', $event)"
+        />
+        <WorkspaceTreeDrawer
+          v-else-if="mobileWorkbench === 'tree'"
+          :session-key="fleet.activeSessionKey"
+          @close="mobileWorkbench = 'none'"
+          @open-file="openFilePreview($event)"
+          @open-external="fp => fleet.openExternalTarget(fp, 'editor', fleet.activeSessionKey)"
+        />
+        <FileViewerDrawer
+          v-else-if="mobileWorkbench === 'file'"
+          :preview="fleet.activeSessionKey ? fleet.filePreviewBySession[fleet.activeSessionKey] ?? null : null"
+          @close="mobileWorkbench = 'none'"
+          @refresh="openFilePreview($event)"
+          @save-file="(fp, content) => { fleet.saveWorkspaceFile(fp, content, fleet.activeSessionKey); emit('action', '已保存文件修改') }"
+          @request-blame="fp => fleet.requestFileBlame(fp, fleet.activeSessionKey)"
+          @open-external="fp => fleet.openExternalTarget(fp, 'editor', fleet.activeSessionKey)"
+        />
+        <TerminalDrawer
+          v-else-if="mobileWorkbench === 'terminal'"
+          :session-key="fleet.activeSessionKey"
+          @close="mobileWorkbench = 'none'"
+        />
+      </div>
+    </div>
   </div>
 
   <!-- 桌面端：四层节点树（可自由拖拽） + 多标签主对话区 + 可选右分屏/沙箱抽屉（可自由拖拽） -->
@@ -797,6 +1754,21 @@ function handleClearMemory() {
           <div class="tree-search">
             <OpusIcon name="search" />
             <input v-model="treeQuery" type="search" placeholder="筛选节点、会话或消息正文…" aria-label="筛选节点、会话或消息正文" />
+          </div>
+          <div class="tree-filter-pills" role="group" aria-label="按状态筛选会话">
+            <button
+              v-for="f in [
+                { id: 'all', label: '全部' },
+                { id: 'running', label: '运行中' },
+                { id: 'approval', label: '待审批' },
+                { id: 'diff', label: '有改动' },
+              ] as const"
+              :key="f.id"
+              type="button"
+              class="tree-filter-pill"
+              :class="{ 'is-active': treeFilterMode === f.id }"
+              @click="treeFilterMode = f.id"
+            >{{ f.label }}</button>
           </div>
         </div>
 
@@ -866,7 +1838,9 @@ function handleClearMemory() {
                         <span>{{ leafPathName(sess.worktreePath) }}</span>
                       </div>
                     </div>
-                    <span class="tree-eng">{{ getProviderMeta(sess.provider).shortCode }}</span>
+                    <span class="tree-eng" :title="getProviderMeta(sess.provider).label">
+                      <OpusIcon :name="getProviderMeta(sess.provider).icon" class="tree-eng-ic" />
+                    </span>
                     <button
                       type="button"
                       class="tree-mini-btn tree-split-trigger"
@@ -921,7 +1895,9 @@ function handleClearMemory() {
                       <div v-if="searchSnippetFor(sess)" class="tree-sess-hit">{{ searchSnippetFor(sess) }}</div>
                     </template>
                   </div>
-                  <span class="tree-eng">{{ getProviderMeta(sess.provider).shortCode }}</span>
+                  <span class="tree-eng" :title="getProviderMeta(sess.provider).label">
+                    <OpusIcon :name="getProviderMeta(sess.provider).icon" class="tree-eng-ic" />
+                  </span>
                   <button
                     type="button"
                     class="tree-mini-btn tree-split-trigger"
@@ -984,13 +1960,25 @@ function handleClearMemory() {
             :key="tab.key"
             type="button"
             class="chat-tab"
-            :class="{ 'is-active': fleet.activeSessionKey === tab.key }"
-            @click="fleet.activateSession(tab.key)"
+            :class="{
+              'is-active': fleet.activeSessionKey === tab.key,
+              'is-pinned': pinnedTabKeys.includes(tab.key),
+            }"
+            @click="fleet.activateSession(tab.key); dismissTabMenu()"
+            @auxclick.middle.prevent="closeSessionTab(tab.key)"
+            @contextmenu="openTabContextMenu(tab.key, $event)"
           >
-            <span class="tree-dot" :class="sessionDotClass(tab.session)" />
+            <OpusIcon v-if="pinnedTabKeys.includes(tab.key)" name="pin" class="tab-pin-ic" />
+            <span v-else class="tree-dot" :class="sessionDotClass(tab.session)" />
             <span class="chat-tab-label">{{ tab.session.title }}</span>
-            <span class="chat-tab-eng">{{ getProviderMeta(tab.session.provider).shortCode }}</span>
+            <span v-if="fleet.unreadCountBySession[tab.key]" class="tab-unread-dot num">
+              {{ fleet.unreadCountBySession[tab.key] }}
+            </span>
+            <span class="chat-tab-eng" :title="getProviderMeta(tab.session.provider).label">
+              <OpusIcon :name="getProviderMeta(tab.session.provider).icon" class="tree-eng-ic" />
+            </span>
             <span
+              v-if="!pinnedTabKeys.includes(tab.key)"
               class="chat-tab-close"
               role="button"
               aria-label="关闭标签"
@@ -1002,9 +1990,26 @@ function handleClearMemory() {
             <span>{{ fleet.selectedNode ? `${fleet.selectedNode.name} · ${getProviderMeta(fleet.selectedProvider).label}` : 'Agent Fleet' }}</span>
           </div>
 
-          <button type="button" class="icon-btn" title="新建工作会话" @click="openCreateSession()">
-            <OpusIcon name="plus" />
-          </button>
+          <div class="new-tab-split">
+            <button
+              type="button"
+              class="icon-btn"
+              title="秒开新会话（自动继承当前节点/引擎/目录/模型，Shift+点击打开高级选项）"
+              aria-label="快速新建工作会话"
+              @click="quickCreateSession($event)"
+            >
+              <OpusIcon name="plus" />
+            </button>
+            <button
+              type="button"
+              class="icon-btn new-tab-more"
+              title="高级新建会话（切换节点、目录或创建 Git Worktree 沙箱）"
+              aria-label="高级新建会话设置"
+              @click="openCreateSession()"
+            >
+              <OpusIcon name="chevD" />
+            </button>
+          </div>
         </div>
 
         <div class="tabs-actions">
@@ -1036,10 +2041,23 @@ function handleClearMemory() {
             @keydown.esc="closeActions(); actionsMenu?.querySelector('summary')?.focus()">
             <summary class="icon-btn" title="更多会话操作" aria-label="更多会话操作"><OpusIcon name="more" /></summary>
             <div class="action-list" @click="closeActions">
+              <button v-if="fleet.currentSession" type="button" @click="handleOpenSideChat()"><OpusIcon name="sparkle" />侧边问答 (/btw)</button>
               <button v-if="fleet.currentSession" type="button" @click="primaryThreadRef?.openThreadSearch()"><OpusIcon name="search" />搜索本对话 (Ctrl+F)</button>
               <button type="button" @click="handleToggleNotifications">
                 <OpusIcon name="bell" />
                 <span>{{ fleet.notificationsEnabled ? '后台桌面通知：已开启' : '开启后台桌面通知' }}</span>
+              </button>
+              <button type="button" @click="fleet.toggleSoundCues(); emit('action', fleet.soundEnabled ? '已开启完成与审批轻提示音' : '已关闭提示音')">
+                <OpusIcon name="sparkle" />
+                <span>{{ fleet.soundEnabled ? '任务轻提示音：已开启' : '开启任务轻提示音' }}</span>
+              </button>
+              <button type="button" @click="fleet.toggleSendShortcut(); emit('action', fleet.sendShortcut === 'ctrl-enter' ? '已切换为 Ctrl+Enter 发送（Enter 换行）' : '已切换为 Enter 直接发送')">
+                <OpusIcon name="command" />
+                <span>发送键：{{ fleet.sendShortcut === 'ctrl-enter' ? 'Ctrl+Enter' : 'Enter' }}</span>
+              </button>
+              <button type="button" @click="cycleBubbleStyle">
+                <OpusIcon name="sparkle" />
+                <span>气泡样式：{{ chatBubbleStyleLabel(bubbleStyle) }}</span>
               </button>
               <button v-if="fleet.currentSession" type="button" @click="startRenameSession(fleet.currentSession)"><OpusIcon name="pencil" />重命名当前会话</button>
               <button v-if="fleet.currentSession" type="button" @click="handleCompactActive"><OpusIcon name="layers" />压缩历史上下文</button>
@@ -1067,6 +2085,46 @@ function handleClearMemory() {
         </span>
         <span v-else-if="fleet.lastError">{{ fleet.lastError }}</span>
         <span v-else>Fleet WebSocket 通道：{{ fleet.wsState }}</span>
+        <button
+          v-if="fleet.lastError && !fleet.pendingApprovalsList.length && fleet.wsState === 'online'"
+          type="button"
+          class="conn-banner-close"
+          aria-label="关闭错误提示"
+          title="关闭提示"
+          @click="fleet.lastError = null"
+        >
+          <OpusIcon name="x" />
+        </button>
+      </div>
+
+      <div
+        v-if="backgroundApprovals.length"
+        class="bg-approval-strip"
+        role="region"
+        aria-label="后台会话待审批汇总"
+      >
+        <OpusIcon name="shield" class="bga-ic" />
+        <span class="bga-text">
+          <strong>后台待审批 ({{ backgroundApprovals.length }})</strong>
+          <code>{{ backgroundApprovals[0].command || backgroundApprovals[0].title }}</code>
+        </span>
+        <div class="bga-actions">
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            @click="fleet.respondPermission(backgroundApprovals[0].callId, 'allow_once')"
+          >允许一次</button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            @click="fleet.respondPermission(backgroundApprovals[0].callId, 'deny')"
+          >拒绝</button>
+          <button
+            type="button"
+            class="btn btn-subtle btn-sm"
+            @click="jumpToApprovalSession(backgroundApprovals[0].nodeId, backgroundApprovals[0].provider, backgroundApprovals[0].sessionId)"
+          >查看</button>
+        </div>
       </div>
 
       <AgentChatThread
@@ -1077,6 +2135,7 @@ function handleClearMemory() {
         @open-diff="openDiffPanel"
         @open-file="openFilePreview"
         @open-subagent="handleOpenSubagent"
+        @open-side-chat="handleOpenSideChat"
         @clear-session="openCreateSession()"
       />
     </section>
@@ -1156,6 +2215,31 @@ function handleClearMemory() {
               <OpusIcon name="grid" />
               <span>分屏</span>
             </button>
+            <button
+              v-if="fleet.currentSession"
+              type="button"
+              role="tab"
+              :aria-selected="rightMode === 'side'"
+              class="wb-tab-btn"
+              :class="{ 'is-active': rightMode === 'side' }"
+              title="不污染主上下文的临时侧边问答 (/btw)"
+              @click="handleOpenSideChat()"
+            >
+              <OpusIcon name="sparkle" />
+              <span>/btw</span>
+            </button>
+            <button
+              v-if="focusedSubagentKey"
+              type="button"
+              role="tab"
+              :aria-selected="rightMode === 'subagent'"
+              class="wb-tab-btn"
+              :class="{ 'is-active': rightMode === 'subagent' }"
+              @click="setRightPane('subagent')"
+            >
+              <OpusIcon name="bot" />
+              <span>子代理</span>
+            </button>
           </div>
           <button
             type="button"
@@ -1218,6 +2302,7 @@ function handleClearMemory() {
             @merge-worktree="fleet.mergeSessionWorktree(fleet.activeSessionKey)"
             @ask-about-file="primaryThreadRef?.insertFileReference($event)"
             @comment-line="txt => primaryThreadRef?.insertFileReference(txt)"
+            @action="emit('action', $event)"
           />
 
           <FileViewerDrawer
@@ -1227,6 +2312,9 @@ function handleClearMemory() {
             @refresh="openFilePreview($event)"
             @cite-lines="primaryThreadRef?.insertFileReference($event)"
             @ask-about-file="primaryThreadRef?.insertFileReference($event)"
+            @save-file="(fp, content) => { fleet.saveWorkspaceFile(fp, content, fleet.activeSessionKey); emit('action', '已保存文件修改至远程工作区') }"
+            @request-blame="fp => fleet.requestFileBlame(fp, fleet.activeSessionKey)"
+            @open-external="fp => { fleet.openExternalTarget(fp, 'editor', fleet.activeSessionKey); emit('action', '已请求在宿主机外部编辑器打开') }"
           />
 
           <WorkspaceTreeDrawer
@@ -1235,12 +2323,39 @@ function handleClearMemory() {
             @close="setRightPane('none')"
             @open-file="openFilePreview($event)"
             @cite-file="primaryThreadRef?.insertFileReference($event)"
+            @open-external="(fp, target) => { fleet.openExternalTarget(fp, target, fleet.activeSessionKey); emit('action', '已请求在宿主机打开工作区') }"
           />
 
           <TerminalDrawer
             v-else-if="rightMode === 'terminal'"
             :session-key="fleet.activeSessionKey"
             @close="setRightPane('none')"
+          />
+
+          <SideChatDrawer
+            v-else-if="rightMode === 'side'"
+            mode="side"
+            :embedded="true"
+            :session-key="sideChatSessionKey"
+            @close="setRightPane('none')"
+            @promote-to-main="promoteSideToMain"
+            @action="emit('action', $event)"
+            @open-diff="openDiffPanel"
+            @open-file="openFilePreview"
+            @open-subagent="handleOpenSubagent"
+          />
+
+          <SideChatDrawer
+            v-else-if="rightMode === 'subagent'"
+            mode="subagent"
+            :embedded="true"
+            :session-key="focusedSubagentKey"
+            @close="setRightPane('none')"
+            @promote-to-main="promoteSideToMain"
+            @action="emit('action', $event)"
+            @open-diff="openDiffPanel"
+            @open-file="openFilePreview"
+            @open-subagent="handleOpenSubagent"
           />
         </div>
       </aside>
@@ -1258,8 +2373,32 @@ function handleClearMemory() {
       @run-command="handlePaletteRunCommand"
     />
 
-    <!-- 新建会话弹窗 -->
-    <div v-if="showNewSession" class="modal-scrim" @click.self="showNewSession = false">
+    <!-- 标签页右键轻菜单（固定 / 关闭其他 / 关闭右侧） -->
+    <div v-if="tabContextMenu" class="tab-ctx-backdrop" @click="dismissTabMenu" @contextmenu.prevent="dismissTabMenu">
+      <div
+        class="tab-ctx-menu"
+        :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }"
+        @click.stop
+      >
+        <button type="button" @click="togglePinTab(tabContextMenu.key)">
+          <OpusIcon name="pin" />
+          <span>{{ pinnedTabKeys.includes(tabContextMenu.key) ? '取消固定标签' : '固定标签（防误关）' }}</span>
+        </button>
+        <button type="button" @click="closeOtherTabs(tabContextMenu.key)">
+          <OpusIcon name="x" />
+          <span>关闭其他标签</span>
+        </button>
+        <button type="button" @click="closeRightTabs(tabContextMenu.key)">
+          <OpusIcon name="chevR" />
+          <span>关闭右侧标签</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 桌面与移动端共用弹窗（新建会话 / @Handoff / 群发对比） -->
+  <!-- 新建会话弹窗 -->
+  <div v-if="showNewSession" class="modal-scrim" @click.self="showNewSession = false">
       <div class="modal-card card">
         <h3>新建工作会话</h3>
         <div class="field">
@@ -1270,9 +2409,10 @@ function handleClearMemory() {
         </div>
         <div class="field">
           <label>执行代理引擎</label>
-          <select v-model="newSessionProvider" class="input">
+          <select v-if="readyAt(newSessionNodeId).length" v-model="newSessionProvider" class="input">
             <option v-for="ad in readyAt(newSessionNodeId)" :key="ad.provider" :value="ad.provider">{{ getProviderMeta(ad.provider).label }}</option>
           </select>
+          <p v-else class="faint" style="margin:0;font-size:12.5px">当前节点暂无就绪的代理引擎，请确认本地 CLI / 服务运行且鉴权正常。</p>
         </div>
         <div class="field">
           <label>工作目录（须在节点 allowedRoots 内）</label>
@@ -1354,7 +2494,6 @@ function handleClearMemory() {
         </div>
       </div>
     </div>
-  </div>
 </template>
 
 <style scoped>
@@ -1884,5 +3023,946 @@ function handleClearMemory() {
 .tabs-actions .is-notify-on {
   color: var(--accent);
   background: var(--accent-soft);
+}
+.tab-unread-dot {
+  display: inline-grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink, #fff);
+  font-size: 10px;
+  font-weight: 650;
+}
+.bg-approval-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 32%, var(--line));
+  background: color-mix(in srgb, var(--warn-soft) 60%, var(--solid));
+  font-size: 12px;
+  flex: none;
+}
+.bga-ic {
+  width: 14px;
+  height: 14px;
+  color: var(--warn);
+  flex: none;
+}
+.bga-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.bga-text code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bga-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.m-wb-trigger {
+  position: relative;
+}
+.m-wb-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink, #fff);
+  font-size: 9.5px;
+  line-height: 14px;
+  font-weight: 650;
+}
+.m-wb-sheet {
+  position: fixed;
+  inset: env(safe-area-inset-top, 0px) 0 0 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--solid);
+  color: var(--text);
+  isolation: isolate;
+}
+.m-wb-sheet .wb-tabs-bar {
+  padding: 8px 10px;
+  background: var(--solid);
+}
+.m-wb-sheet .wb-tab-btn {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+.m-wb-sheet .wb-close-btn {
+  width: 38px;
+  height: 38px;
+}
+.m-wb-sheet .wb-pane-body {
+  background: var(--bg);
+}
+.conn-banner-close {
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  opacity: 0.72;
+  cursor: pointer;
+  flex: none;
+}
+.conn-banner-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.conn-banner-close .i {
+  width: 12px;
+  height: 12px;
+}
+.chat-tab {
+  max-width: 156px;
+}
+.chat-tab.is-active {
+  flex: none;
+  max-width: 220px;
+}
+.tab-pin-ic {
+  width: 11px;
+  height: 11px;
+  color: var(--accent);
+  flex: none;
+}
+.new-tab-split {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.new-tab-more {
+  width: 20px;
+  margin-left: -4px;
+  opacity: 0.65;
+}
+.new-tab-more:hover {
+  opacity: 1;
+}
+.tree-filter-pills {
+  display: flex;
+  gap: 4px;
+  padding-top: 2px;
+}
+.tree-filter-pill {
+  flex: 1;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tree-filter-pill:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.tree-filter-pill.is-active {
+  background: var(--solid);
+  border-color: var(--line);
+  color: var(--text);
+  font-weight: 560;
+}
+.tab-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+.tab-ctx-menu {
+  position: fixed;
+  display: grid;
+  gap: 2px;
+  padding: 5px;
+  min-width: 156px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--solid);
+  box-shadow: var(--shadow-2);
+}
+.tab-ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.tab-ctx-menu button:hover {
+  background: var(--surface-2);
+}
+.tab-ctx-menu button .i {
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+}
+.tree-eng,
+.chat-tab-eng {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tree-eng-ic {
+  width: 12px;
+  height: 12px;
+  color: var(--text-2);
+  flex: none;
+}
+
+/* ---------- 移动端方案 B：极简图标工具栏 + 动效状态收件箱 + 全屏沉浸对话 ---------- */
+.mchat-root {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.m-inbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 2px 13px;
+}
+.m-inbox-toolbar-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-inbox-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text);
+}
+.m-inbox-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.m-active-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.m-active-filter-chip .i { width: 12px; height: 12px; }
+.m-inbox-toolbar-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.m-tool-ic-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color var(--dur-1), color var(--dur-1), scale var(--dur-1);
+}
+.m-tool-ic-btn .i { width: 17px; height: 17px; }
+.m-tool-ic-btn:active { scale: .93; }
+.m-tool-ic-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.m-tool-ic-btn.is-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.m-tool-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.m-filter-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.m-filter-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+}
+.m-filter-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: -44px;
+  z-index: 40;
+  width: 224px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--solid);
+  box-shadow: var(--shadow-pop);
+  display: grid;
+  gap: 2px;
+}
+.m-fmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 520;
+  text-align: left;
+  cursor: pointer;
+}
+.m-fmenu-item:active,
+.m-fmenu-item.is-open {
+  background: var(--surface-2);
+}
+.m-fmenu-item.is-reset {
+  color: var(--accent);
+}
+.m-fmenu-ic {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  flex: none;
+}
+.m-fmenu-lbl {
+  flex: 1;
+  min-width: 0;
+}
+.m-fmenu-val {
+  max-width: 82px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-fmenu-chev {
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+  flex: none;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.m-fmenu-item.is-open .m-fmenu-chev {
+  transform: rotate(90deg);
+  color: var(--text);
+}
+.m-fmenu-sub {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 4px 12px;
+  padding: 4px;
+  border-left: 1.5px solid var(--line-strong);
+}
+.m-fmenu-subitem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.m-fmenu-subitem:active {
+  background: var(--surface-2);
+}
+.m-fmenu-subitem.is-selected {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 560;
+}
+.m-fmenu-subitem.is-link {
+  color: var(--text-3);
+}
+.m-fmenu-subtxt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-fmenu-check {
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+  flex: none;
+  margin-left: auto;
+}
+.m-fmenu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+.m-inbox-search {
+  margin-bottom: 10px;
+}
+.m-inbox-search input {
+  padding-right: 40px;
+}
+.m-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  translate: 0 -50%;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.m-search-clear .i { position: static; translate: none; width: 14px; height: 14px; }
+
+.m-inbox-approvals {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.m-approval-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--warn-soft) 75%, var(--solid));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.m-appr-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.m-appr-ic { width: 18px; height: 18px; color: var(--warn); flex: none; }
+.m-appr-copy {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.m-appr-copy strong {
+  font-size: 14px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-appr-copy span {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-appr-cmd {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--solid);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+.m-appr-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.m-appr-actions .btn {
+  min-height: 42px;
+  justify-content: center;
+  border-radius: 13px;
+  font-size: 14px;
+}
+
+.m-inbox-scroll-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  margin: 0 -16px 10px;
+  padding: 2px 16px;
+}
+.m-inbox-scroll-chips::-webkit-scrollbar { display: none; }
+.m-inbox-scroll-chips .chip {
+  flex: none;
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.m-inbox-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.m-status-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  gap: 2px;
+}
+.m-status-seg button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.m-status-seg button[aria-pressed="true"] {
+  background: var(--solid);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.m-fanout-link {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.m-fanout-link:active { background: var(--surface-3); }
+
+.m-inbox-list {
+  margin-bottom: 14px;
+}
+.m-inbox-row {
+  min-height: 82px;
+  padding: 16px 16px;
+  gap: 14px;
+}
+.m-inbox-row .title {
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.m-sess-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: var(--surface-2);
+  color: var(--text);
+  flex: none;
+}
+.m-sess-avatar .i { width: 22px; height: 22px; }
+.m-sess-avatar.oc-opencode {
+  background: #141416;
+  color: #eeeeee;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+.m-sess-avatar.is-approval {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.m-sess-avatar.is-running:not(.oc-opencode) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.m-sess-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.m-sess-time {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.m-sess-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.m-sess-sub-mini {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-sess-diff-num {
+  color: var(--ok);
+}
+.m-sess-state-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 560;
+  padding: 2px 7px;
+  border-radius: 999px;
+  line-height: 1.3;
+}
+.m-sess-state-pill.is-done {
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+.m-sess-state-pill.is-unread {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.m-sess-state-pill.is-running {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.m-sess-state-pill.is-approval {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.m-state-ic {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+.m-state-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.6px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: m-state-spin .85s linear infinite;
+  flex: none;
+}
+.m-state-ic.is-pulse {
+  animation: m-state-pulse 1.6s ease-in-out infinite;
+}
+.m-state-ic.is-pop {
+  animation: m-state-breathe 2.2s ease-in-out infinite;
+}
+@keyframes m-state-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes m-state-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .55; transform: scale(.88); }
+}
+@keyframes m-state-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .6; }
+}
+:global([data-motion="reduced"]) .m-state-spinner,
+:global([data-motion="reduced"]) .m-state-ic.is-pulse,
+:global([data-motion="reduced"]) .m-state-ic.is-pop {
+  animation: none;
+}
+
+.m-inbox-empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 28px 18px;
+}
+.m-empty-ic {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.m-empty-ic .i { width: 24px; height: 24px; }
+.m-inbox-empty h3 { margin: 2px 0 0; font-size: 17px; }
+.m-inbox-empty p { margin: 0; font-size: 13px; line-height: 1.55; max-width: 280px; }
+.m-empty-actions {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  max-width: 260px;
+  margin-top: 6px;
+}
+.m-empty-actions .btn {
+  min-height: 44px;
+  justify-content: center;
+  border-radius: 14px;
+  font-size: 14.5px;
+}
+
+/* 第二层：全屏沉浸对话页 */
+.m-thread-shell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.m-thread-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, var(--solid));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 5;
+}
+.m-bar-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  flex: none;
+  transition: background-color var(--dur-1), color var(--dur-1), scale var(--dur-1);
+}
+.m-bar-btn:active { background: var(--surface-3); color: var(--text); scale: .93; }
+.m-bar-btn:disabled { opacity: .4; cursor: default; }
+.m-bar-btn .i { width: 16.5px; height: 16.5px; }
+.m-bar-btn .m-wb-dot {
+  top: -3px;
+  right: -3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 16px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.m-thread-title-btn {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  padding: 3px 6px 3px 2px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.m-thread-title-btn:active { background: var(--surface-2); }
+.m-tt-main {
+  max-width: 100%;
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-tt-sub {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-tt-sub .conn {
+  width: 6px;
+  height: 6px;
+}
+.m-tt-chev { width: 10px; height: 10px; flex: none; opacity: .65; }
+.m-thread-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.m-bg-approval-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--warn-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  font-size: 12.5px;
+}
+.m-bga-copy {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-thread-shell .mchat-thread {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 原生 <dialog> 移动端底部 Sheet */
+.msheet-dlg {
+  margin: auto 0 0 0;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 82dvh;
+  border: 0;
+  border-radius: 24px 24px 0 0;
+  background: var(--solid);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+.msheet-panel {
+  display: grid;
+  gap: 14px;
+  padding: 10px 16px calc(22px + env(safe-area-inset-bottom));
+}
+.msheet-grab {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.msheet-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.msheet-hdr h3 { margin: 0; font-size: 16px; font-weight: 680; }
+.msheet-sec { display: grid; gap: 8px; }
+.msheet-label { font-size: 12px; font-weight: 600; color: var(--text-3); }
+.msheet-rename-row { display: flex; gap: 8px; }
+.msheet-rename-row .input { flex: 1; height: 40px; }
+.msheet-actions {
+  display: grid;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.msheet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.msheet-row + .msheet-row { border-top: 1px solid var(--line); }
+.msheet-row:active { background: var(--surface-3); }
+.msheet-row .i { width: 16px; height: 16px; color: var(--text-2); flex: none; }
+.msheet-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msheet-row.is-danger,
+.msheet-row.is-danger .i { color: var(--danger); }
+
+@media (max-width: 700px) {
+  .modal-card {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .modal-foot .btn {
+    min-height: 40px;
+    padding: 0 16px;
+  }
 }
 </style>

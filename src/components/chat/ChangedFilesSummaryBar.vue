@@ -6,6 +6,7 @@ import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{
   diff: SessionDiffState | null
+  worktreeName?: string
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +36,10 @@ const fileRows = computed(() =>
         :aria-expanded="expanded"
         @click="expanded = !expanded"
       >
+        <span v-if="diff.branch || worktreeName" class="cfs-branch" :title="worktreeName ? `Worktree: ${worktreeName}` : `分支: ${diff.branch}`">
+          <OpusIcon name="branch" />
+          <span>{{ worktreeName || diff.branch }}</span>
+        </span>
         <span class="cfs-title num">{{ diff.files.length }} 个文件变更</span>
         <span class="cfs-stats num">
           <span class="sum-add">+{{ diff.summary.additions }}</span>
@@ -110,6 +115,27 @@ const fileRows = computed(() =>
 .cfs-title {
   font-weight: 550;
   color: var(--text-2);
+}
+.cfs-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+.cfs-branch .i {
+  width: 11px;
+  height: 11px;
+  flex: none;
 }
 .cfs-stats {
   display: inline-flex;

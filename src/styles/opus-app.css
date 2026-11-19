@@ -37,9 +37,25 @@ html[data-theme] body:has(.opus-shell) { background: #1a1b1f; }
 .opus-auth-body .glass-wallpaper { display: none; }
 .opus-shell .screen { grid-template-rows: minmax(0, 1fr); border-radius: 0; padding-top: env(safe-area-inset-top); }
 .opus-shell .mpage { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
-.opus-shell .mcomposer { padding-bottom: calc(98px + env(safe-area-inset-bottom)); }
+.opus-shell .mcomposer { padding: 6px 12px calc(12px + env(safe-area-inset-bottom)); }
 .opus-shell .mcomposer textarea { overflow-y: auto; scrollbar-width: none; }
+.opus-shell .mchips {
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 0;
+  overflow-x: visible;
+}
+.opus-shell .mchips .chip { min-height: 34px; }
+.opus-shell .mtoast { top: calc(12px + env(safe-area-inset-top)); bottom: auto; }
+dialog.msheet-dlg:modal { overscroll-behavior: contain; }
+dialog.msheet-dlg::backdrop { overflow: hidden; overscroll-behavior: contain; background: var(--scrim); }
 .opus-shell .oc-studiolo { --oc: var(--accent); }
+.opus-shell .oc-opencode .am,
+.opus-shell .thread-empty-ic.oc-opencode {
+  background: #141416;
+  color: #eeeeee;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
 .opus-shell .tabbar { bottom: calc(14px + env(safe-area-inset-bottom)); }
 .opus-shell .sheet { padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
 .opus-shell .opus-mac { padding-left: 78px; }
@@ -73,6 +89,16 @@ dialog.dlg .dlg-check input { width: 16px; height: 16px; margin: 0; }
 @media (max-width: 700px) {
   dialog.dlg, dialog.dlg.dlg--wide { width: calc(100vw - 24px); max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
   dialog.dlg .field-grid { grid-template-columns: 1fr; }
+}
+
+/* 桌面端 Toast 固定在右上角，避免遮挡底部 Chat 输入框与发送按钮 */
+.opus-shell .toast-host.desk {
+  top: 46px;
+  right: 16px;
+  left: auto;
+  bottom: auto;
+  translate: none;
+  justify-items: end;
 }
 
 /* 减少动态效果下关闭样板过渡冲突时，确保关键状态保留平滑透明度过渡 */

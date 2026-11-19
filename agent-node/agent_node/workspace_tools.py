@@ -48,6 +48,29 @@ def _is_git_repo(cwd: Path) -> bool:
         return False
 
 
+def _fuzzy_subsequence_score(query: str, text: str) -> int | None:
+    """子序列模糊匹配打分（如 `act` 匹配 `AgentChatThread.vue`），未命中返回 None，越小越优。"""
+    q = query.lower()
+    low = text.lower()
+    if q in low:
+        idx = low.index(q)
+        return 0 if idx == 0 else 10 + min(idx, 40)
+    qi = 0
+    score = 60
+    prev_match = -2
+    for idx, ch in enumerate(low):
+        if ch == q[qi]:
+            if idx == prev_match + 1:
+                score -= 2  # 连续字符奖励
+            elif idx == 0 or text[idx - 1] in "/_-." or text[idx].isupper():
+                score -= 3  # 词首/驼峰首字母奖励
+            prev_match = idx
+            qi += 1
+            if qi == len(q):
+                return max(20, score + len(text) // 8)
+    return None
+
+
 def list_workspace_files(
     cwd: str | Path,
     allowed_roots: tuple[Path, ...],
@@ -55,7 +78,7 @@ def list_workspace_files(
     query: str = "",
     limit: int = 60,
 ) -> list[str]:
-    """在 allowedRoots 约束下遍历工作区文件并按模糊匹配排序返回相对 POSIX 路径。"""
+    """在 allowedRoots 约束下遍历工作区文件并按子序列模糊匹配排序返回相对 POSIX 路径。"""
     safe_cwd = ensure_allowed_path(cwd, allowed_roots)
     if not safe_cwd.is_dir():
         return []
@@ -73,11 +96,14 @@ def list_workspace_files(
                 break
             rel = (rel_dir / name).as_posix() if rel_dir != Path(".") else name
             if q:
-                low_rel = rel.lower()
-                low_name = name.lower()
-                if q not in low_rel:
+                name_score = _fuzzy_subsequence_score(q, name)
+                rel_score = _fuzzy_subsequence_score(q, rel)
+                if name_score is None and rel_score is None:
                     continue
-                score = 0 if low_name.startswith(q) else 1 if q in low_name else 2
+                score = min(
+                    name_score if name_score is not None else 999,
+                    (rel_score + 15) if rel_score is not None else 999,
+                )
             else:
                 score = 0
             candidates.append((score, rel))
@@ -174,6 +200,18 @@ def _diff_trees(
     }
 
 
+def _current_git_branch(cwd: Path) -> str:
+    res = _run_git_raw(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    if res.returncode == 0:
+        name = res.stdout.strip()
+        if name and name != "HEAD":
+            return name
+    short_sha = _run_git_raw(cwd, "rev-parse", "--short", "HEAD")
+    if short_sha.returncode == 0 and short_sha.stdout.strip():
+        return f"detached@{short_sha.stdout.strip()}"
+    return ""
+
+
 def get_workspace_diff(
     cwd: str | Path,
     allowed_roots: tuple[Path, ...],
@@ -182,25 +220,29 @@ def get_workspace_diff(
     target_tree: str | None = None,
     limit_files: int = 40,
 ) -> dict[str, Any]:
-    """读取工作区当前相对 HEAD（或指定前后 Tree）的文件改动统计与统一 Patch。"""
+    """读取工作区当前相对 HEAD（或指定前后 Tree）的文件改动统计与统一 Patch，附带当前分支名。"""
     safe_cwd = ensure_allowed_path(cwd, allowed_roots)
     if not _is_git_repo(safe_cwd):
         return {
             "files": [],
             "summary": {"filesChanged": 0, "additions": 0, "deletions": 0},
             "isGitRepo": False,
+            "branch": "",
         }
+    branch = _current_git_branch(safe_cwd)
     end_tree = target_tree or create_git_checkpoint(safe_cwd, allowed_roots)
     if not end_tree:
-        return {"files": [], "summary": {"filesChanged": 0, "additions": 0, "deletions": 0}, "isGitRepo": True}
+        return {"files": [], "summary": {"filesChanged": 0, "additions": 0, "deletions": 0}, "isGitRepo": True, "branch": branch}
 
     start_tree = base_tree
     if not start_tree:
         head = _run_git_raw(safe_cwd, "rev-parse", "--verify", "HEAD^{tree}")
         start_tree = head.stdout.strip() if head.returncode == 0 and head.stdout.strip() else _EMPTY_GIT_TREE
     if start_tree == end_tree:
-        return {"files": [], "summary": {"filesChanged": 0, "additions": 0, "deletions": 0}, "isGitRepo": True}
-    return _diff_trees(safe_cwd, start_tree, end_tree, limit_files=limit_files)
+        return {"files": [], "summary": {"filesChanged": 0, "additions": 0, "deletions": 0}, "isGitRepo": True, "branch": branch}
+    diff_out = _diff_trees(safe_cwd, start_tree, end_tree, limit_files=limit_files)
+    diff_out["branch"] = branch
+    return diff_out
 
 
 def restore_git_checkpoint(
@@ -281,7 +323,10 @@ def read_workspace_file(
     *,
     max_bytes: int = 262144,
 ) -> dict[str, Any]:
-    """在 allowedRoots 与当前目录隔离保护下读取只读文件预览内容。"""
+    """在 allowedRoots 与当前目录隔离保护下读取只读文件预览内容（支持图片与二进制 base64 预览/下载）。"""
+    import base64
+    import mimetypes
+
     safe_cwd = ensure_allowed_path(cwd, allowed_roots)
     clean_rel = str(rel_path or "").strip().lstrip("/")
     if not clean_rel:
@@ -291,19 +336,33 @@ def read_workspace_file(
         raise FileNotFoundError(f"未找到文件: {clean_rel}")
     raw = target.read_bytes()
     size = len(raw)
-    if b"\x00" in raw[:4096]:
+    guessed_mime, _ = mimetypes.guess_type(target.name)
+    suffix = target.suffix.lower()
+    if not guessed_mime:
+        if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"):
+            guessed_mime = f"image/{'jpeg' if suffix in ('.jpg', '.jpeg') else suffix.lstrip('.')}"
+        elif suffix == ".svg":
+            guessed_mime = "image/svg+xml"
+        else:
+            guessed_mime = "application/octet-stream" if b"\x00" in raw[:4096] else "text/plain"
+
+    is_binary_image = suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico")
+    if b"\x00" in raw[:4096] or is_binary_image:
+        b64 = base64.b64encode(raw).decode("ascii") if size <= 8 * 1024 * 1024 else None
         return {
             "path": clean_rel,
             "language": "",
             "content": "",
             "lineCount": 0,
-            "truncated": False,
+            "truncated": size > 8 * 1024 * 1024,
             "sizeBytes": size,
             "isBinary": True,
+            "mime": guessed_mime,
+            **({"base64Data": b64} if b64 else {}),
         }
     truncated = size > max_bytes
     text = raw[:max_bytes].decode("utf-8", errors="replace")
-    lang = _EXT_LANG_MAP.get(target.suffix.lower(), target.suffix.lstrip(".").lower())
+    lang = _EXT_LANG_MAP.get(suffix, suffix.lstrip("."))
     return {
         "path": clean_rel,
         "language": lang,
@@ -312,6 +371,7 @@ def read_workspace_file(
         "truncated": truncated,
         "sizeBytes": size,
         "isBinary": False,
+        "mime": guessed_mime,
     }
 
 
@@ -562,3 +622,198 @@ def git_commit_changes(
         "message": clean_msg,
         "filesCommitted": staged_targets,
     }
+
+
+def write_workspace_file(
+    cwd: str | Path,
+    allowed_roots: tuple[Path, ...],
+    rel_path: str,
+    content: str,
+    *,
+    max_bytes: int = 524288,
+) -> dict[str, Any]:
+    """在 allowedRoots 沙箱内安全写入 UTF-8 文本文件（用于代码预览抽屉快速小改）。"""
+    safe_cwd = ensure_allowed_path(cwd, allowed_roots)
+    clean_rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
+    if not clean_rel or clean_rel.startswith(".git/") or clean_rel.startswith(".studiolo-"):
+        raise ValueError("不允许写入受保护目录或空路径")
+    target = ensure_allowed_path(safe_cwd / clean_rel, allowed_roots)
+    encoded = str(content or "").encode("utf-8")
+    if len(encoded) > max_bytes:
+        raise ValueError(f"文件内容超过写入限制 ({max_bytes} bytes)")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(encoded)
+    return {
+        "path": clean_rel,
+        "sizeBytes": len(encoded),
+        "lineCount": content.count("\n") + (1 if content else 0),
+    }
+
+
+def get_file_git_blame(
+    cwd: str | Path,
+    allowed_roots: tuple[Path, ...],
+    rel_path: str,
+    *,
+    max_lines: int = 600,
+) -> dict[str, Any]:
+    """获取工作区内指定文件的轻量 Git Blame 元信息（行号 -> 提交短哈希、作者、日期）。"""
+    safe_cwd = ensure_allowed_path(cwd, allowed_roots)
+    clean_rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
+    if not clean_rel:
+        raise ValueError("文件路径不能为空")
+    ensure_allowed_path(safe_cwd / clean_rel, allowed_roots)
+    if not _is_git_repo(safe_cwd):
+        return {"path": clean_rel, "isGitRepo": False, "lines": []}
+
+    res = _run_git_raw(
+        safe_cwd,
+        "blame",
+        "--line-porcelain",
+        "-L",
+        f"1,{max(1, min(max_lines, 1500))}",
+        "--",
+        clean_rel,
+    )
+    if res.returncode != 0:
+        return {"path": clean_rel, "isGitRepo": True, "lines": []}
+
+    blame_lines: list[dict[str, Any]] = []
+    cur_sha = ""
+    cur_author = ""
+    cur_time = 0
+    cur_line = 0
+    for raw_ln in res.stdout.splitlines():
+        if raw_ln.startswith("\t"):
+            blame_lines.append({
+                "line": cur_line or (len(blame_lines) + 1),
+                "sha": cur_sha[:7],
+                "author": cur_author,
+                "time": cur_time,
+            })
+            continue
+        if raw_ln.startswith("author "):
+            cur_author = raw_ln[7:].strip()
+        elif raw_ln.startswith("author-time "):
+            try:
+                cur_time = int(raw_ln[12:].strip())
+            except ValueError:
+                cur_time = 0
+        else:
+            parts = raw_ln.split(" ")
+            if len(parts) >= 3 and len(parts[0]) == 40 and all(c in "0123456789abcdef" for c in parts[0]):
+                cur_sha = parts[0]
+                try:
+                    cur_line = int(parts[2])
+                except ValueError:
+                    cur_line = len(blame_lines) + 1
+
+    return {"path": clean_rel, "isGitRepo": True, "lines": blame_lines}
+
+
+def discover_workspace_skills(
+    cwd: str | Path,
+    allowed_roots: tuple[Path, ...],
+) -> list[dict[str, str]]:
+    """动态发现工作区内的自定义 Slash 命令与 Agent Skills（兼容 Claude/Codex/Cursor/Studiolo 目录约定）。"""
+    safe_cwd = ensure_allowed_path(cwd, allowed_roots)
+    scan_dirs = [
+        (".claude/commands", "claude"),
+        (".claude/skills", "claude"),
+        (".codex/skills", "codex"),
+        (".studiolo/skills", "studiolo"),
+        (".studiolo/commands", "studiolo"),
+        (".github/prompts", "github"),
+    ]
+    discovered: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    for rel_dir, source in scan_dirs:
+        base = safe_cwd / rel_dir
+        if not base.is_dir():
+            continue
+        try:
+            ensure_allowed_path(base, allowed_roots)
+        except Exception:
+            continue
+        candidates = list(base.glob("*.md")) + list(base.glob("*/SKILL.md"))
+        for fp in sorted(candidates)[:30]:
+            if not fp.is_file():
+                continue
+            try:
+                ensure_allowed_path(fp, allowed_roots)
+                raw = fp.read_text(encoding="utf-8", errors="replace")[:4000].strip()
+            except Exception:
+                continue
+            if not raw:
+                continue
+            slug = fp.parent.name if fp.name.upper() == "SKILL.MD" else fp.stem
+            trigger = slug.strip().lower().replace(" ", "-")
+            if not trigger or trigger in seen_ids:
+                continue
+            seen_ids.add(trigger)
+            # 从 frontmatter 或首行提取简洁描述
+            desc = ""
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("description:"):
+                    desc = stripped.split(":", 1)[1].strip().strip("\"'")
+                    break
+                if stripped and not stripped.startswith("---") and not stripped.startswith("name:"):
+                    desc = stripped.lstrip("# ").strip()
+                    break
+            discovered.append({
+                "id": f"skill:{source}:{trigger}",
+                "trigger": f"/{trigger}",
+                "title": slug,
+                "description": desc[:96] or f"{source} 工作区技能",
+                "source": fp.relative_to(safe_cwd).as_posix(),
+                "template": raw[:1800],
+            })
+            if len(discovered) >= 40:
+                return discovered
+    return discovered
+
+
+def open_workspace_external(
+    cwd: str | Path,
+    allowed_roots: tuple[Path, ...],
+    *,
+    rel_path: str = "",
+    target: str = "editor",
+) -> dict[str, str]:
+    """在宿主机受控目录内使用外部编辑器（VS Code / Cursor）或系统文件管理器打开目标路径。"""
+    import shutil
+    import sys
+
+    safe_cwd = ensure_allowed_path(cwd, allowed_roots)
+    clean_rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
+    target_path = ensure_allowed_path(safe_cwd / clean_rel if clean_rel else safe_cwd, allowed_roots)
+    if not target_path.exists():
+        raise FileNotFoundError(f"目标路径不存在: {clean_rel or '.'}")
+
+    kind = str(target or "editor").lower()
+    if kind == "editor":
+        for cli in ("cursor", "code", "code-insiders", "zed"):
+            exe = shutil.which(cli)
+            if exe:
+                subprocess.Popen([exe, str(target_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return {"opened": str(target_path), "app": cli}
+
+    # 回退使用系统文件管理器打开所在目录
+    folder = target_path if target_path.is_dir() else target_path.parent
+    if os.name == "nt":
+        if target_path.is_file():
+            subprocess.Popen(["explorer", f"/select,{target_path}"])
+        else:
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+        return {"opened": str(target_path), "app": "explorer"}
+    if sys.platform == "darwin":
+        args = ["open", "-R", str(target_path)] if target_path.is_file() else ["open", str(folder)]
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"opened": str(target_path), "app": "finder"}
+    opener = shutil.which("xdg-open")
+    if opener:
+        subprocess.Popen([opener, str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"opened": str(target_path), "app": "xdg-open"}
+    raise RuntimeError("当前宿主机未检测到可用的外部编辑器或文件管理器")

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref } from 'vue'
+import { parseCodeBlockLang } from '../../services/chatHelpers'
 import { parseMermaidDiagram, type DiagramRenderModel } from '../../services/diagramBuilder'
 import { parseMarkdownBlocks } from '../../services/markdownBlocks'
 import { highlightCode, type HighlightSpan } from '../../services/syntaxHighlight'
@@ -9,6 +10,7 @@ import MarkdownInlineText from './MarkdownInlineText.vue'
 const props = defineProps<{
   text: string
   streaming?: boolean
+  knownFiles?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -21,17 +23,23 @@ const blocks = computed(() => parseMarkdownBlocks(props.text))
 const copiedBlockIdx = ref<number | null>(null)
 const blockViewMode = reactive<Record<number, 'preview' | 'code'>>({})
 const expandedCodeBlocks = reactive<Record<number, boolean>>({})
+const wrappedCodeBlocks = reactive<Record<number, boolean>>({})
 let copyResetTimer: ReturnType<typeof setTimeout> | null = null
 
 const codeLinesByBlock = computed<Record<number, HighlightSpan[][]>>(() => {
   const out: Record<number, HighlightSpan[][]> = {}
   blocks.value.forEach((blk, idx) => {
     if (blk.type === 'code') {
-      out[idx] = highlightCode(blk.code, blk.lang)
+      const parsed = parseCodeBlockLang(blk.lang)
+      out[idx] = highlightCode(blk.code, parsed.lang)
     }
   })
   return out
 })
+
+function toggleCodeWrap(idx: number) {
+  wrappedCodeBlocks[idx] = !wrappedCodeBlocks[idx]
+}
 
 function isLongCodeBlock(idx: number): boolean {
   return (codeLinesByBlock.value[idx]?.length ?? 0) > CODE_COLLAPSE_THRESHOLD
@@ -112,12 +120,24 @@ onUnmounted(() => {
         class="md-heading"
         :class="`md-h${block.level}`"
       >
-        <MarkdownInlineText :tokens="block.inlines" @open-file="forwardOpenFile" />
+        <MarkdownInlineText :tokens="block.inlines" :known-files="knownFiles" @open-file="forwardOpenFile" />
       </component>
 
       <div v-else-if="block.type === 'code'" class="md-code-wrap">
         <div class="md-code-head">
-          <span class="md-code-lang">{{ block.lang || 'code' }}</span>
+          <div class="md-code-meta">
+            <span class="md-code-lang">{{ parseCodeBlockLang(block.lang).lang || 'code' }}</span>
+            <button
+              v-if="parseCodeBlockLang(block.lang).filePath"
+              type="button"
+              class="md-code-file-btn"
+              :title="`在右侧打开 ${parseCodeBlockLang(block.lang).filePath}`"
+              @click="forwardOpenFile(parseCodeBlockLang(block.lang).filePath!)"
+            >
+              <OpusIcon name="file" />
+              <span>{{ parseCodeBlockLang(block.lang).filePath }}</span>
+            </button>
+          </div>
           <div class="md-code-tools">
             <div v-if="getDiagram(block.code, block.lang)" class="md-seg">
               <button
@@ -155,6 +175,16 @@ onUnmounted(() => {
                 沙箱预览
               </button>
             </div>
+            <button
+              v-if="getEffectiveView(bIdx, block.lang, block.code) === 'code'"
+              type="button"
+              class="md-code-copy"
+              :class="{ 'is-copied': wrappedCodeBlocks[bIdx] }"
+              :title="wrappedCodeBlocks[bIdx] ? '取消自动换行' : '开启代码自动换行'"
+              @click="toggleCodeWrap(bIdx)"
+            >
+              <span>{{ wrappedCodeBlocks[bIdx] ? '不换行' : '折行' }}</span>
+            </button>
             <button
               type="button"
               class="md-code-copy"
@@ -248,7 +278,7 @@ onUnmounted(() => {
 
         <!-- 语法高亮代码展示（无 v-html，超 35 行自动折叠） -->
         <template v-else>
-          <pre class="md-code-pre" :class="{ 'is-collapsed': isCodeCollapsed(bIdx) }"><code><span v-for="(lineSpans, lIdx) in visibleCodeLines(bIdx)" :key="lIdx" class="md-code-line"><template v-if="lineSpans.length"><span v-for="(sp, sIdx) in lineSpans" :key="sIdx" :class="`tok-${sp.kind}`">{{ sp.text }}</span></template><template v-else>&#10;</template>{{ lIdx < visibleCodeLines(bIdx).length - 1 ? '\n' : '' }}</span></code></pre>
+          <pre class="md-code-pre" :class="{ 'is-collapsed': isCodeCollapsed(bIdx), 'is-wrapped': wrappedCodeBlocks[bIdx] }"><code><span v-for="(lineSpans, lIdx) in visibleCodeLines(bIdx)" :key="lIdx" class="md-code-line"><template v-if="lineSpans.length"><span v-for="(sp, sIdx) in lineSpans" :key="sIdx" :class="`tok-${sp.kind}`">{{ sp.text }}</span></template><template v-else>&#10;</template>{{ lIdx < visibleCodeLines(bIdx).length - 1 ? '\n' : '' }}</span></code></pre>
           <div v-if="isLongCodeBlock(bIdx)" class="md-code-fold-bar">
             <button
               type="button"
@@ -270,13 +300,13 @@ onUnmounted(() => {
 
       <blockquote v-else-if="block.type === 'blockquote'" class="md-quote">
         <p v-for="(line, lIdx) in block.lines" :key="`ql-${lIdx}`">
-          <MarkdownInlineText :tokens="line" @open-file="forwardOpenFile" />
+          <MarkdownInlineText :tokens="line" :known-files="knownFiles" @open-file="forwardOpenFile" />
         </p>
       </blockquote>
 
       <component :is="block.ordered ? 'ol' : 'ul'" v-else-if="block.type === 'list'" class="md-list">
         <li v-for="(item, lIdx) in block.items" :key="`li-${lIdx}`">
-          <MarkdownInlineText :tokens="item" @open-file="forwardOpenFile" />
+          <MarkdownInlineText :tokens="item" :known-files="knownFiles" @open-file="forwardOpenFile" />
         </li>
       </component>
 
@@ -285,14 +315,14 @@ onUnmounted(() => {
           <thead>
             <tr>
               <th v-for="(cell, cIdx) in block.headers" :key="`th-${cIdx}`">
-                <MarkdownInlineText :tokens="cell" @open-file="forwardOpenFile" />
+                <MarkdownInlineText :tokens="cell" :known-files="knownFiles" @open-file="forwardOpenFile" />
               </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(row, rIdx) in block.rows" :key="`tr-${rIdx}`">
               <td v-for="(cell, cIdx) in row" :key="`td-${rIdx}-${cIdx}`">
-                <MarkdownInlineText :tokens="cell" @open-file="forwardOpenFile" />
+                <MarkdownInlineText :tokens="cell" :known-files="knownFiles" @open-file="forwardOpenFile" />
               </td>
             </tr>
           </tbody>
@@ -304,7 +334,7 @@ onUnmounted(() => {
       <p v-else class="md-para">
         <template v-for="(line, lIdx) in block.lines" :key="`pl-${lIdx}`">
           <br v-if="lIdx > 0" />
-          <MarkdownInlineText :tokens="line" @open-file="forwardOpenFile" />
+          <MarkdownInlineText :tokens="line" :known-files="knownFiles" @open-file="forwardOpenFile" />
         </template>
       </p>
     </template>
@@ -377,6 +407,35 @@ onUnmounted(() => {
   padding: 5px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-3);
+}
+.md-code-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.md-code-file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--solid);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-code-file-btn .i { width: 11px; height: 11px; flex: none; }
+.md-code-file-btn:hover { background: var(--accent-soft); }
+.md-code-pre.is-wrapped {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .md-code-lang {
   font-size: 11px;

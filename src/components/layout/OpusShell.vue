@@ -29,7 +29,7 @@ interface ToastItem {
   out: boolean
 }
 
-const props = defineProps<{ page: string; mobile: boolean; toast: string; toastKey?: number; theme: WorkbenchTheme; mode: string; reducedMotion?: boolean }>()
+const props = defineProps<{ page: string; mobile: boolean; hideMobileTabbar?: boolean; toast: string; toastKey?: number; theme: WorkbenchTheme; mode: string; reducedMotion?: boolean }>()
 const emit = defineEmits<{ navigate: [page: string]; create: [kind: string]; action: [message: string]; syncSettings: []; back: []; toggleMode: []; toggleTheme: []; setTheme: [theme: WorkbenchTheme]; toggleReducedMotion: [] }>()
 const auth = useAuthStore()
 const automation = useAutomationStore()
@@ -199,9 +199,13 @@ const syncLabel = computed(() => {
   if (queued.value) return `${queued.value} 项待同步`
   return state.lastSuccessAt ? '已同步' : '等待首次同步'
 })
+const fleetLocalOnline = computed(() => !syncStatus.value?.connected && fleet.wsState === 'online')
 const coreLabel = computed(() => {
-  if (!syncStatus.value?.connected) return 'Core 不可达'
-  return connection.value?.connected ? `Core · ${connection.value.coreUrl}` : 'Core'
+  if (syncStatus.value?.connected) {
+    return connection.value?.connected ? `Core · ${connection.value.coreUrl}` : 'Core'
+  }
+  if (fleetLocalOnline.value) return '本地 Fleet 在线（未启用远程 Core 同步）'
+  return 'Core 不可达'
 })
 const commandGroups = [
   { label: '跳转', items: [
@@ -321,12 +325,12 @@ onUnmounted(() => {
         <div class="mview">
           <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :open-add="(kind: string) => add = kind" :in-library="inLibrary" />
         </div>
-        <nav class="tabbar" aria-label="主导航">
+        <nav v-if="!hideMobileTabbar" class="tabbar" aria-label="主导航">
           <template v-for="tab in mobileTabs" :key="tab.page">
             <div v-if="tab.page === '+'" class="tab-add"><button type="button" aria-label="快速新增" :aria-expanded="!!add" @click="add = add ? '' : 'tx'"><OpusIcon name="plus" /></button></div>
             <button v-else class="tab" type="button" :aria-current="mobileActive === tab.page ? 'page' : undefined" @click="go(tab.page === 'Ledger' ? savedLibrary : tab.page)">
               <span class="ico"><OpusIcon :name="tab.icon" /></span>{{ tab.label }}
-              <span v-if="tab.page === 'Home' && syncStatus?.conflicts" class="badge">{{ syncStatus.conflicts }}</span><span v-if="tab.page === 'Automation' && attentionTasks" class="badge">{{ attentionTasks }}</span>
+              <span v-if="tab.page === 'Home' && syncStatus?.conflicts" class="badge">{{ syncStatus.conflicts }}</span><span v-if="tab.page === 'Chat' && fleet.pendingApprovalsList.length" class="badge">{{ fleet.pendingApprovalsList.length }}</span><span v-if="tab.page === 'Automation' && attentionTasks" class="badge">{{ attentionTasks }}</span>
             </button>
           </template>
         </nav>
@@ -464,12 +468,13 @@ onUnmounted(() => {
             aria-controls="sync-panel"
             :aria-expanded="panelOpen"
             :title="coreLabel"
-            :aria-label="'Core 状态：' + (syncStatus?.connected ? '在线' : '离线')"
+            :aria-label="'连接状态：' + (syncStatus?.connected ? 'Core 在线' : fleetLocalOnline ? '本地 Fleet 在线' : 'Core 离线')"
             @click="panelOpen = !panelOpen"
           >
             <Wifi v-if="syncStatus?.connected" :size="13" :stroke-width="2" style="color:var(--ok)" />
+            <Wifi v-else-if="fleetLocalOnline" :size="13" :stroke-width="2" style="color:var(--ok)" />
             <WifiOff v-else :size="13" :stroke-width="2" style="color:var(--danger)" />
-            <span>Core</span>
+            <span>{{ syncStatus?.connected ? 'Core' : fleetLocalOnline ? '本地 · Fleet' : 'Core' }}</span>
           </button>
           <span class="spacer"></span>
           <span class="sb-item faint">v{{ version }}</span>

@@ -164,6 +164,7 @@ def build_tool_call_update(
     error: str | None = None,
     duration_ms: int | None = None,
     subagent_session_id: str | None = None,
+    media: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """构造标准化的 `ToolCallUpdate` 结构化工具执行事件帧。"""
     frame: dict[str, Any] = {
@@ -191,6 +192,8 @@ def build_tool_call_update(
         frame["durationMs"] = int(duration_ms)
     if subagent_session_id:
         frame["subagentSessionId"] = subagent_session_id
+    if media:
+        frame["media"] = media
     return frame
 
 

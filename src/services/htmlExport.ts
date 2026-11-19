@@ -26,6 +26,20 @@ function renderCodeBlockHtml(code: string, lang?: string): string {
   return `<div class="code-wrap"><div class="code-lang">${escHtml(lang || 'text')}</div><pre><code>${inner}</code></pre></div>`
 }
 
+function renderInlineTokensHtml(tokens: import('./markdownBlocks.ts').MarkdownInline[]): string {
+  return tokens
+    .map(t => {
+      if (t.type === 'code') return `<code>${escHtml(t.text)}</code>`
+      if (t.type === 'bold') return `<strong>${escHtml(t.text)}</strong>`
+      if (t.type === 'italic') return `<em>${escHtml(t.text)}</em>`
+      if (t.type === 'strike') return `<del>${escHtml(t.text)}</del>`
+      if (t.type === 'link') return `<a href="${escHtml(t.href)}" target="_blank" rel="noopener noreferrer">${escHtml(t.text)}</a>`
+      if (t.type === 'image') return `<img src="${escHtml(t.src)}" alt="${escHtml(t.alt)}" style="max-width:360px;border-radius:8px;" />`
+      return escHtml(t.text)
+    })
+    .join('')
+}
+
 function renderSimpleMarkdownHtml(text: string): string {
   const blocks = parseMarkdownBlocks(text)
   const parts: string[] = []
@@ -33,35 +47,23 @@ function renderSimpleMarkdownHtml(text: string): string {
     if (b.type === 'code') {
       parts.push(renderCodeBlockHtml(b.code, b.lang))
     } else if (b.type === 'heading') {
-      const txt = b.inlines.map(t => escHtml(t.text)).join('')
+      const txt = renderInlineTokensHtml(b.inlines)
       parts.push(`<h${b.level}>${txt}</h${b.level}>`)
     } else if (b.type === 'list') {
       const tag = b.ordered ? 'ol' : 'ul'
-      const lis = b.items.map(it => `<li>${it.map(t => escHtml(t.text)).join('')}</li>`).join('')
+      const lis = b.items.map(it => `<li>${renderInlineTokensHtml(it)}</li>`).join('')
       parts.push(`<${tag}>${lis}</${tag}>`)
     } else if (b.type === 'blockquote') {
-      const lines = b.lines.map(line => `<p>${line.map(t => escHtml(t.text)).join('')}</p>`).join('')
+      const lines = b.lines.map(line => `<p>${renderInlineTokensHtml(line)}</p>`).join('')
       parts.push(`<blockquote>${lines}</blockquote>`)
     } else if (b.type === 'hr') {
       parts.push('<hr/>')
     } else if (b.type === 'table') {
-      const ths = b.headers.map(c => `<th>${c.map(t => escHtml(t.text)).join('')}</th>`).join('')
-      const trs = b.rows.map(r => `<tr>${r.map(c => `<td>${c.map(t => escHtml(t.text)).join('')}</td>`).join('')}</tr>`).join('')
+      const ths = b.headers.map(c => `<th>${renderInlineTokensHtml(c)}</th>`).join('')
+      const trs = b.rows.map(r => `<tr>${r.map(c => `<td>${renderInlineTokensHtml(c)}</td>`).join('')}</tr>`).join('')
       parts.push(`<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`)
     } else {
-      const body = b.lines
-        .map(line =>
-          line
-            .map(t => {
-              if (t.type === 'code') return `<code>${escHtml(t.text)}</code>`
-              if (t.type === 'bold') return `<strong>${escHtml(t.text)}</strong>`
-              if (t.type === 'italic') return `<em>${escHtml(t.text)}</em>`
-              if (t.type === 'link') return `<a href="${escHtml(t.href)}" target="_blank" rel="noopener noreferrer">${escHtml(t.text)}</a>`
-              return escHtml(t.text)
-            })
-            .join(''),
-        )
-        .join('<br/>')
+      const body = b.lines.map(line => renderInlineTokensHtml(line)).join('<br/>')
       parts.push(`<p>${body}</p>`)
     }
   }

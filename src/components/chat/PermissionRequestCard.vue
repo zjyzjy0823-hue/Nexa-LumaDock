@@ -90,6 +90,23 @@ const decisionLabel: Record<ApprovalDecision, string> = {
   word-break: break-all;
 }
 .perm-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 700px) {
+  .perm-card {
+    padding: 12px 13px;
+    border-radius: 16px;
+  }
+  .perm-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .perm-actions .btn {
+    min-height: 40px;
+    justify-content: center;
+    font-size: 13.5px;
+    border-radius: 12px;
+  }
+}
 .perm-done {
   display: inline-flex;
   align-items: center;

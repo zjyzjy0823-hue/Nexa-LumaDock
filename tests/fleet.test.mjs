@@ -33,14 +33,32 @@ import {
 } from '../src/services/diffHelpers.ts'
 import { deleteCustomPrompt, loadCustomPrompts, saveCustomPrompt } from '../src/services/customPrompts.ts'
 import { buildSessionHtmlReport } from '../src/services/htmlExport.ts'
+import {
+  buildTurnRenderItems,
+  extractHostMediaDirectives,
+  snapToBlockEnd,
+  splitTextByInlineMedia,
+  stripHostMediaDirectives,
+} from '../src/services/messageSegments.ts'
 import { resolveSavedModelPref, saveAgentModelPref } from '../src/services/modelPrefs.ts'
 import {
   appendMessagePart,
   branchFromUserMessage,
+  buildDiffAnnotationsPrompt,
+  buildForkContextSeed,
   buildSessionMarkdown,
+  createPastedTextBlock,
+  deriveOptimisticSessionTitle,
   extractMessageParts,
+  fuzzyMatchFileScore,
+  groupMessageParts,
+  isGenericSessionTitle,
+  isQuotaOrModelError,
   mergeToolCallUpdate,
+  parseCodeBlockLang,
   searchSessionsAndMessages,
+  shouldConvertToPastedBlock,
+  suggestCommitMessageFromDiff,
   switchMessageBranch,
 } from '../src/services/chatHelpers.ts'
 
@@ -538,4 +556,184 @@ test('Split Diff 拆分对齐、工具局部 Diff 提取、自定义模板管理
   assert.equal(gaps.between[0]?.oldDelta, -1)
   assert.equal(gaps.afterLast?.startNewLine, 33)
   assert.equal(gaps.afterLast?.endNewLine, 40)
+})
+
+test('Work Run 连续工具聚合、真分叉上下文种子、批量 Diff 批注打包与大段粘贴收纳', () => {
+  // 1. 连续多步工具调用自动聚合成 tool-group，单步保持 tool
+  const grouped = groupMessageParts({
+    text: '修改完成',
+    toolCalls: [
+      { id: 'c1', callId: 'c1', name: 'read_file', status: 'completed', durationMs: 120 },
+      { id: 'c2', callId: 'c2', name: 'grep_search', status: 'completed', durationMs: 80 },
+      { id: 'c3', callId: 'c3', name: 'edit_file', status: 'completed', durationMs: 200 },
+      { id: 'c4', callId: 'c4', name: 'run_bash', status: 'completed', durationMs: 500 },
+    ],
+    parts: [
+      { type: 'thought', text: '先查代码' },
+      { type: 'tool', callId: 'c1' },
+      { type: 'tool', callId: 'c2' },
+      { type: 'tool', callId: 'c3' },
+      { type: 'text', text: '准备验证' },
+      { type: 'tool', callId: 'c4' },
+      { type: 'text', text: '修改完成' },
+    ],
+  })
+  assert.equal(grouped[0].type, 'thought')
+  assert.equal(grouped[1].type, 'tool-group')
+  if (grouped[1].type === 'tool-group') {
+    assert.equal(grouped[1].tools.length, 3)
+    assert.equal(grouped[1].totalDurationMs, 400)
+    assert.ok(grouped[1].summaryLabel.includes('读取 1'))
+    assert.ok(grouped[1].summaryLabel.includes('检索 1'))
+    assert.ok(grouped[1].summaryLabel.includes('修改 1'))
+  }
+  assert.equal(grouped[2].type, 'text')
+  assert.equal(grouped[3].type, 'tool')
+  assert.equal(grouped[4].type, 'text')
+
+  // 2. 真分叉上下文种子保留结构化问答与工具摘要
+  const seed = buildForkContextSeed(
+    [
+      { id: 'u1', role: 'user', nodeId: 'n1', provider: 'codex', text: '帮我重构登录流程', createdAt: 1 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        nodeId: 'n1',
+        provider: 'codex',
+        text: '已拆分 authService 并补充测试',
+        toolCalls: [{ id: 't1', name: 'edit_file', status: 'completed' }],
+        createdAt: 2,
+      },
+    ],
+    '登录重构',
+  )
+  assert.ok(seed.includes('继承自「登录重构」'))
+  assert.ok(seed.includes('帮我重构登录流程'))
+  assert.ok(seed.includes('edit_file'))
+
+  // 3. Diff 批量行内批注仅打包未解决项并按文件与行号排序
+  const batchPrompt = buildDiffAnnotationsPrompt([
+    { id: '1', filePath: 'src/b.ts', lineNo: 20, codeSnippet: 'return x', comment: '需要判空', resolved: false, createdAt: 1 },
+    { id: '2', filePath: 'src/a.ts', lineNo: 12, codeSnippet: 'foo()', comment: '已修复', resolved: true, createdAt: 2 },
+    { id: '3', filePath: 'src/b.ts', lineNo: 5, codeSnippet: 'let x', comment: '改成 const', resolved: false, createdAt: 3 },
+  ])
+  assert.ok(batchPrompt.includes('2 条代码评审批注'))
+  assert.ok(batchPrompt.includes('### @src/b.ts'))
+  assert.equal(batchPrompt.includes('src/a.ts'), false)
+  assert.ok(batchPrompt.indexOf('L5') < batchPrompt.indexOf('L20'))
+
+  // 4. 大段粘贴文本判断与芯片摘要
+  assert.equal(shouldConvertToPastedBlock('短文本'), false)
+  const bigLines = Array.from({ length: 35 }, (_, i) => `log line ${i + 1}`).join('\n')
+  assert.equal(shouldConvertToPastedBlock(bigLines), true)
+  const block = createPastedTextBlock(bigLines, 'p1')
+  assert.equal(block.lineCount, 35)
+  assert.equal(block.title, 'log line 1')
+})
+
+test('模糊文件匹配、配额异常识别、代码块路径解析、Commit 建议与乐观会话命名', () => {
+  // 1. 子序列模糊匹配打分（越小越靠前，未命中返回 null；文件名驼峰命中优于跨目录散落命中）
+  const sExact = fuzzyMatchFileScore('act', 'src/components/chat/AgentChatThread.vue')
+  const sOther = fuzzyMatchFileScore('act', 'src/alpha/core/target.ts')
+  assert.ok(sExact !== null && sOther !== null)
+  assert.ok(sExact < sOther)
+  assert.equal(fuzzyMatchFileScore('xyz', 'src/main.ts'), null)
+
+  // 2. 配额/模型错误启发式识别
+  assert.equal(isQuotaOrModelError('429 Too Many Requests: quota exceeded'), true)
+  assert.equal(isQuotaOrModelError('Model not found: claude-opus-9'), true)
+  assert.equal(isQuotaOrModelError('TypeError: cannot read properties of undefined'), false)
+
+  // 3. 代码围栏 lang:path 解析
+  assert.deepEqual(parseCodeBlockLang('ts:src/stores/fleet.ts'), { lang: 'ts', filePath: 'src/stores/fleet.ts' })
+  assert.deepEqual(parseCodeBlockLang('python'), { lang: 'python' })
+  assert.deepEqual(parseCodeBlockLang('ts:https://example.com/a.ts'), { lang: 'ts:https://example.com/a.ts' })
+
+  // 4. Conventional Commit 启发式建议
+  assert.equal(suggestCommitMessageFromDiff([{ path: 'tests/fleet.test.mjs', status: 'modified', additions: 10, deletions: 2 }]), 'test: 更新 fleet.test.mjs')
+  assert.equal(
+    suggestCommitMessageFromDiff([
+      { path: 'src/pages/ChatPage.vue', status: 'modified', additions: 5, deletions: 1 },
+      { path: 'src/stores/fleet.ts', status: 'modified', additions: 8, deletions: 2 },
+    ]),
+    'feat: 更新 ChatPage.vue、fleet.ts 等 2 个文件',
+  )
+
+  // 5. 乐观会话命名与默认占位标题识别
+  assert.equal(isGenericSessionTitle('新会话'), true)
+  assert.equal(isGenericSessionTitle('New session'), true)
+  assert.equal(isGenericSessionTitle('opencode · ses_1234'), true)
+  assert.equal(isGenericSessionTitle('修复 Diff 抽屉快捷键'), false)
+  assert.equal(deriveOptimisticSessionTitle('[Plan Mode]\n修复滚动抖动问题'), '修复滚动抖动问题')
+  assert.equal(deriveOptimisticSessionTitle('这是一个超过二十二个字符长度限制用于验证自动截断省略号效果的测试问题').endsWith('…'), true)
+})
+
+test('hermes-mobile 风格正文内联媒体分段：MEDIA 指令、路径引用穿插与代码围栏闭合保护', () => {
+  // 1. MEDIA:<path> 指令提取与剥离
+  const rawWithDirective = '第一段说明文字\nMEDIA:/tmp/chart.png\n第二段结论分析'
+  const directives = extractHostMediaDirectives(rawWithDirective)
+  assert.equal(directives.length, 1)
+  assert.equal(directives[0].path, '/tmp/chart.png')
+  const stripped = stripHostMediaDirectives(rawWithDirective)
+  assert.equal(stripped.includes('MEDIA:'), false)
+
+  // 2. snapToBlockEnd 遇到未闭合 ``` 代码围栏时自动延后到闭合围栏之后
+  const fenced = '前文\n```ts\nconst p = "/tmp/a.png"\nconst x = 1\n```\n后文段落'
+  const insideIdx = fenced.indexOf('/tmp/a.png')
+  const snapped = snapToBlockEnd(fenced, insideIdx)
+  const closingFenceEnd = fenced.indexOf('```\n后文') + 3
+  assert.equal(snapped, closingFenceEnd)
+
+  // 3. 正文中段提及本地文件路径时，图片直接穿插在提及段落之后、后续段落之前
+  const article = [
+    '图已发出（见上）。',
+    '',
+    '**图片信息**',
+    '- **主题**：海岸灯塔',
+    '- **本地文件**：`C:\\Users\\yuans\\AppData\\Local\\Temp\\opencode\\web-photo.jpg`',
+    '',
+    '**过程说明**',
+    '1. 先用 WebSearch 搜索图片源；',
+    '2. 调用 Read 读取并展示。',
+  ].join('\n')
+
+  const items = buildTurnRenderItems({
+    id: 'm-inline-1',
+    role: 'assistant',
+    text: article,
+    toolCalls: [
+      {
+        id: 'tc-read',
+        callId: 'tc-read',
+        name: 'read',
+        status: 'completed',
+        input: { filePath: 'C:\\Users\\yuans\\AppData\\Local\\Temp\\opencode\\web-photo.jpg' },
+      },
+    ],
+    media: [
+      {
+        id: 'med-1',
+        url: 'data:image/jpeg;base64,/9j/4AAQ',
+        fileName: 'Image 1 (JPEG, 40 KB)',
+        mime: 'image/jpeg',
+      },
+    ],
+  })
+
+  // 渲染序列应当是：tool(read) -> text(上半篇，含本地文件行) -> media(web-photo.jpg) -> text(下半篇，过程说明)
+  const types = items.map(i => i.type)
+  assert.deepEqual(types, ['tool', 'text', 'media', 'text'])
+  assert.equal(items[1].type === 'text' && items[1].text.includes('**图片信息**'), true)
+  assert.equal(items[2].type === 'media' && items[2].attachment.fileName, 'web-photo.jpg')
+  assert.equal(items[3].type === 'text' && items[3].text.startsWith('**过程说明**'), true)
+
+  // 4. splitTextByInlineMedia 对无偏移量附件保持末尾追加
+  const { segments } = splitTextByInlineMedia(
+    '普通正文段落',
+    [{ id: 'att-tail', fileName: 'report.pdf', mime: 'application/pdf' }],
+    { allowTrailingUnmatched: true },
+  )
+  assert.equal(segments.length, 2)
+  assert.equal(segments[0].type, 'text')
+  assert.equal(segments[1].type, 'media')
 })

@@ -12,11 +12,11 @@ export interface ProviderVisual {
 }
 
 export const PROVIDER_META: Record<AdapterProvider, ProviderVisual> = {
-  codex: { label: 'Codex', shortCode: 'CX', icon: 'api', accentClass: 'oc-studiolo', shortDesc: 'OpenAI Codex app-server' },
-  opencode: { label: 'OpenCode', shortCode: 'OC', icon: 'terminal', accentClass: 'oc-openclaw', shortDesc: 'opencode serve HTTP+SSE' },
+  codex: { label: 'Codex', shortCode: 'CX', icon: 'codex', accentClass: 'oc-studiolo', shortDesc: 'OpenAI Codex app-server' },
+  opencode: { label: 'OpenCode', shortCode: 'OC', icon: 'opencode', accentClass: 'oc-opencode', shortDesc: 'opencode serve HTTP+SSE' },
   hermes: { label: 'Hermes', shortCode: 'HM', icon: 'hermes', accentClass: 'oc-hermes', shortDesc: 'Hermes ACP / Gateway' },
-  antigravity: { label: 'Antigravity', shortCode: 'AG', icon: 'sparkle', accentClass: 'oc-studiolo', shortDesc: 'agy 命令行代理' },
-  dsh: { label: 'DSH / Claude', shortCode: 'DS', icon: 'bot', accentClass: 'oc-hermes', shortDesc: 'Claude Code CLI' },
+  antigravity: { label: 'Antigravity', shortCode: 'AG', icon: 'antigravity', accentClass: 'oc-studiolo', shortDesc: 'agy 命令行代理' },
+  dsh: { label: 'DSH / Claude', shortCode: 'DS', icon: 'claude', accentClass: 'oc-openclaw', shortDesc: 'Claude Code CLI' },
   openclaw: { label: 'OpenClaw', shortCode: 'CL', icon: 'claw', accentClass: 'oc-openclaw', shortDesc: 'OpenClaw Gateway' },
   mock: { label: 'Mock', shortCode: 'MK', icon: 'shield', accentClass: 'oc-studiolo', shortDesc: '沙箱联调模拟代理' },
 }

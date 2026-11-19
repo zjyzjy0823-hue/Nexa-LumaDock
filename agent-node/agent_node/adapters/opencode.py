@@ -51,8 +51,57 @@ def _extract_incremental_text(
     return full
 
 
+def _extract_content_media(content: Any, tool_input: Any = None) -> list[dict[str, Any]]:
+    """从 OpenCode content 数组中提取图片或文件媒体块（例如 read 工具返回的 data:image/... URI）。"""
+    if not isinstance(content, list):
+        return []
+    fallback_path = ""
+    if isinstance(tool_input, dict):
+        for k in ("path", "filePath", "file", "target_file", "filename"):
+            v = tool_input.get(k)
+            if isinstance(v, str) and v.strip():
+                fallback_path = v.strip()
+                break
+    media: list[dict[str, Any]] = []
+    for idx, c in enumerate(content):
+        if not isinstance(c, dict):
+            continue
+        ctype = str(c.get("type") or "").lower()
+        uri = str(c.get("uri") or c.get("url") or "").strip()
+        if not uri and isinstance(c.get("data"), str) and c.get("data"):
+            raw_mime = str(c.get("mime") or "application/octet-stream")
+            uri = f"data:{raw_mime};base64,{c['data']}"
+        if not uri:
+            continue
+        if ctype not in ("file", "image") and not uri.startswith("data:"):
+            continue
+        mime = str(c.get("mime") or "").strip()
+        if not mime and uri.startswith("data:") and ";" in uri:
+            mime = uri[5:].split(";", 1)[0].strip()
+        if not mime:
+            mime = "image/png" if (ctype == "image" or uri.startswith("data:image/")) else "application/octet-stream"
+        raw_name = str(c.get("filename") or c.get("name") or "").strip()
+        if not raw_name and fallback_path:
+            raw_name = Path(fallback_path.replace("\\", "/")).name
+        if not raw_name:
+            ext = mime.split("/")[-1].split("+")[0] if "/" in mime else "bin"
+            if ext == "jpeg":
+                ext = "jpg"
+            raw_name = f"media-{idx + 1}.{ext}"
+        item: dict[str, Any] = {
+            "id": str(c.get("id") or f"media-{idx + 1}-{uuid4().hex[:6]}"),
+            "url": uri,
+            "fileName": raw_name,
+            "mime": mime,
+        }
+        if fallback_path:
+            item["filePath"] = fallback_path
+        media.append(item)
+    return media
+
+
 def _extract_opencode_tool_payload(part: dict[str, Any]) -> dict[str, Any]:
-    """解析 OpenCode tool part（兼容 v1/v2 state、内容块、入参、输出与耗时）。"""
+    """解析 OpenCode tool part（兼容 v1/v2 state、内容块、入参、输出、媒体与耗时）。"""
     state = part.get("state") if isinstance(part.get("state"), dict) else {}
     raw_status = str(state.get("status") or "running").lower()
     status = "completed" if raw_status == "completed" else "error" if raw_status in ("error", "failed") else "running"
@@ -69,9 +118,10 @@ def _extract_opencode_tool_payload(part: dict[str, Any]) -> dict[str, Any]:
             out_val = "\n".join(chunks)
     err_val = state.get("error")
     tool_input = state.get("input")
+    media = _extract_content_media(state.get("content"), tool_input)
     name = str(part.get("tool") or part.get("name") or "tool")
     title = str(state.get("title") or "") or _summarize_tool_title(name, tool_input)
-    return {
+    res: dict[str, Any] = {
         "callId": str(part.get("callID") or part.get("id") or uuid4().hex),
         "name": name,
         "status": status,
@@ -81,6 +131,9 @@ def _extract_opencode_tool_payload(part: dict[str, Any]) -> dict[str, Any]:
         "error": str(err_val) if err_val is not None else None,
         "durationMs": duration_ms,
     }
+    if media:
+        res["media"] = media
+    return res
 
 
 def _summarize_tool_title(name: str, tool_input: Any) -> str | None:
@@ -338,19 +391,49 @@ class OpenCodeAdapter(AgentAdapter):
             payload = res.json()
             rows = payload.get("data", []) if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
             out: list[dict[str, Any]] = []
-            for s in rows[:limit]:
+            for s in rows:
                 if not isinstance(s, dict) or not s.get("id"):
                     continue
+                sid = str(s.get("id"))
+                raw_title = str(s.get("title") or "").strip()
+                tokens = s.get("tokens")
+                if isinstance(tokens, dict):
+                    in_tok = int(tokens.get("input") or 0)
+                    out_tok = int(tokens.get("output") or 0)
+                    # 过滤从未发送过任何消息的空白未命名会话残骸，避免列表出现大量重复的空白「新对话」
+                    if in_tok == 0 and out_tok == 0 and (not raw_title or raw_title == sid or raw_title.startswith("ses_")):
+                        continue
+                if not raw_title or raw_title == sid or raw_title.startswith("ses_"):
+                    try:
+                        m_res = await c.get(f"{self.serve_url}{prefix}/session/{sid}/message", params={"limit": 10})
+                        if m_res.status_code == 200:
+                            m_payload = m_res.json()
+                            m_rows = m_payload.get("data", []) if isinstance(m_payload, dict) else (
+                                m_payload if isinstance(m_payload, list) else []
+                            )
+                            user_texts = [
+                                str(m.get("text") or "").strip()
+                                for m in m_rows
+                                if isinstance(m, dict) and m.get("type") == "user" and str(m.get("text") or "").strip()
+                            ]
+                            if user_texts:
+                                first_txt = " ".join(user_texts[-1].split())
+                                raw_title = f"{first_txt[:22]}…" if len(first_txt) > 22 else first_txt
+                                await c.patch(f"{self.serve_url}{prefix}/session/{sid}", json={"title": raw_title})
+                    except Exception:
+                        pass
                 loc = s.get("location") if isinstance(s.get("location"), dict) else {}
                 cwd = str(s.get("directory") or loc.get("directory") or "")
                 out.append(
                     {
-                        "sessionId": s.get("id"),
+                        "sessionId": sid,
                         "provider": self.provider,
-                        "title": s.get("title") or s.get("id"),
+                        "title": raw_title or sid,
                         "cwd": cwd,
                     }
                 )
+                if len(out) >= limit:
+                    break
             return out
 
     async def open_session(
@@ -381,26 +464,45 @@ class OpenCodeAdapter(AgentAdapter):
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
-            res = await c.get(f"{self.serve_url}{prefix}/session/{session_id}/message", params={"limit": limit})
+            fetch_limit = max(limit * 3, 120) if prefix == "/api" else limit
+            res = await c.get(f"{self.serve_url}{prefix}/session/{session_id}/message", params={"limit": fetch_limit})
             if res.status_code != 200:
                 return []
             payload = res.json()
-            items = payload.get("data", []) if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+            raw_items = payload.get("data", []) if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+            items = [m for m in raw_items if isinstance(m, dict)]
+
+            # OpenCode v2 `/api/session/{id}/message` 默认按时间倒序（最新在前）返回，需按时间正序还原对话流
+            ts_list: list[float] = []
+            for m in items:
+                tm = m.get("time") if isinstance(m.get("time"), dict) else (
+                    (m.get("info") or {}).get("time") if isinstance(m.get("info"), dict) else None
+                )
+                if isinstance(tm, dict) and isinstance(tm.get("created"), (int, float)):
+                    ts_list.append(float(tm["created"]))
+            if len(ts_list) >= 2 and ts_list[0] > ts_list[-1]:
+                items = list(reversed(items))
+
             out: list[dict[str, Any]] = []
-            for msg in items[-limit:]:
-                if not isinstance(msg, dict):
-                    continue
+            for msg in items:
                 # OpenCode v2 消息结构：{type: "user"|"assistant"|"idle", text?, content?: [...]}
                 if "type" in msg and "info" not in msg:
                     mtype = msg.get("type")
                     if mtype == "user":
-                        out.append({"role": "user", "text": str(msg.get("text") or "")})
+                        user_entry: dict[str, Any] = {"role": "user", "text": str(msg.get("text") or "")}
+                        user_media = _extract_content_media(msg.get("content") or msg.get("files"))
+                        if user_media:
+                            user_entry["media"] = user_media
+                        out.append(user_entry)
                     elif mtype == "assistant":
                         t_chunks: list[str] = []
                         r_chunks: list[str] = []
                         t_calls: list[dict[str, Any]] = []
                         ordered_parts: list[dict[str, Any]] = []
-                        for p in msg.get("content") or []:
+                        step_media: list[dict[str, Any]] = []
+                        raw_content = msg.get("content") or []
+                        step_media.extend(_extract_content_media(raw_content))
+                        for p in raw_content:
                             if not isinstance(p, dict):
                                 continue
                             ptype = p.get("type")
@@ -419,14 +521,34 @@ class OpenCodeAdapter(AgentAdapter):
                                 tc = {"id": tp["callId"], **tp}
                                 t_calls.append(tc)
                                 ordered_parts.append({"type": "tool", **tc})
-                        entry: dict[str, Any] = {"role": "assistant", "text": "".join(t_chunks)}
-                        if r_chunks:
-                            entry["thought"] = "\n".join(r_chunks)
-                        if t_calls:
-                            entry["toolCalls"] = t_calls
-                        if ordered_parts:
-                            entry["parts"] = ordered_parts
-                        out.append(entry)
+                                if isinstance(tp.get("media"), list):
+                                    step_media.extend(tp["media"])
+                        # OpenCode v2 同一轮助手回复的多步工具调用会拆为多条连续 assistant 记录，自动归并为单条气泡
+                        if out and out[-1].get("role") == "assistant":
+                            prev = out[-1]
+                            add_txt = "".join(t_chunks)
+                            if add_txt:
+                                prev["text"] = f"{prev['text']}\n\n{add_txt}" if prev.get("text") else add_txt
+                            if r_chunks:
+                                add_r = "\n".join(r_chunks)
+                                prev["thought"] = f"{prev['thought']}\n{add_r}" if prev.get("thought") else add_r
+                            if t_calls:
+                                prev["toolCalls"] = [*(prev.get("toolCalls") or []), *t_calls]
+                            if ordered_parts:
+                                prev["parts"] = [*(prev.get("parts") or []), *ordered_parts]
+                            if step_media:
+                                prev["media"] = [*(prev.get("media") or []), *step_media]
+                        else:
+                            entry: dict[str, Any] = {"role": "assistant", "text": "".join(t_chunks)}
+                            if r_chunks:
+                                entry["thought"] = "\n".join(r_chunks)
+                            if t_calls:
+                                entry["toolCalls"] = t_calls
+                            if ordered_parts:
+                                entry["parts"] = ordered_parts
+                            if step_media:
+                                entry["media"] = step_media
+                            out.append(entry)
                     continue
 
                 info = msg.get("info") or {}
@@ -435,6 +557,7 @@ class OpenCodeAdapter(AgentAdapter):
                 thought_chunks: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
                 ordered_v1: list[dict[str, Any]] = []
+                v1_media: list[dict[str, Any]] = _extract_content_media(parts)
                 for p in parts:
                     if not isinstance(p, dict) or p.get("synthetic"):
                         continue
@@ -454,6 +577,8 @@ class OpenCodeAdapter(AgentAdapter):
                         tc = {"id": tp["callId"], **tp}
                         tool_calls.append(tc)
                         ordered_v1.append({"type": "tool", **tc})
+                        if isinstance(tp.get("media"), list):
+                            v1_media.extend(tp["media"])
                 entry_v1: dict[str, Any] = {
                     "role": info.get("role", "assistant"),
                     "text": "".join(text_chunks),
@@ -464,8 +589,10 @@ class OpenCodeAdapter(AgentAdapter):
                     entry_v1["toolCalls"] = tool_calls
                 if ordered_v1 and entry_v1["role"] == "assistant":
                     entry_v1["parts"] = ordered_v1
+                if v1_media:
+                    entry_v1["media"] = v1_media
                 out.append(entry_v1)
-            return out
+            return out[-limit:]
 
     async def send_prompt(
         self,
@@ -563,7 +690,7 @@ class OpenCodeAdapter(AgentAdapter):
                             if msg_id:
                                 role_by_msg_id[msg_id] = "assistant"
                             tp = _extract_opencode_tool_payload(part)
-                            sig = f"{tp['status']}:{len(tp.get('output') or '')}:{bool(tp.get('error'))}"
+                            sig = f"{tp['status']}:{len(tp.get('output') or '')}:{bool(tp.get('error'))}:{len(tp.get('media') or [])}"
                             if seen_tool_sig.get(part_id) != sig:
                                 seen_tool_sig[part_id] = sig
                                 await emit(
@@ -579,6 +706,7 @@ class OpenCodeAdapter(AgentAdapter):
                                         output=tp["output"],
                                         error=tp["error"],
                                         duration_ms=tp["durationMs"],
+                                        media=tp.get("media"),
                                     )
                                 )
                             t_input = tp.get("input")
@@ -789,6 +917,7 @@ class OpenCodeAdapter(AgentAdapter):
                     started = tmeta.get("started")
                     dur = int((time.monotonic() - started) * 1000) if isinstance(started, (int, float)) else None
                     out_text = _extract_v2_tool_output(data.get("content"))
+                    media = _extract_content_media(data.get("content"), tmeta.get("input"))
                     meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
                     sub_sid = str(meta.get("sessionID") or meta.get("childSessionID") or tmeta.get("subagentSessionId") or "") or None
                     await emit(
@@ -804,6 +933,7 @@ class OpenCodeAdapter(AgentAdapter):
                             output=out_text,
                             duration_ms=dur,
                             subagent_session_id=sub_sid,
+                            media=media or None,
                         )
                     )
                 elif etype == "session.tool.failed":

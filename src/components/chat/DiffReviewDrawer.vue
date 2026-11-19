@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { suggestCommitMessageFromDiff } from '../../services/chatHelpers'
 import {
   computeHunkGaps,
   parseDiffHunks,
@@ -10,7 +11,7 @@ import {
 } from '../../services/diffHelpers'
 import { highlightCode, inferLanguageFromPath, type HighlightSpan } from '../../services/syntaxHighlight'
 import { useFleetStore } from '../../stores/fleet'
-import type { CheckpointInfo, DiffFileEntry, SessionDiffState } from '../../types/fleet'
+import type { CheckpointInfo, DiffAnnotation, DiffFileEntry, SessionDiffState } from '../../types/fleet'
 import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{
@@ -36,12 +37,34 @@ const emit = defineEmits<{
   askAboutFile: [filePath: string]
   commentLine: [citationText: string]
   mergeWorktree: []
+  action: [message: string]
 }>()
 
 const fleet = useFleetStore()
 const drawerBodyRef = ref<HTMLElement | null>(null)
 const diffMode = ref<'unified' | 'split'>('unified')
 const commitMsg = ref('')
+const selectedCommitPaths = reactive<Record<string, boolean>>({})
+const sendingBatch = ref(false)
+
+const annotations = computed<DiffAnnotation[]>(() =>
+  props.sessionKey ? fleet.diffAnnotationsBySession[props.sessionKey] ?? [] : [],
+)
+const unresolvedAnnotations = computed(() => annotations.value.filter(a => !a.resolved))
+const resolvedAnnotationsCount = computed(() => annotations.value.length - unresolvedAnnotations.value.length)
+
+function annotationsForLine(filePath: string, lineNo?: number): DiffAnnotation[] {
+  if (!lineNo) return []
+  return annotations.value.filter(a => a.filePath === filePath && a.lineNo === lineNo)
+}
+
+const checkedFilePaths = computed(() =>
+  (props.diff?.files ?? []).map(f => f.path).filter(p => Boolean(selectedCommitPaths[p])),
+)
+
+function toggleSelectFileForCommit(path: string) {
+  selectedCommitPaths[path] = !selectedCommitPaths[path]
+}
 
 // 文件级展开状态、Hunk 间隙扩展窗口与行内评审输入框状态
 const openFiles = reactive<Record<string, boolean>>({})
@@ -120,8 +143,62 @@ function onCheckpointChange(ev: Event) {
 function handleCommit() {
   const msg = commitMsg.value.trim()
   if (!msg) return
-  emit('commitChanges', msg)
+  const picked = checkedFilePaths.value
+  emit('commitChanges', msg, picked.length ? picked : undefined)
   commitMsg.value = ''
+  for (const k of Object.keys(selectedCommitPaths)) delete selectedCommitPaths[k]
+}
+
+function fillSuggestedCommitMsg() {
+  const allFiles = props.diff?.files ?? []
+  const picked = checkedFilePaths.value
+  const scope = picked.length ? allFiles.filter(f => picked.includes(f.path)) : allFiles
+  const draftMsg = suggestCommitMessageFromDiff(scope)
+  if (draftMsg) commitMsg.value = draftMsg
+}
+
+// 键盘流评审（j/k 跳转变更文件、c 对当前焦点文件首改动行发起批注、Ctrl/Cmd+Enter 打包发送批注）
+const keyboardFocusIdx = ref(0)
+
+function handleDrawerKeydown(ev: KeyboardEvent) {
+  const tag = (ev.target as HTMLElement | null)?.tagName
+  const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && unresolvedAnnotations.value.length && !activeCommentTarget.value) {
+    ev.preventDefault()
+    void handleSendBatchAnnotations()
+    return
+  }
+  if (isTyping) return
+  const list = filePresentations.value
+  if (!list.length) return
+  if (ev.key === 'j' || ev.key === 'k') {
+    ev.preventDefault()
+    const delta = ev.key === 'j' ? 1 : -1
+    keyboardFocusIdx.value = (keyboardFocusIdx.value + delta + list.length) % list.length
+    const targetFile = list[keyboardFocusIdx.value]?.file.path
+    if (targetFile) {
+      openFiles[targetFile] = true
+      void nextTick(() => {
+        const card = drawerBodyRef.value?.querySelector(`[data-diff-path="${CSS.escape(targetFile)}"]`)
+        if (card && typeof (card as HTMLElement).scrollIntoView === 'function') {
+          ;(card as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+        }
+      })
+    }
+    return
+  }
+  if (ev.key === 'c') {
+    const pres = list[keyboardFocusIdx.value] ?? list[0]
+    const firstHunk = pres?.hunks[0]
+    if (!pres || !firstHunk) return
+    const firstChanged = firstHunk.lines.findIndex(l => l.kind === 'add' || l.kind === 'del')
+    const lIdx = firstChanged >= 0 ? firstChanged : 0
+    const dl = firstHunk.lines[lIdx]
+    if (!dl) return
+    ev.preventDefault()
+    openFiles[pres.file.path] = true
+    openLineComment(pres.file.path, `${pres.file.path}-h${firstHunk.index}-l${lIdx}`, dl.newNo ?? dl.oldNo, dl.text)
+  }
 }
 
 // 语言识别与单行/全文语法高亮缓存（按文件内容一次词法遍历保持多行状态准确）
@@ -258,10 +335,21 @@ function openLineComment(filePath: string, rowKey: string, lineNo: number | unde
   commentDraft.value = ''
 }
 
-function submitLineComment() {
+function submitLineComment(mode: 'batch' | 'insert' = 'batch') {
   const target = activeCommentTarget.value
   if (!target) return
   const note = commentDraft.value.trim()
+  if (mode === 'batch' && props.sessionKey && note) {
+    fleet.addDiffAnnotation(props.sessionKey, {
+      filePath: target.filePath,
+      lineNo: target.lineNo,
+      codeSnippet: target.codeText,
+      comment: note,
+    })
+    activeCommentTarget.value = null
+    commentDraft.value = ''
+    return
+  }
   const snippet = target.codeText.trim().slice(0, 80)
   const citation = `@${target.filePath}#L${target.lineNo}`
   const text = note
@@ -270,6 +358,17 @@ function submitLineComment() {
   emit('commentLine', text)
   activeCommentTarget.value = null
   commentDraft.value = ''
+}
+
+async function handleSendBatchAnnotations() {
+  if (!props.sessionKey || !unresolvedAnnotations.value.length || sendingBatch.value) return
+  sendingBatch.value = true
+  try {
+    const count = await fleet.sendDiffAnnotationsToAgent(props.sessionKey)
+    if (count > 0) emit('action', `已打包发送 ${count} 条行内批注给 Agent 修订`)
+  } finally {
+    sendingBatch.value = false
+  }
 }
 
 function splitLines(file: DiffFileEntry): string[] {
@@ -286,7 +385,7 @@ function lineClass(line: string): string {
 </script>
 
 <template>
-  <div class="diff-drawer">
+  <div class="diff-drawer" tabindex="-1" @keydown="handleDrawerKeydown">
     <header class="diff-hdr">
       <div class="diff-hdr-title">
         <template v-if="!embedded">
@@ -389,21 +488,59 @@ function lineClass(line: string): string {
       </div>
 
       <div v-else class="diff-files">
+        <div v-if="annotations.length" class="diff-ann-banner" role="region" aria-label="代码评审批量批注栏">
+          <div class="diff-ann-info">
+            <OpusIcon name="chat" class="diff-ann-ic" />
+            <span>
+              <strong>{{ unresolvedAnnotations.length }}</strong> 条待修订批注
+              <template v-if="resolvedAnnotationsCount"> · {{ resolvedAnnotationsCount }} 已解决</template>
+            </span>
+          </div>
+          <div class="diff-ann-btns">
+            <button
+              v-if="resolvedAnnotationsCount && sessionKey"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="fleet.clearResolvedDiffAnnotations(sessionKey)"
+            >
+              清理已解决
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              :disabled="!unresolvedAnnotations.length || sendingBatch"
+              @click="handleSendBatchAnnotations"
+            >
+              <OpusIcon name="send" />
+              <span>{{ sendingBatch ? '发送中…' : '打包发给 Agent' }}</span>
+            </button>
+          </div>
+        </div>
+
         <form class="diff-commit-bar" @submit.prevent="handleCommit">
           <input
             v-model="commitMsg"
             type="text"
             class="input diff-commit-input"
-            placeholder="输入 Commit 信息，一键提交当前全部变更…"
+            :placeholder="checkedFilePaths.length ? `提交已勾选的 ${checkedFilePaths.length} 个文件…` : '输入 Commit 信息，一键提交当前变更…'"
             aria-label="Git Commit 信息"
           />
+          <button
+            type="button"
+            class="icon-btn"
+            title="根据当前 Diff 一键生成 Conventional Commit 说明"
+            aria-label="自动生成 Commit 信息"
+            @click="fillSuggestedCommitMsg"
+          >
+            <OpusIcon name="sparkle" />
+          </button>
           <button
             type="submit"
             class="btn btn-primary btn-sm"
             :disabled="!commitMsg.trim() || loading"
           >
             <OpusIcon name="check" />
-            <span>提交 Git</span>
+            <span>{{ checkedFilePaths.length ? `提交 (${checkedFilePaths.length})` : '提交 Git' }}</span>
           </button>
         </form>
 
@@ -416,6 +553,15 @@ function lineClass(line: string): string {
           @toggle="onFileToggle(file.path, $event)"
         >
           <summary class="diff-file-head">
+            <input
+              type="checkbox"
+              class="diff-stage-chk"
+              :checked="Boolean(selectedCommitPaths[file.path])"
+              :aria-label="`勾选提交 ${file.path}`"
+              title="勾选后仅提交已选文件"
+              @click.stop
+              @change="toggleSelectFileForCommit(file.path)"
+            />
             <span class="diff-lang-badge" :class="`is-${meta.badgeTone}`">{{ meta.badge }}</span>
             <span class="diff-file-name">{{ meta.fileName }}</span>
             <span v-if="meta.dirName" class="diff-file-dir" :title="file.path">{{ meta.dirName }}</span>
@@ -568,19 +714,57 @@ function lineClass(line: string): string {
                     <form
                       v-if="activeCommentTarget?.rowKey === `${file.path}-h${hunk.index}-l${lIdx}`"
                       class="diff-inline-comment"
-                      @submit.prevent="submitLineComment"
+                      @submit.prevent="submitLineComment('batch')"
                     >
                       <span class="dic-badge num">L{{ activeCommentTarget.lineNo }}</span>
                       <input
                         v-model="commentDraft"
                         type="text"
                         class="input dic-input"
-                        placeholder="写下针对该行的修改意见或疑问，回车插入对话…"
+                        placeholder="写下针对该行的批注，回车暂存并可多处打包发送…"
                         autofocus
                       />
-                      <button type="submit" class="btn btn-primary btn-sm">加入对话</button>
+                      <button type="submit" class="btn btn-primary btn-sm" :disabled="!commentDraft.trim()">暂存批注</button>
+                      <button
+                        type="button"
+                        class="btn btn-subtle btn-sm"
+                        title="不加入批注列表，直接插入输入框"
+                        @click="submitLineComment('insert')"
+                      >直插对话</button>
                       <button type="button" class="btn btn-ghost btn-sm" @click="activeCommentTarget = null">取消</button>
                     </form>
+
+                    <div
+                      v-for="ann in annotationsForLine(file.path, dl.newNo ?? dl.oldNo)"
+                      :key="ann.id"
+                      class="diff-pinned-ann"
+                      :class="{ 'is-resolved': ann.resolved }"
+                    >
+                      <span class="dpa-line num">L{{ ann.lineNo }}</span>
+                      <span class="dpa-text">{{ ann.comment }}</span>
+                      <div class="dpa-actions">
+                        <button
+                          v-if="sessionKey"
+                          type="button"
+                          class="dpa-btn"
+                          :title="ann.resolved ? '重新打开此批注' : '标记为已解决'"
+                          @click="fleet.toggleDiffAnnotationResolved(sessionKey, ann.id)"
+                        >
+                          <OpusIcon name="check" />
+                          <span>{{ ann.resolved ? '已解决' : '解决' }}</span>
+                        </button>
+                        <button
+                          v-if="sessionKey"
+                          type="button"
+                          class="dpa-btn is-del"
+                          aria-label="删除批注"
+                          title="删除批注"
+                          @click="fleet.removeDiffAnnotation(sessionKey, ann.id)"
+                        >
+                          <OpusIcon name="x" />
+                        </button>
+                      </div>
+                    </div>
                   </template>
                 </div>
 
@@ -772,6 +956,100 @@ function lineClass(line: string): string {
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--surface-2);
+}
+.diff-ann-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+.diff-ann-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.diff-ann-ic {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+.diff-ann-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.diff-stage-chk {
+  width: 13px;
+  height: 13px;
+  margin: 0 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: none;
+}
+.diff-pinned-ann {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 14px;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface-1));
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 12px;
+}
+.diff-pinned-ann.is-resolved {
+  opacity: 0.56;
+  background: var(--surface-2);
+}
+.diff-pinned-ann.is-resolved .dpa-text {
+  text-decoration: line-through;
+}
+.dpa-line {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  flex: none;
+}
+.dpa-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+.dpa-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.dpa-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--solid);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.dpa-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.dpa-btn.is-del:hover {
+  color: var(--warn);
+}
+.dpa-btn .i {
+  width: 11px;
+  height: 11px;
 }
 .diff-commit-input {
   flex: 1;

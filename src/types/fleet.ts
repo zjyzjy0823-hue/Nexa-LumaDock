@@ -50,6 +50,8 @@ export interface FleetModel {
   unavailable?: boolean
 }
 
+export type ComposerMode = 'build' | 'plan'
+
 export interface RunOptions {
   model?: string
   effort?: string
@@ -58,6 +60,42 @@ export interface RunOptions {
   denyRequests?: boolean
   /** 极速模式：自动放行代理工具审批请求，无需人工确认 */
   autoApprove?: boolean
+  /** Plan 模式：要求代理先输出结构化方案并在执行前确认 */
+  planMode?: boolean
+}
+
+export interface WorkspaceSkill {
+  id: string
+  trigger: string
+  title: string
+  description: string
+  source: string
+  template: string
+}
+
+export interface FileBlameLine {
+  line: number
+  sha: string
+  author: string
+  time: number
+}
+
+export interface DiffAnnotation {
+  id: string
+  filePath: string
+  lineNo: number
+  codeSnippet: string
+  comment: string
+  resolved: boolean
+  createdAt: number
+}
+
+export interface PastedTextBlock {
+  id: string
+  title: string
+  content: string
+  lineCount: number
+  charCount: number
 }
 
 export interface AgentModeOption {
@@ -93,6 +131,7 @@ export interface TerminalSessionState {
   sessionId: string
   cwd: string
   output: string
+  pty?: boolean
   closed?: boolean
   exitCode?: number
 }
@@ -105,9 +144,14 @@ export interface FilePreviewState {
   truncated: boolean
   sizeBytes: number
   isBinary: boolean
+  mime?: string
+  base64Data?: string
   loading?: boolean
+  saving?: boolean
   error?: string
   highlightLine?: number
+  blame?: FileBlameLine[]
+  blameLoading?: boolean
   updatedAt: number
 }
 
@@ -204,6 +248,15 @@ export interface ChatSession {
 
 export type ToolCallStatus = 'running' | 'completed' | 'error'
 
+export interface MessageMediaItem {
+  id: string
+  url: string
+  fileName: string
+  mime: string
+  filePath?: string
+  sizeBytes?: number
+}
+
 export interface ToolCallBadge {
   id: string
   callId?: string
@@ -217,6 +270,7 @@ export interface ToolCallBadge {
   durationMs?: number
   startedAt?: number
   subagentSessionId?: string
+  media?: MessageMediaItem[]
 }
 
 export interface FormFieldOption {
@@ -295,6 +349,7 @@ export interface SessionDiffState {
   files: DiffFileEntry[]
   summary: DiffSummary
   isGitRepo?: boolean
+  branch?: string
   cwd?: string
   perTurn?: boolean
   updatedAt: number
@@ -352,10 +407,14 @@ export interface ChatMessage {
   forms?: MessageFormRequest[]
   approvals?: PermissionRequestCard[]
   artifacts?: ArtifactRef[]
+  media?: MessageMediaItem[]
   checkpointId?: string
   diffSummary?: DiffSummary
   branches?: MessageBranch[]
   activeBranchIndex?: number
+  durationMs?: number
+  turnTokens?: number
+  modelLabel?: string
   createdAt: number
 }
 
@@ -386,10 +445,12 @@ export interface FleetWsEvent {
   error?: string
   durationMs?: number
   subagentSessionId?: string
+  media?: MessageMediaItem[]
   items?: TodoItem[]
   files?: string[] | DiffFileEntry[]
   summary?: DiffSummary
   isGitRepo?: boolean
+  branch?: string
   perTurn?: boolean
   checkpointId?: string
   restoredFiles?: string[]
@@ -398,6 +459,12 @@ export interface FleetWsEvent {
   agents?: AgentModeOption[]
   servers?: McpServerInfo[]
   rules?: WorkspaceRule[]
+  skills?: WorkspaceSkill[]
+  lines?: FileBlameLine[]
+  seq?: number
+  lastSeq?: number
+  incremental?: boolean
+  pty?: boolean
   formId?: string
   fields?: FormFieldSchema[]
   cancelled?: boolean
@@ -408,6 +475,8 @@ export interface FleetWsEvent {
   truncated?: boolean
   sizeBytes?: number
   isBinary?: boolean
+  mime?: string
+  base64Data?: string
   mergedFiles?: string[]
   active?: boolean
   events?: FleetWsEvent[]
@@ -426,6 +495,7 @@ export interface FleetWsEvent {
     text: string
     thought?: string
     toolCalls?: ToolCallBadge[]
+    media?: MessageMediaItem[]
     parts?: Array<{ type: string; text?: string; callId?: string; id?: string }>
   }>
   cwd?: string
