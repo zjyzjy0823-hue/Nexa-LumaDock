@@ -425,6 +425,12 @@ async def fleet_node_ws(websocket: WebSocket):
                     db.commit()
                 continue
 
+            if evt_type == "CronRpcResult":
+                rpc_id = str(frame.get("_rpcId") or "").strip()
+                if rpc_id:
+                    await fleet_hub.resolve_node_rpc(workspace_id, node_id, rpc_id, frame)
+                continue
+
             target_client_id = frame.pop("_clientConnId", None)
             outbound = {**frame, "nodeId": node_id}
             await fleet_hub.broadcast_workspace(

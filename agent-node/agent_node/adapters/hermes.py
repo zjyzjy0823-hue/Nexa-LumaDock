@@ -226,3 +226,201 @@ class HermesAdapter(AgentAdapter):
 
             return {"outcome": {"outcome": "selected", "optionId": chosen}} if chosen else {"outcome": {"outcome": "cancelled"}}
         return {"outcome": {"outcome": "cancelled"}}
+
+    # ---------------- Hermes Gateway/Dashboard 原生 CronPort 适配 ----------------
+
+    def _gateway_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+    def cron_capabilities(self) -> dict[str, Any]:
+        gateway_ready = bool(self.serve_url)
+        return {
+            "supported": gateway_ready,
+            "canCreate": gateway_ready,
+            "canUpdate": gateway_ready,
+            "canDelete": gateway_ready,
+            "canPause": gateway_ready,
+            "canRunNow": gateway_ready,
+            "historyMode": "recent_only" if gateway_ready else "unavailable",
+            "supportsProfiles": gateway_ready,
+        }
+
+    def _require_gateway(self) -> str:
+        if not self.serve_url:
+            raise RuntimeError("Hermes CronPort requires gateway serve_url configuration")
+        return self.serve_url
+
+    def _normalize_cron_job(self, raw: dict[str, Any], default_profile: str = "default") -> dict[str, Any]:
+        paused = bool(raw.get("paused", False))
+        enabled = bool(raw.get("enabled", not paused)) and not paused
+        schedule_val = raw.get("schedule") or raw.get("cron") or raw.get("interval") or ""
+        if isinstance(schedule_val, dict):
+            kind = str(schedule_val.get("kind") or schedule_val.get("type") or "cron")
+            expr = str(schedule_val.get("expr") or schedule_val.get("cron") or schedule_val.get("interval") or "")
+        else:
+            kind = str(raw.get("schedule_type") or raw.get("scheduleKind") or "cron")
+            expr = str(schedule_val)
+        return {
+            "nativeJobId": str(raw.get("id") or raw.get("job_id") or ""),
+            "ownerProfile": str(raw.get("profile") or default_profile or "default"),
+            "name": str(raw.get("name") or raw.get("title") or raw.get("id") or "Hermes Cron"),
+            "description": str(raw.get("description") or ""),
+            "enabled": enabled,
+            "scheduleKind": kind,
+            "scheduleExpression": expr,
+            "timezone": str(raw.get("timezone") or raw.get("tz") or "UTC"),
+            "nextRunAt": raw.get("next_run_at") or raw.get("nextRunAt"),
+            "lastRunAt": raw.get("last_run_at") or raw.get("lastRunAt"),
+            "lastStatus": str(raw.get("last_status") or raw.get("lastStatus") or "unknown"),
+            "nativeRevision": str(raw.get("revision") or raw.get("updated_at") or ""),
+            "capabilities": self.cron_capabilities(),
+        }
+
+    async def cron_list(self, *, profile: str | None = None) -> list[dict[str, Any]]:
+        base = self._require_gateway()
+        params = {"profile": profile} if profile else None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(f"{base}/api/cron/jobs", params=params, headers=self._gateway_headers())
+            res.raise_for_status()
+            data = res.json()
+        rows = data if isinstance(data, list) else (data or {}).get("jobs") or []
+        return [self._normalize_cron_job(j, default_profile=profile or "default") for j in rows if isinstance(j, dict)]
+
+    async def cron_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        base = self._require_gateway()
+        profile = str(payload.get("ownerProfile") or "default")
+        body = {
+            "name": str(payload.get("name") or "").strip(),
+            "description": str(payload.get("description") or ""),
+            "schedule": str(payload.get("scheduleExpression") or ""),
+            "timezone": str(payload.get("timezone") or "Asia/Shanghai"),
+            "enabled": bool(payload.get("enabled", True)),
+            "prompt": str(payload.get("prompt") or ""),
+            "profile": profile,
+        }
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.post(f"{base}/api/cron/jobs", json=body, headers=self._gateway_headers())
+            res.raise_for_status()
+            data = res.json()
+        job = data.get("job", data) if isinstance(data, dict) else {}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {}, default_profile=profile)
+
+    async def cron_update(self, *, native_job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        base = self._require_gateway()
+        profile = str(payload.get("ownerProfile") or "default")
+        body: dict[str, Any] = {"profile": profile}
+        if payload.get("name") is not None:
+            body["name"] = payload["name"]
+        if payload.get("description") is not None:
+            body["description"] = payload["description"]
+        if payload.get("scheduleExpression") is not None:
+            body["schedule"] = payload["scheduleExpression"]
+        if payload.get("timezone") is not None:
+            body["timezone"] = payload["timezone"]
+        if payload.get("enabled") is not None:
+            body["enabled"] = bool(payload["enabled"])
+        if payload.get("prompt") is not None:
+            body["prompt"] = payload["prompt"]
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.patch(f"{base}/api/cron/jobs/{native_job_id}", json=body, headers=self._gateway_headers())
+            res.raise_for_status()
+            data = res.json()
+        job = data.get("job", data) if isinstance(data, dict) else {"id": native_job_id}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {"id": native_job_id}, default_profile=profile)
+
+    async def cron_delete(self, *, native_job_id: str, profile: str | None = None) -> None:
+        base = self._require_gateway()
+        params = {"profile": profile} if profile else None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.delete(f"{base}/api/cron/jobs/{native_job_id}", params=params, headers=self._gateway_headers())
+            res.raise_for_status()
+
+    async def cron_pause(self, *, native_job_id: str, paused: bool, profile: str | None = None) -> dict[str, Any]:
+        base = self._require_gateway()
+        action = "pause" if paused else "resume"
+        params = {"profile": profile} if profile else None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.post(
+                f"{base}/api/cron/jobs/{native_job_id}/{action}",
+                params=params,
+                headers=self._gateway_headers(),
+            )
+            res.raise_for_status()
+            data = res.json() if res.content else {"id": native_job_id, "enabled": not paused, "paused": paused}
+        job = data.get("job", data) if isinstance(data, dict) else {"id": native_job_id, "enabled": not paused}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {"id": native_job_id}, default_profile=profile or "default")
+
+    async def cron_run_now(
+        self,
+        *,
+        native_job_id: str,
+        request_id: str,
+        profile: str | None = None,
+    ) -> dict[str, Any]:
+        base = self._require_gateway()
+        params = {"profile": profile} if profile else None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.post(
+                f"{base}/api/cron/jobs/{native_job_id}/trigger",
+                params=params,
+                json={"request_id": request_id},
+                headers=self._gateway_headers(),
+            )
+            res.raise_for_status()
+            data = res.json() if res.content else {}
+        return {
+            "nativeRunId": str(data.get("run_id") or data.get("runId") or request_id),
+            "status": str(data.get("status") or "queued"),
+            "nativeStatus": str(data.get("status") or "queued"),
+            "startedAt": data.get("started_at") or data.get("startedAt"),
+            "finishedAt": data.get("finished_at") or data.get("finishedAt"),
+            "summary": str(data.get("summary") or ""),
+        }
+
+    async def cron_list_runs(
+        self,
+        *,
+        native_job_id: str,
+        limit: int = 20,
+        profile: str | None = None,
+    ) -> list[dict[str, Any]]:
+        base = self._require_gateway()
+        capped = max(1, min(int(limit), 100))
+        params: dict[str, Any] = {"limit": capped}
+        if profile:
+            params["profile"] = profile
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(
+                f"{base}/api/cron/jobs/{native_job_id}/runs",
+                params=params,
+                headers=self._gateway_headers(),
+            )
+            if res.status_code == 404:
+                return []
+            res.raise_for_status()
+            data = res.json()
+        rows = data if isinstance(data, list) else (data or {}).get("runs") or []
+        out: list[dict[str, Any]] = []
+        for row in rows[:capped]:
+            if not isinstance(row, dict):
+                continue
+            raw_st = str(row.get("status") or "unknown").lower()
+            norm_st = (
+                "succeeded" if raw_st in ("ok", "success", "succeeded", "completed")
+                else "failed" if raw_st in ("error", "failed")
+                else "running" if raw_st in ("running", "in_progress")
+                else "queued" if raw_st in ("queued", "pending")
+                else "unknown"
+            )
+            out.append(
+                {
+                    "nativeRunId": str(row.get("run_id") or row.get("id") or ""),
+                    "scheduledAt": row.get("scheduled_at") or row.get("scheduledAt"),
+                    "startedAt": row.get("started_at") or row.get("startedAt"),
+                    "finishedAt": row.get("finished_at") or row.get("finishedAt"),
+                    "status": norm_st,
+                    "nativeStatus": raw_st,
+                    "summary": str(row.get("summary") or row.get("error") or ""),
+                }
+            )
+        return out

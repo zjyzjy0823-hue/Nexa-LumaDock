@@ -365,6 +365,73 @@ class AgentNodeDaemon:
             await self._send_ws(ws, {"type": "TrustPolicySnapshot", "patterns": list(self._trust_patterns)})
             return
 
+        if cmd.startswith("cron."):
+            rpc_id = str(frame.get("_rpcId") or "").strip()
+
+            async def reply_cron(payload: dict[str, Any]) -> None:
+                await send_back({"type": "CronRpcResult", "_rpcId": rpc_id, "provider": provider, **payload})
+
+            if adapter is None:
+                await reply_cron({"ok": False, "code": "provider_unavailable", "error": f"Provider {provider} not enabled on node"})
+                return
+            caps = adapter.cron_capabilities()
+            if not caps.get("supported"):
+                await reply_cron(
+                    {
+                        "ok": False,
+                        "code": "cron_unsupported",
+                        "capabilities": caps,
+                        "error": f"{provider} cron gateway is not configured on this node",
+                    }
+                )
+                return
+            try:
+                profile = str(frame.get("ownerProfile") or "").strip() or None
+                if cmd == "cron.list":
+                    jobs = await adapter.cron_list(profile=profile)
+                    await reply_cron({"ok": True, "capabilities": caps, "jobs": jobs})
+                elif cmd == "cron.create":
+                    job = await adapter.cron_create(dict(frame.get("payload") or {}))
+                    await reply_cron({"ok": True, "capabilities": caps, "job": job})
+                elif cmd == "cron.update":
+                    job = await adapter.cron_update(
+                        native_job_id=str(frame.get("nativeJobId") or ""),
+                        payload=dict(frame.get("payload") or {}),
+                    )
+                    await reply_cron({"ok": True, "capabilities": caps, "job": job})
+                elif cmd == "cron.delete":
+                    await adapter.cron_delete(
+                        native_job_id=str(frame.get("nativeJobId") or ""),
+                        profile=profile,
+                    )
+                    await reply_cron({"ok": True, "capabilities": caps, "deleted": True})
+                elif cmd == "cron.pause":
+                    job = await adapter.cron_pause(
+                        native_job_id=str(frame.get("nativeJobId") or ""),
+                        paused=bool(frame.get("paused", True)),
+                        profile=profile,
+                    )
+                    await reply_cron({"ok": True, "capabilities": caps, "job": job})
+                elif cmd == "cron.run":
+                    run = await adapter.cron_run_now(
+                        native_job_id=str(frame.get("nativeJobId") or ""),
+                        request_id=str(frame.get("requestId") or ""),
+                        profile=profile,
+                    )
+                    await reply_cron({"ok": True, "capabilities": caps, "run": run})
+                elif cmd == "cron.runs":
+                    runs = await adapter.cron_list_runs(
+                        native_job_id=str(frame.get("nativeJobId") or ""),
+                        limit=int(frame.get("limit") or 20),
+                        profile=profile,
+                    )
+                    await reply_cron({"ok": True, "capabilities": caps, "runs": runs})
+                else:
+                    await reply_cron({"ok": False, "code": "unsupported_cron_cmd", "error": f"Unknown cron command: {cmd}"})
+            except Exception as err:
+                await reply_cron({"ok": False, "code": "upstream_cron_error", "capabilities": caps, "error": str(err)})
+            return
+
         if adapter is None:
             await send_back({"type": "Failed", "code": "provider_unavailable", "message": f"Provider {provider} not enabled on node"})
             return

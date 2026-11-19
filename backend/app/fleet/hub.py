@@ -49,6 +49,13 @@ ALLOWED_CLIENT_COMMANDS = frozenset({
     "permission.respond",
     "handoff.send",
     "node.ping",
+    "cron.list",
+    "cron.create",
+    "cron.update",
+    "cron.delete",
+    "cron.pause",
+    "cron.run",
+    "cron.runs",
 })
 ALLOWED_NODE_EVENTS = frozenset({
     "Accepted",
@@ -92,6 +99,7 @@ ALLOWED_NODE_EVENTS = frozenset({
     "Completed",
     "Failed",
     "NodeHeartbeat",
+    "CronRpcResult",
 })
 
 
@@ -116,6 +124,8 @@ class FleetRelayHub:
         self._nodes: dict[tuple[str, str], ConnectedNode] = {}
         self._clients: dict[str, dict[str, WebSocket]] = {}
         self._seen_requests: OrderedDict[tuple[str, str], bool] = OrderedDict()
+        # Core REST -> AgentNode 同步 RPC 挂起表（纯内存，不落盘）
+        self._pending_rpcs: dict[str, tuple[str, str, asyncio.Future[dict[str, Any]]]] = {}
 
     async def register_node(self, conn: ConnectedNode) -> None:
         async with self._lock:
@@ -136,10 +146,20 @@ class FleetRelayHub:
 
     async def unregister_node(self, workspace_id: str, node_id: str, websocket: WebSocket | None = None) -> None:
         removed: ConnectedNode | None = None
+        stale_futs: list[asyncio.Future[dict[str, Any]]] = []
         async with self._lock:
             current = self._nodes.get((workspace_id, node_id))
             if current is not None and (websocket is None or current.websocket is websocket):
                 removed = self._nodes.pop((workspace_id, node_id))
+                stale_ids = [
+                    rid for rid, (ws_id, n_id, _) in self._pending_rpcs.items()
+                    if ws_id == workspace_id and n_id == node_id
+                ]
+                for rid in stale_ids:
+                    stale_futs.append(self._pending_rpcs.pop(rid)[2])
+        for fut in stale_futs:
+            if not fut.done():
+                fut.set_result({"ok": False, "code": "node_disconnected", "error": "Target device node disconnected"})
         if removed is not None:
             await self.broadcast_workspace(
                 workspace_id,
@@ -195,6 +215,56 @@ class FleetRelayHub:
     async def get_online_node(self, workspace_id: str, node_id: str) -> ConnectedNode | None:
         async with self._lock:
             return self._nodes.get((workspace_id, node_id))
+
+    async def call_node_rpc(
+        self,
+        workspace_id: str,
+        node_id: str,
+        frame: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        """向工作区内目标在线 AgentNode 发送一次性控制 RPC 并等待 CronRpcResult 回执。"""
+        node = await self.get_online_node(workspace_id, node_id)
+        if node is None:
+            return {"ok": False, "code": "node_offline", "error": "Target device node is offline"}
+
+        rpc_id = str(uuid4())
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        async with self._lock:
+            self._pending_rpcs[rpc_id] = (workspace_id, node_id, fut)
+
+        outbound = {**frame, "_rpcId": rpc_id}
+        try:
+            await node.websocket.send_json(outbound)
+        except Exception:
+            async with self._lock:
+                self._pending_rpcs.pop(rpc_id, None)
+            await self.unregister_node(workspace_id, node_id, node.websocket)
+            return {"ok": False, "code": "node_disconnected", "error": "Target device node disconnected"}
+
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"ok": False, "code": "rpc_timeout", "error": "Remote node did not respond in time"}
+        finally:
+            async with self._lock:
+                self._pending_rpcs.pop(rpc_id, None)
+
+    async def resolve_node_rpc(self, workspace_id: str, node_id: str, rpc_id: str, payload: dict[str, Any]) -> bool:
+        """收到节点回传的 CronRpcResult 时唤醒等待中的 Core REST 调用。"""
+        async with self._lock:
+            entry = self._pending_rpcs.get(rpc_id)
+            if entry is None:
+                return False
+            ws_id, n_id, fut = entry
+            if ws_id != workspace_id or n_id != node_id:
+                return False
+            self._pending_rpcs.pop(rpc_id, None)
+        if not fut.done():
+            fut.set_result(payload)
+        return True
 
     async def list_online_endpoints(self, workspace_id: str) -> list[dict[str, Any]]:
         async with self._lock:

@@ -20,6 +20,7 @@ from .api.websites import router as websites_router
 from .api.agent_actions import router as agent_actions_router
 from .fleet.routes import router as fleet_router, ws_router as fleet_ws_router
 from .space.routes import router as space_router
+from .scheduler.routes import router as scheduler_router
 from .realtime.events import Event
 from .resources import resource_path
 from .config import load_runtime_config
@@ -81,7 +82,7 @@ for router in (
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
     v1_data_router, v1_automation_router, automation_client_router, automation_event_router, settings.router, ledger.router,
     workspace.router, clients.router, client_runtime.router, core.router, sync.router, agent_actions_router,
-    fleet_router, fleet_ws_router, space_router,
+    fleet_router, fleet_ws_router, space_router, scheduler_router,
 ):
     app.include_router(router)
 

@@ -117,3 +117,137 @@ class OpenClawAdapter(AgentAdapter):
 
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         await self._rpc("chat.abort", {"sessionKey": session_id})
+
+    # ---------------- OpenClaw 原生 CronPort 适配 ----------------
+
+    def cron_capabilities(self) -> dict[str, Any]:
+        return {
+            "supported": True,
+            "canCreate": True,
+            "canUpdate": True,
+            "canDelete": True,
+            "canPause": True,
+            "canRunNow": True,
+            "historyMode": "paginated",
+            "supportsProfiles": False,
+        }
+
+    def _normalize_cron_job(self, raw: dict[str, Any]) -> dict[str, Any]:
+        schedule_raw = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+        expr = str(raw.get("cron") or schedule_raw.get("expr") or schedule_raw.get("cron") or "")
+        kind = str(schedule_raw.get("kind") or ("cron" if expr else "interval"))
+        tz = str(raw.get("timezone") or schedule_raw.get("tz") or schedule_raw.get("timezone") or "UTC")
+        return {
+            "nativeJobId": str(raw.get("id") or raw.get("jobId") or ""),
+            "ownerProfile": str(raw.get("profile") or "default"),
+            "name": str(raw.get("name") or raw.get("title") or raw.get("id") or "OpenClaw Cron"),
+            "description": str(raw.get("description") or ""),
+            "enabled": bool(raw.get("enabled", True)) and not bool(raw.get("paused", False)),
+            "scheduleKind": kind,
+            "scheduleExpression": expr or str(schedule_raw.get("every") or schedule_raw.get("at") or ""),
+            "timezone": tz,
+            "nextRunAt": raw.get("nextRunAt") or raw.get("next_run_at"),
+            "lastRunAt": raw.get("lastRunAt") or raw.get("last_run_at"),
+            "lastStatus": str(raw.get("lastStatus") or raw.get("last_status") or "unknown"),
+            "nativeRevision": str(raw.get("revision") or raw.get("version") or ""),
+            "capabilities": self.cron_capabilities(),
+        }
+
+    async def cron_list(self, *, profile: str | None = None) -> list[dict[str, Any]]:
+        res = await self._rpc("cron.list", {})
+        items = res if isinstance(res, list) else (res or {}).get("jobs") or []
+        return [self._normalize_cron_job(j) for j in items if isinstance(j, dict)]
+
+    async def cron_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        rpc_params = {
+            "name": str(payload.get("name") or "").strip(),
+            "description": str(payload.get("description") or ""),
+            "enabled": bool(payload.get("enabled", True)),
+            "schedule": {
+                "kind": str(payload.get("scheduleKind") or "cron"),
+                "expr": str(payload.get("scheduleExpression") or ""),
+                "tz": str(payload.get("timezone") or "Asia/Shanghai"),
+            },
+            "prompt": str(payload.get("prompt") or ""),
+        }
+        res = await self._rpc("cron.add", rpc_params)
+        job = res.get("job", res) if isinstance(res, dict) else {}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {})
+
+    async def cron_update(self, *, native_job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        patch: dict[str, Any] = {"id": native_job_id}
+        for key in ("name", "description", "enabled", "prompt"):
+            if key in payload and payload[key] is not None:
+                patch[key] = payload[key]
+        if payload.get("scheduleExpression") or payload.get("timezone") or payload.get("scheduleKind"):
+            patch["schedule"] = {
+                "kind": str(payload.get("scheduleKind") or "cron"),
+                "expr": str(payload.get("scheduleExpression") or ""),
+                "tz": str(payload.get("timezone") or "Asia/Shanghai"),
+            }
+        if payload.get("expectedRevision"):
+            patch["expectedRevision"] = str(payload["expectedRevision"])
+        res = await self._rpc("cron.update", patch)
+        job = res.get("job", res) if isinstance(res, dict) else {}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {"id": native_job_id})
+
+    async def cron_delete(self, *, native_job_id: str, profile: str | None = None) -> None:
+        await self._rpc("cron.remove", {"id": native_job_id})
+
+    async def cron_pause(self, *, native_job_id: str, paused: bool, profile: str | None = None) -> dict[str, Any]:
+        res = await self._rpc("cron.update", {"id": native_job_id, "enabled": not paused})
+        job = res.get("job", res) if isinstance(res, dict) else {"id": native_job_id, "enabled": not paused}
+        return self._normalize_cron_job(job if isinstance(job, dict) else {"id": native_job_id, "enabled": not paused})
+
+    async def cron_run_now(
+        self,
+        *,
+        native_job_id: str,
+        request_id: str,
+        profile: str | None = None,
+    ) -> dict[str, Any]:
+        res = await self._rpc("cron.run", {"id": native_job_id, "idempotencyKey": request_id})
+        data = res if isinstance(res, dict) else {}
+        return {
+            "nativeRunId": str(data.get("runId") or data.get("id") or request_id),
+            "status": str(data.get("status") or "queued"),
+            "nativeStatus": str(data.get("status") or "queued"),
+            "startedAt": data.get("startedAt"),
+            "finishedAt": data.get("finishedAt"),
+            "summary": str(data.get("summary") or ""),
+        }
+
+    async def cron_list_runs(
+        self,
+        *,
+        native_job_id: str,
+        limit: int = 20,
+        profile: str | None = None,
+    ) -> list[dict[str, Any]]:
+        capped = max(1, min(int(limit), 100))
+        res = await self._rpc("cron.runs", {"id": native_job_id, "limit": capped})
+        rows = res if isinstance(res, list) else (res or {}).get("runs") or []
+        out: list[dict[str, Any]] = []
+        for row in rows[:capped]:
+            if not isinstance(row, dict):
+                continue
+            raw_st = str(row.get("status") or "unknown").lower()
+            norm_st = (
+                "succeeded" if raw_st in ("ok", "success", "succeeded", "completed")
+                else "failed" if raw_st in ("error", "failed")
+                else "running" if raw_st in ("running", "in_progress")
+                else "queued" if raw_st in ("queued", "pending")
+                else "unknown"
+            )
+            out.append(
+                {
+                    "nativeRunId": str(row.get("runId") or row.get("id") or ""),
+                    "scheduledAt": row.get("scheduledAt") or row.get("scheduled_at"),
+                    "startedAt": row.get("startedAt") or row.get("started_at"),
+                    "finishedAt": row.get("finishedAt") or row.get("finished_at"),
+                    "status": norm_st,
+                    "nativeStatus": raw_st,
+                    "summary": str(row.get("summary") or row.get("error") or ""),
+                }
+            )
+        return out

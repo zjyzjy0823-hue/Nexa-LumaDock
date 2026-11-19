@@ -358,3 +358,51 @@ class AgentAdapter(ABC):
     async def close(self) -> None:
         """关闭适配器托管子进程等资源。"""
         return None
+
+    # ---------------- 统一 CronPort 可选契约（单所有者语义） ----------------
+
+    def cron_capabilities(self) -> dict[str, Any]:
+        """返回该适配器对原生定时任务的真实能力边界。"""
+        return {
+            "supported": False,
+            "canCreate": False,
+            "canUpdate": False,
+            "canDelete": False,
+            "canPause": False,
+            "canRunNow": False,
+            "historyMode": "unavailable",
+            "supportsProfiles": False,
+        }
+
+    async def cron_list(self, *, profile: str | None = None) -> list[dict[str, Any]]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_update(self, *, native_job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_delete(self, *, native_job_id: str, profile: str | None = None) -> None:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_pause(self, *, native_job_id: str, paused: bool, profile: str | None = None) -> dict[str, Any]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_run_now(
+        self,
+        *,
+        native_job_id: str,
+        request_id: str,
+        profile: str | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
+
+    async def cron_list_runs(
+        self,
+        *,
+        native_job_id: str,
+        limit: int = 20,
+        profile: str | None = None,
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError(f"{self.provider} does not support CronPort")
