@@ -35,6 +35,7 @@ import { useDataStore } from './stores/data'
 import { useAutomationStore } from './stores/automation'
 import { useLedgerStore } from './stores/ledger'
 import { useSpaceStore } from './stores/space'
+import { useSchedulerStore } from './stores/scheduler'
 import { nextWorkbenchTheme, useWorkbenchTheme, workbenchThemeLabel } from './composables/useWorkbenchTheme'
 import type { WorkbenchTheme } from './composables/useWorkbenchTheme'
 import { applyThemeToRoot, resolveThemeState } from './theme/registry'
@@ -114,6 +115,7 @@ watch(() => auth.user?.id, (current, previous) => {
     useAutomationStore().reset()
     useLedgerStore().reset()
     useSpaceStore().reset()
+    useSchedulerStore().reset()
   }
   if (current !== undefined && auth.token) void settings.load(auth.token).catch(() => {})
 })

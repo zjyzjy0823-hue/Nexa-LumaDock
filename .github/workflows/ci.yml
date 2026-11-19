@@ -36,6 +36,7 @@ jobs:
       - run: npm run test:fleet
       - run: npm run test:space-crypto
       - run: npm run test:theme-engine
+      - run: npm run test:scheduler
       - run: npm run test:desktop
       - run: node --test tests/diagnostics.test.mjs
   contracts:
