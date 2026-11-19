@@ -1,5 +1,5 @@
 name: CI
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 jobs:
   validation-impact:
     runs-on: ubuntu-latest
@@ -204,7 +204,7 @@ jobs:
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
   desktop-macos:
     # Intel x64 与 Apple Silicon 各自在原生 runner 上出包（sidecar 由 PyInstaller 构建，不能交叉编译）
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     permissions:
       contents: write
     strategy:

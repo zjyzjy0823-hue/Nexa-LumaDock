@@ -71,7 +71,8 @@ def ci_status(run_id, head):
     if run["workflowName"] != "CI":
         raise ValueError("Run is not the repository CI workflow")
     required_jobs = set(re.findall(r"^  ([\w-]+):\s*$", (ROOT / ".github/workflows/ci.yml").read_text(), re.M))
-    completed_jobs = {job["name"] for job in run["jobs"] if job["conclusion"] == "success"}
+    # A matrix job surfaces as "<job> (<values>)" in the run payload; match on the base job name.
+    completed_jobs = {job["name"].split(" (")[0].strip() for job in run["jobs"] if job["conclusion"] == "success"}
     passed = bool(required_jobs) and required_jobs <= completed_jobs and run["conclusion"] == "success" and all(job["conclusion"] == "success" for job in run["jobs"])
     return {"status": "PASS" if passed else "PENDING" if run["status"] != "completed" else "FAIL", "runId": run_id, "url": run["url"]}
 

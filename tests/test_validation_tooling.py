@@ -119,7 +119,8 @@ class ImpactTests(unittest.TestCase):
 
     def test_ci_requires_exact_commit_and_all_jobs_success(self):
         run = {"headSha": "current", "workflowName": "CI", "status": "completed", "conclusion": "success", "url": "https://example.invalid",
-               "jobs": [{"name": name, "conclusion": "success"} for name in ("frontend", "backend", "backend-postgres", "device-client", "openclaw-adapter", "agent-node-and-edge", "desktop-windows", "validation-impact", "contracts")]}
+               # Matrix jobs are reported as "<job> (<values>)" — the gate compares base names.
+               "jobs": [{"name": name, "conclusion": "success"} for name in ("frontend", "backend", "backend-postgres", "device-client", "openclaw-adapter", "agent-node-and-edge", "desktop-windows", "desktop-macos (macos-15-intel, x64)", "desktop-macos (macos-latest, aarch64)", "validation-impact", "contracts")]}
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "PASS")
             with self.assertRaises(ValueError):
@@ -127,6 +128,11 @@ class ImpactTests(unittest.TestCase):
         run["jobs"][0]["conclusion"] = "skipped"
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "FAIL")
+        run["jobs"][0]["conclusion"] = "success"
+        run["jobs"][8]["conclusion"] = "failure"
+        with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
+            self.assertEqual(release.ci_status("123", "current")["status"], "FAIL")
+        run["jobs"][8]["conclusion"] = "success"
         run.update(status="in_progress", conclusion="")
         with patch.object(release.subprocess, "run", return_value=SimpleResult(json.dumps(run))):
             self.assertEqual(release.ci_status("123", "current")["status"], "PENDING")
