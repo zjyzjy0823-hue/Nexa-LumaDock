@@ -1,7 +1,7 @@
 # Studiolo 开发路线图 · v0.6.2–v1.0.0
 
-- **更新日期** 2026-11-17（已按「核心能力先行」重排阶段顺序）
-- **仓库基线** `main @ 7e0a138`（已完成 Studiolo 更名、SVG 图标重构、纯白默认主题、工作台认证及规划冻结）
+- **更新日期** 2026-11-19（已完成 `v0.7.0` 主体与多端收口提交，转入 `v0.7.1`）
+- **仓库基线** `main @ 6ab1a0e`（`v0.7.0` Agent Fleet 协同工作台、内联媒体与五款气泡主题、macOS 双架构 DMG CI、Desktop/Android 原生直连 Core Fleet 登录及 OpenCode `allowedRoots` 校验均已落地）
 - **关联文档** [当前架构审计、详细设计、迁移与 TBD](architecture-plan-v0.6.2.md)
 
 ## 产品方向与分期
@@ -11,8 +11,8 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 | 版本 | 主要交付 | 依赖与主要风险 | 建议工作量 |
 | --- | --- | --- | --- |
 | **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
-| **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审与受控终端 | 非回环 HTTPS/WSS 证书、`Node Token`、不可越权 `allowedRoots`、零正文落盘与多端 CI 门禁验收 | ⏳ 代码已落地，待 CI 与多端收口 |
-| **v0.7.1** | **Shared Space（`/space`）加密共享首版 & Theme Engine 标准化**：Argon2id/AEAD 密文、每读重输密码与 Epoch 轮换、Mac/桌面/手机 Web 可用；共用 Theme Registry 与可选 Liquid Glass | TBD-01–04/08/09 参数冻结、密码学跨语言向量、旧 v3 外观严格字段兼容 | 15–24 人日 |
+| **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审、多端直连 Core 登录与安全边界加固 | 本地全量回归已通过（107 前端 + 6 agent-node + 503 后端），待远端推送 CI 与多节点实机最终验收 | ✅ 主体已收口 |
+| **v0.7.1** | **Shared Space（`/space`）加密共享首版 & Theme Engine 标准化**：Argon2id/AEAD 密文、每读重输密码与 Epoch 轮换、Mac/桌面/手机 Web 可用；共用 Theme Registry 与可选 Liquid Glass | TBD-01–04/08/09 参数冻结、密码学跨语言向量、旧 v3 外观严格字段兼容 | 🚧 下一阶段（15–24 人日） |
 | **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 12–20 人日 |
 | **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 12–20 人日 |
 | **v0.8.1** | **Android 全业务与移动完整体验闭环**：Ledger / Data / Conflict Center、Automation、Share to Studiolo、Android 本地密文块缓存与无障碍/低端机优化 | 跨端金额/时区语义、父子依赖同步、TalkBack 与 48dp 触控规范、Android 密文块接入 | 14–24 人日 |
@@ -27,12 +27,12 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 - **062-06** `3537e1f` 已完成 Android 纯代码工程壳补齐并在真机启动安装（`#9`）。
 - **062-07** 已完成全仓更名 **Studiolo**、几何 **S** 矢量图标重绘、纯白默认桌面/移动 UI 收敛及 Mac Core + 7 设备 Agent Fleet 方案冻结（`7e0a138`）；后续仅按需补充 `v0.6.2` Git tag 与发行元数据。
 
-## v0.7.0 · Mac Core 与多设备 Agent Fleet Chat（`/chat`）
+## v0.7.0 · Mac Core 与多设备 Agent Fleet Chat（`/chat`）（✅ 主体已收口）
 
-- **070-01 Mac Core 常驻与 `/chat` 控制台**：在 macOS 主机部署常驻 Studiolo Core（PostgreSQL + `launchd` 防休眠 + 定期异地备份），通过腾讯云/OCI VPS TLS 反向隧道或 Tailscale 私网向手机与 Windows 开放入口；将 [OpusModulePage.vue](file:///d:/xiangmu/LumaDock/src/pages/OpusModulePage.vue) `/chat` 占位升级为三栏与移动端 Agent Fleet 控制台，支持设备在网感知、并发对话、同仓 `git worktree` 隔离、结构化工具审批卡、Fan-out 广播与 `@Handoff` 转交。
+- **070-01 Mac Core 常驻与 `/chat` 控制台**：在 macOS 主机部署常驻 Studiolo Core（PostgreSQL + `launchd` 防休眠 + 定期异地备份），通过腾讯云/OCI VPS TLS 反向隧道或 Tailscale 私网向手机与 Windows 开放入口；已实现独立 [ChatPage.vue](file:///d:/xiangmu/LumaDock/src/pages/ChatPage.vue) 三栏与移动端 Agent Fleet 控制台，支持设备在网感知、并发对话、同仓 `git worktree` 隔离、结构化工具审批卡、Fan-out 广播、`@Handoff` 转交、正文内联图片/文件卡片及五款对话气泡主题。
 - **070-02 统一 `AgentAdapter` 与多设备 Node 接入**：实现标准化事件总线（`Accepted`、`ThoughtDelta`、`TextDelta`、`ToolCall`、`PermissionRequest`、`Snapshot`、`Completed`、`Failed`、`ConnectionState`）与轻量 Device Agent Node（桌面 Sidecar / Mac 独立边界节点 / Windows 与 Linux VPS 常驻节点），首批支持 **Hermes（`hermes acp` / `hermes serve`）、Codex（`codex app-server`）、OpenCode（`opencode serve` / SDK）、dsh（受控 CLI/网关）、Google Antigravity（`agy` / Python SDK）** 与 **OpenClaw Gateway**。
-- **070-03 远程执行安全边界与零正文持久化验收**：强制非回环 HTTPS/WSS 证书校验与每节点可吊销 `Node Token`、不可远端覆盖的 `allowedRoots` 目录白名单、高危命令默认人工审批；复用并修复 `agent.run` 与 Data Actions scope 校验；全端库/日志/缓存哨兵扫描确认聊天正文零落盘。
-- **070-04 多节点兼容列表与开关发布**：固化 7 台设备（Mac + Windows + 双手机 Web/壳 + OCI×2 + 腾讯云）与各 Agent CLI 锁定版本（TBD-05/07），支持功能开关独立启停与回滚。
+- **070-03 远程执行安全边界与零正文持久化验收**：强制非回环 HTTPS/WSS 证书校验与每节点可吊销 `Node Token`、不可远端覆盖的 `allowedRoots` 目录白名单（含 `8596fb7` OpenCode 会话目录强校验）、高危命令默认人工审批；复用并修复 `agent.run` 与 Data Actions scope 校验；全端库/日志/缓存哨兵扫描确认聊天正文零落盘。
+- **070-04 多节点兼容列表、多端直连与打包收口**：已完成 macOS Intel/Apple Silicon 双架构 DMG CI（`41d5627`/`ee85eab`）、Desktop 独立会话级登录 Core Fleet 及 Android 首次启动直连 Core（`6ab1a0e`），本地全量回归全部通过；剩余远端推送 CI 校验与 7 设备实机联合演练按发布窗口补齐证据。
 
 **独立验收** 在真实 Mac Core + Windows + 手机 + OCI/腾讯云节点环境下完成 6 类 Harness 建连、历史上游拉取、并发流式输出、远程工具批准、节点休眠离线与断网重连；数据库、日志、Outbox 与诊断导出均无任何聊天正文与模型订阅密钥；既有 Local / Sync v3 / Data Actions 零回归。
 
