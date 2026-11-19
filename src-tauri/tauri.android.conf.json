@@ -1,7 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "version": "0.8.0",
   "build": {
     "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "Studiolo", "visible": true }]
   },
   "bundle": {
     "externalBin": []

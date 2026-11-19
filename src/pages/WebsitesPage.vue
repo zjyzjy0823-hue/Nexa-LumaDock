@@ -5,12 +5,14 @@ import ExternalLinkButton from '../components/ui/ExternalLink.vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import Modal from '../components/ui/Modal.vue'
 import { useAuthStore } from '../stores/auth'
+import { isAndroidLocal } from '../desktop/androidLocal'
 import { useWebsitesStore } from '../stores/websites'
 import type { Website } from '../types/website'
 
 const props = defineProps<{ mobile?: boolean; search?: string }>()
 const emit = defineEmits<{ action: [message: string] }>()
 const auth = useAuthStore()
+const websiteToken = computed(() => auth.token ?? (isAndroidLocal() ? '' : null))
 const store = useWebsitesStore()
 const query = ref('')
 const selectedCategory = ref('all')
@@ -81,21 +83,22 @@ watch(() => form.url, () => {
 watch(() => form.icon, () => { iconPreviewFailed.value = false })
 const websiteCategories = computed(() => [{ id: 'all', name: '全部', order: -1 }, ...store.categories])
 function refresh() {
-  if (!auth.token) return
-  store.load(auth.token, { categoryId: selectedCategory.value === 'all' ? undefined : selectedCategory.value,
+  if (websiteToken.value === null) return
+  store.load(websiteToken.value, { categoryId: selectedCategory.value === 'all' ? undefined : selectedCategory.value,
     search: query.value.trim(), favorite: onlyFavorites.value ? true : undefined, sort: sort.value })
 }
 function openWebsite(item: Website) {
   openMenuId.value = null
-  if (auth.token) void store.visit(auth.token, item.id).catch(() => {})
+  if (websiteToken.value !== null) void store.visit(websiteToken.value, item.id).catch(() => {})
 }
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 watch([selectedCategory, onlyFavorites, sort], refresh)
+if (isAndroidLocal()) watch(() => store.revision, refresh)
 watch(() => props.search, value => { query.value = value ?? '' }, { immediate: true })
 watch(query, () => { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 250) })
 
 function openDialog(item?: Website) {
-  if (!auth.token) { emit('action', '请先登录。'); return }
+  if (websiteToken.value === null) { emit('action', '请先登录。'); return }
   openMenuId.value = null; editingId.value = item?.id ?? null; dialogMode.value = item ? 'edit' : 'add'; formError.value = ''
   Object.assign(form, { name: item?.name ?? '', url: item?.url ?? '', icon: item?.icon ?? '', description: item?.description ?? '',
     categoryId: item?.categoryId ?? '', favorite: item?.favorite ?? false, order: item?.order ?? (Math.max(-1, ...store.websites.map(site => site.order)) + 1) })
@@ -124,13 +127,13 @@ async function saveWebsite() {
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || /\s/.test(candidate)) throw new Error()
     url = parsed.toString()
   } catch { formError.value = '请输入有效的 HTTP 或 HTTPS 网址。'; return }
-  if (!auth.token) return
+  if (websiteToken.value === null) return
   saving.value = true; formError.value = ''
   try {
     const data = { name, url, icon: form.icon.trim() || null, description: form.description.trim() || null,
       categoryId: form.categoryId || null, favorite: form.favorite, order: form.order }
-    if (editingId.value) await store.update(auth.token, editingId.value, data)
-    else await store.create(auth.token, data)
+    if (editingId.value) await store.update(websiteToken.value, editingId.value, data)
+    else await store.create(websiteToken.value, data)
     emit('action', editingId.value ? `已更新「${name}」。` : `已添加「${name}」。`)
     dialogMode.value = null; selectedCategory.value = 'all'; query.value = ''; refresh()
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
@@ -138,18 +141,18 @@ async function saveWebsite() {
 }
 async function removeWebsite(item: Website) {
   openMenuId.value = null
-  if (!auth.token || !(await confirmAction(`删除「${item.name}」？`))) return
-  try { await store.remove(auth.token, item.id); emit('action', `已删除「${item.name}」。`) }
+  if (websiteToken.value === null || !(await confirmAction(`删除「${item.name}」？`))) return
+  try { await store.remove(websiteToken.value, item.id); emit('action', `已删除「${item.name}」。`) }
   catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
 }
 async function toggleFavorite(item: Website) {
   openMenuId.value = null
-  if (!auth.token) return
-  try { await store.update(auth.token, item.id, { favorite: !item.favorite }); refresh(); emit('action', item.favorite ? '已取消收藏。' : '已收藏。') }
+  if (websiteToken.value === null) return
+  try { await store.update(websiteToken.value, item.id, { favorite: !item.favorite }); refresh(); emit('action', item.favorite ? '已取消收藏。' : '已收藏。') }
   catch (error) { emit('action', error instanceof Error ? error.message : '操作失败') }
 }
 async function moveWebsite(item: Website, direction: -1 | 1) {
-  if (!auth.token || selectedCategory.value !== 'all' || query.value || onlyFavorites.value || sort.value !== 'order') return
+  if (websiteToken.value === null || selectedCategory.value !== 'all' || query.value || onlyFavorites.value || sort.value !== 'order') return
   const sorted = [...store.websites].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
   const group = sorted.filter(entry => entry.favorite === item.favorite)
   const index = group.findIndex(entry => entry.id === item.id)
@@ -161,16 +164,16 @@ async function moveWebsite(item: Website, direction: -1 | 1) {
     sorted[itemPosition] = neighbor
     sorted[neighborPosition] = item
     for (let position = 0; position < sorted.length; position++) {
-      if (sorted[position].order !== position) await store.update(auth.token, sorted[position].id, { order: position })
+      if (sorted[position].order !== position) await store.update(websiteToken.value, sorted[position].id, { order: position })
     }
     sort.value = 'order'; refresh(); emit('action', '网站顺序已更新。')
   } catch (error) { emit('action', error instanceof Error ? error.message : '排序失败'); refresh() }
 }
 async function saveCategory() {
-  if (!auth.token || !categoryName.value.trim()) { categoryError.value = '请输入分类名称。'; return }
+  if (websiteToken.value === null || !categoryName.value.trim()) { categoryError.value = '请输入分类名称。'; return }
   try {
-    if (editingCategoryId.value) await store.renameCategory(auth.token, editingCategoryId.value, categoryName.value.trim())
-    else await store.createCategory(auth.token, categoryName.value.trim())
+    if (editingCategoryId.value) await store.renameCategory(websiteToken.value, editingCategoryId.value, categoryName.value.trim())
+    else await store.createCategory(websiteToken.value, categoryName.value.trim())
     editingCategoryId.value = null; categoryName.value = ''; categoryError.value = ''; emit('action', '分类已保存。')
   }
   catch (error) { categoryError.value = error instanceof Error ? error.message : '保存失败' }
@@ -179,8 +182,8 @@ function renameCategory(id: string, oldName: string) {
   editingCategoryId.value = id; categoryName.value = oldName; categoryError.value = ''
 }
 async function removeCategory(id: string, name: string) {
-  if (!auth.token || !(await confirmAction(`删除分类「${name}」？其中的网站会保留。`))) return
-  try { await store.removeCategory(auth.token, id); if (selectedCategory.value === id) selectedCategory.value = 'all'; emit('action', '分类已删除。') }
+  if (websiteToken.value === null || !(await confirmAction(`删除分类「${name}」？其中的网站会保留。`))) return
+  try { await store.removeCategory(websiteToken.value, id); if (selectedCategory.value === id) selectedCategory.value = 'all'; emit('action', '分类已删除。') }
   catch (error) { categoryError.value = error instanceof Error ? error.message : '删除失败' }
 }
 async function copyLink(item: Website) {

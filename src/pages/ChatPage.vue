@@ -9,6 +9,7 @@ import TerminalDrawer from '../components/chat/TerminalDrawer.vue'
 import WorkspaceTreeDrawer from '../components/chat/WorkspaceTreeDrawer.vue'
 import { getPlatformIcon, getProviderMeta } from '../components/chat/providerMeta'
 import OpusIcon from '../components/ui/OpusIcon.vue'
+import { isAndroidLocal } from '../desktop/androidLocal'
 import { searchSessionsAndMessages } from '../services/chatHelpers'
 import {
   readStoredWidth,
@@ -30,6 +31,7 @@ const emit = defineEmits<{
 }>()
 
 const fleet = useFleetStore()
+const android = isAndroidLocal()
 const { bubbleStyle, setBubbleStyle } = useWorkbenchTheme()
 
 function cycleBubbleStyle() {
@@ -786,7 +788,12 @@ function handleExportHtml() {
 }
 
 async function handleToggleNotifications() {
+  const wasEnabled = fleet.notificationsEnabled
   const ok = await fleet.toggleDesktopNotifications()
+  if (android) {
+    emit('action', ok ? '已开启系统通知' : wasEnabled ? '已关闭系统通知' : '请在 Android 系统设置中允许通知')
+    return
+  }
   if (fleet.notificationsEnabled && ok) {
     emit('action', '已开启后台审批与任务完成桌面通知')
   } else if (!fleet.notificationsEnabled) {
@@ -1260,6 +1267,12 @@ function handleClearMemory() {
 
               <div class="m-fmenu-sep" />
 
+              <button v-if="android" type="button" class="m-fmenu-item"
+                :aria-pressed="fleet.notificationsEnabled" @click="closeMobileFilterMenu(); handleToggleNotifications()">
+                <OpusIcon name="bell" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">系统通知</span>
+                <span class="m-fmenu-val">{{ fleet.notificationsEnabled ? '已开启' : '已关闭' }}</span>
+              </button>
               <button
                 type="button"
                 class="m-fmenu-item"

@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
 import type { CoreConnection, CoreConnectRequest } from '../api/core'
 import { desktopPlatform } from '../desktop/platform'
+import { androidInvoke } from '../desktop/androidLocal'
 import { normalizeCoreOrigin, setApiBaseUrl } from '../services/fleetUrl'
 import type { User } from '../types/widget'
 
@@ -15,6 +16,7 @@ export interface AuthStatus {
 
 const tokenKey = 'studiolo:access-token'
 const androidCoreKey = 'studiolo:android-core'
+const androidOfflineKey = 'studiolo:android-offline'
 
 export const useAuthStore = defineStore('auth', () => {
   localStorage.removeItem('studiolo:local-account:v1')
@@ -29,6 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
     setApiBaseUrl(androidCoreUrl.value)
   }
   const token = ref<string | null>(localStorage.getItem(tokenKey))
+  const androidOffline = ref(android && (localStorage.getItem(androidOfflineKey) === 'true' || !!token.value))
   const user = ref<User | null>(null)
   const mode = ref<AuthStatus['mode']>(android ? 'core' : 'local')
   const coreConnection = ref<CoreConnection>()
@@ -65,6 +68,17 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function bootstrap() {
+    if (android) {
+      await androidInvoke('android_core_status')
+      if (androidOffline.value) {
+        void bootstrapRemote().catch(() => {})
+        return
+      }
+    }
+    await bootstrapRemote()
+  }
+
+  async function bootstrapRemote() {
     if (android && !androidCoreUrl.value) return
     let status: AuthStatus | null = null
     try {
@@ -112,7 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function setAndroidCore(value: string) {
-    const origin = normalizeCoreOrigin(value)
+    const origin = android ? await androidInvoke<string>('android_validate_core_url', { url: value }) : normalizeCoreOrigin(value)
     const status = await apiRequest<AuthStatus>('/api/v1/auth/status', {}, null, origin)
     if (status.mode !== 'core') throw new Error('此地址未运行 Studiolo Core。')
     logout()
@@ -123,6 +137,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearAndroidCore() {
+    openAndroidSignIn()
     logout()
     localStorage.removeItem(androidCoreKey)
     androidCoreUrl.value = ''
@@ -135,6 +150,7 @@ export const useAuthStore = defineStore('auth', () => {
     })
     setSessionToken(result.access_token)
     await restore()
+    if (android) enterAndroidOffline()
   }
 
   async function register(username: string, password: string) {
@@ -143,6 +159,18 @@ export const useAuthStore = defineStore('auth', () => {
     })
     setSessionToken(result.access_token)
     await restore()
+    if (android) enterAndroidOffline()
+  }
+
+  function enterAndroidOffline() {
+    if (!android) return
+    androidOffline.value = true
+    localStorage.setItem(androidOfflineKey, 'true')
+  }
+
+  function openAndroidSignIn() {
+    androidOffline.value = false
+    localStorage.removeItem(androidOfflineKey)
   }
 
   async function setupOffline() {
@@ -175,6 +203,7 @@ export const useAuthStore = defineStore('auth', () => {
     mode,
     coreConnection,
     androidCoreUrl,
+    androidOffline,
     workstation,
     setupRequired,
     allowRegistration,
@@ -187,6 +216,8 @@ export const useAuthStore = defineStore('auth', () => {
     setupWithCore,
     setAndroidCore,
     clearAndroidCore,
+    enterAndroidOffline,
+    openAndroidSignIn,
     logout,
   }
 })

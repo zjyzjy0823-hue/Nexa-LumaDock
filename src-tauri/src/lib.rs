@@ -13,6 +13,9 @@ use tauri_plugin_opener::OpenerExt;
 mod backend_startup;
 use backend_startup::{startup_outcome, StartupOutcome};
 
+#[cfg(target_os = "android")]
+mod android;
+
 struct DesktopState {
     child: Mutex<Option<CommandChild>>,
     status: Mutex<String>,
@@ -292,6 +295,22 @@ fn setup_macos_menu(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android::plugin()).plugin(android::notifications_plugin()).invoke_handler(tauri::generate_handler![
+        desktop_platform, backend_status, open_external_url,
+        android::android_validate_core_url, android::android_core_status, android::android_core_prepare,
+        android::android_core_connect, android::android_core_cancel_pending, android::android_core_disconnect,
+        android::android_core_new_replica, android::android_websites_list, android::android_website_create,
+        android::android_website_update, android::android_website_delete, android::android_website_visit,
+        android::android_website_categories_list, android::android_website_categories_create,
+        android::android_website_categories_update, android::android_website_categories_delete,
+        android::android_sync_status, android::android_sync_run, android::android_sync_resync,
+        android::android_sync_conflicts_list, android::android_sync_conflict_resolve,
+        android::android_sync_rejected_list, android::android_sync_rejected_dismiss, android::android_sync_rejected_retry,
+        android::android_notifications_enabled, android::android_set_notifications_enabled, android::android_show_fleet_notification,
+    ]);
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![desktop_platform, backend_status, open_external_url]);
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -303,13 +322,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(DesktopState::default())
-        .invoke_handler(tauri::generate_handler![desktop_platform, backend_status, open_external_url])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             setup_macos_menu(app)?;
             #[cfg(desktop)]
             setup_tray(app)?;
-            // Android has no Python sidecar; §070-02 replaces it with a native layer.
             #[cfg(desktop)]
             start_backend(app.handle().clone());
             #[cfg(mobile)]

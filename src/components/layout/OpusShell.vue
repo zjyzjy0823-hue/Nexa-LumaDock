@@ -5,6 +5,8 @@ import { desktopPlatform } from '../../desktop/platform'
 import type { WorkbenchTheme } from '../../composables/useWorkbenchTheme'
 import DesktopTitleBar from '../desktop/DesktopTitleBar.vue'
 import { useCoreSync } from '../../composables/useCoreSync'
+import { runAndroidSync } from '../../api/sync'
+import { useWebsitesStore } from '../../stores/websites'
 import {
   readStoredWidth,
   saveStoredWidth,
@@ -42,6 +44,7 @@ const attentionTasks = computed(() => automation.items.filter(item => {
 }).length)
 const { connection, syncStatus, syncError, busy, refresh, sync } = useCoreSync(message => emit('action', message))
 const platform = desktopPlatform()
+const android = platform === 'android'
 const mac = platform === 'macos' || /Mac/i.test(navigator.platform)
 const ctrl = mac ? '⌘' : 'Ctrl'
 
@@ -184,7 +187,7 @@ watch([() => props.toast, () => props.toastKey], ([text]) => {
 })
 
 const syncKind = computed<'offline' | 'conflict' | 'pending' | 'synced'>(() => {
-  if (auth.mode === 'core') return 'synced'
+  if (auth.mode === 'core' && !android) return 'synced'
   if (!syncStatus.value?.connected) return 'offline'
   if (syncStatus.value.conflicts) return 'conflict'
   if (syncStatus.value.running || syncStatus.value.pending || syncStatus.value.inFlight || !syncStatus.value.lastSuccessAt) return 'pending'
@@ -192,7 +195,7 @@ const syncKind = computed<'offline' | 'conflict' | 'pending' | 'synced'>(() => {
 })
 const queued = computed(() => (syncStatus.value?.pending ?? 0) + (syncStatus.value?.inFlight ?? 0))
 const syncLabel = computed(() => {
-  if (auth.mode === 'core') return '直连 Core'
+  if (auth.mode === 'core' && !android) return '直连 Core'
   const state = syncStatus.value
   if (!state) return syncError.value || '正在读取同步状态'
   if (!state.connected) return '离线 · 本机可用'
@@ -302,9 +305,30 @@ function logoutAccount() {
 }
 defineExpose({ openDock: () => { dockOpen.value = true } })
 let resizeObserver: ResizeObserver | null = null
+let androidSyncTimer: ReturnType<typeof setInterval> | undefined
+let androidSyncActive = false
+async function syncAndroidForeground() {
+  const state = syncStatus.value
+  if (androidSyncActive || !state?.connected || state.running || state.blocked || document.hidden || !navigator.onLine) return
+  if (state.nextRetryAt && Date.parse(state.nextRetryAt) > Date.now()) return
+  if (state.lastError && !state.nextRetryAt) return
+  androidSyncActive = true
+  try {
+    const result = await runAndroidSync()
+    if (result.pulled || result.pushed) useWebsitesStore().invalidate()
+  } catch {
+    // Rust persists the reason and retry deadline for the next status poll.
+  } finally {
+    androidSyncActive = false
+  }
+}
 onMounted(() => {
   document.addEventListener('keydown', keydown)
   document.addEventListener('pointerdown', dismissSync)
+  if (android) {
+    androidSyncTimer = setInterval(syncAndroidForeground, 30_000)
+    window.addEventListener('online', syncAndroidForeground)
+  }
   if (typeof ResizeObserver !== 'undefined' && windowEl.value) {
     resizeObserver = new ResizeObserver(entries => {
       const width = entries[0]?.contentRect.width
@@ -316,6 +340,8 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', keydown)
   document.removeEventListener('pointerdown', dismissSync)
+  if (androidSyncTimer !== undefined) clearInterval(androidSyncTimer)
+  window.removeEventListener('online', syncAndroidForeground)
   resizeObserver?.disconnect()
   resizeObserver = null
 })
@@ -492,7 +518,7 @@ onUnmounted(() => {
             <div v-if="syncStatus?.conflicts" class="row"><span class="tile-icon" style="width:26px;height:26px"><OpusIcon name="alert" /></span><span class="grow"><div class="title" style="font-size:12.5px">{{ syncStatus.conflicts }} 个冲突待处理</div><div class="sub">需要确认保留本机或 Core 版本</div></span><button type="button" class="btn btn-sm btn-danger" @click="openSyncSettings">处理冲突</button></div>
             <div v-if="!queued && !syncStatus?.conflicts" class="cleared" style="padding:20px"><OpusIcon :name="syncKind === 'offline' ? 'wifiOff' : 'checks'" />{{ syncKind === 'offline' ? '离线：所有更改都已保存在本机' : '所有更改均已同步' }}</div>
           </div>
-          <div v-if="auth.mode === 'local'" style="display:flex;gap:8px;align-items:center"><span class="faint" style="font-size:11.5px;flex:1">共享空间只同步密文，这里不显示内容名称。</span><button type="button" class="btn btn-ghost btn-sm" @click="openSyncSettings">同步设置</button><button type="button" class="btn btn-primary btn-sm" :disabled="!syncStatus?.connected || busy || syncStatus.running" @click="sync"><OpusIcon name="sync" />立即同步</button></div>
+          <div v-if="auth.mode === 'local'" style="display:flex;gap:8px;align-items:center"><span class="faint" style="font-size:11.5px;flex:1">共享空间只同步密文，这里不显示内容名称。</span><button type="button" class="btn btn-ghost btn-sm" @click="openSyncSettings">同步设置</button><button type="button" class="btn btn-primary btn-sm" :disabled="!syncStatus?.connected || busy || syncStatus.running" @click="sync()"><OpusIcon name="sync" />立即同步</button></div>
         </div>
         <div class="toast-host desk"><div v-for="item in toasts" :key="item.id" class="toast" :class="{ out: item.out }" role="status">{{ item.text }}</div></div>
       </div>

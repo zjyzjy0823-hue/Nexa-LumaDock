@@ -16,6 +16,7 @@ import StorageSettings from '../components/settings/StorageSettings.vue'
 import SecuritySettings from '../components/settings/SecuritySettings.vue'
 import NotificationSettings from '../components/settings/NotificationSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
+import { isAndroidLocal } from '../desktop/androidLocal'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore, defaultSettings } from '../stores/settings'
 import type { SyncStatus } from '../api/sync'
@@ -60,6 +61,9 @@ const searchQuery = ref('')
 const showTools = ref(false)
 const auth = useAuthStore()
 const store = useSettingsStore()
+const androidLocal = isAndroidLocal()
+const mobileSections = computed(() => sections.filter(section =>
+  section.id !== 'appearance' && (store.loaded || section.id === 'sync')))
 const profile = computed<UserProfile>(() => ({ username: auth.user?.username ?? '', email: '', timezone: store.settings.deploymentTimezone ?? '未知', language: store.settings.language }))
 const appearance = computed<AppearanceConfig>(() => ({ ...defaultSettings.appearance, ...store.settings.appearance } as AppearanceConfig))
 function setMode(mode: AppearanceConfig['theme']) {
@@ -204,8 +208,9 @@ const mobileDetailLabel = computed(() => sections.find(item => item.id === mobil
     <p v-if="store.loading && !store.loaded" class="faint" role="status">正在加载设置…</p>
     <p v-if="store.error" class="notice danger" role="alert">{{ store.error }} <button class="btn btn-sm btn-ghost" type="button" @click="auth.token && store.load(auth.token, true).catch(() => {})">重试</button></p>
 
-    <template v-if="store.loaded && mobile">
-      <template v-if="!mobileDetail">
+    <template v-if="mobile && (store.loaded || androidLocal)">
+      <template v-if="!mobileDetail || (!store.loaded && mobileDetail !== 'sync')">
+        <template v-if="store.loaded">
         <div class="sec-t" style="margin-top:4px">主题</div>
         <OpusSegment class="mseg" role="group" aria-label="主题"><button v-for="item in themes" :key="item.id" type="button" :aria-pressed="theme === item.id" @click="setTheme(item.id)">{{ item.shortTitle }}</button></OpusSegment>
         <div class="sec-t">对话气泡样式</div>
@@ -234,16 +239,17 @@ const mobileDetailLabel = computed(() => sections.find(item => item.id === mobil
           <div><span>减少动态效果</span><button class="switch" type="button" role="switch" aria-label="减少动态效果" :aria-checked="!!reducedMotion" @click="emit('update:reducedMotion', !reducedMotion)"></button></div>
         </div>
         <p class="faint" style="font-size:12.5px;margin:0 4px 12px">低端设备可关闭模糊；玻璃材质只用于导航、卡片和弹层，列表与输入保持实体。</p>
-        <div class="sec-t">同步</div>
+        </template>
+        <div v-if="store.loaded" class="sec-t">同步</div>
         <div class="kvl mat-solid">
           <div><span>Core</span><button type="button" class="conn" :class="syncStatus?.connected ? 'online' : 'offline'" @click="openMobileSection('sync')">{{ syncLabel }}</button></div>
           <div><span>待同步</span><span>{{ (syncStatus?.pending ?? 0) + (syncStatus?.inFlight ?? 0) }} 项</span></div>
           <div v-if="syncStatus?.conflicts"><span>冲突</span><button type="button" class="btn btn-sm btn-danger" @click="openMobileSection('sync')">{{ syncStatus.conflicts }} 个待处理</button></div>
         </div>
-        <div class="sec-t">更多设置</div>
+        <div v-if="store.loaded" class="sec-t">更多设置</div>
         <nav class="mlist mat-solid" aria-label="设置类别">
-          <button v-for="item in sections.filter(s => s.id !== 'appearance')" :key="item.id" class="mrow" type="button" @click="openMobileSection(item.id)"><span class="grow"><span class="title">{{ item.label }}</span></span><span v-if="item.id === 'sync' && syncStatus?.conflicts" class="chip" style="color:var(--danger);background:var(--danger-soft)">{{ syncStatus.conflicts }} 冲突</span><OpusIcon name="chevR" /></button>
-          <button class="mrow" type="button" @click="resetSettings"><span class="grow"><span class="title">恢复默认设置</span></span></button>
+          <button v-for="item in mobileSections" :key="item.id" class="mrow" type="button" @click="openMobileSection(item.id)"><span class="grow"><span class="title">{{ item.label }}</span></span><span v-if="item.id === 'sync' && syncStatus?.conflicts" class="chip" style="color:var(--danger);background:var(--danger-soft)">{{ syncStatus.conflicts }} 冲突</span><OpusIcon name="chevR" /></button>
+          <button v-if="store.loaded" class="mrow" type="button" @click="resetSettings"><span class="grow"><span class="title">恢复默认设置</span></span></button>
         </nav>
       </template>
       <div v-else class="settings-content" :inert="saving">

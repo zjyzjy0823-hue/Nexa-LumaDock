@@ -226,6 +226,7 @@ async function submit() {
           <button class="btn btn-primary auth-submit" type="submit" :disabled="busy"><span>{{ busy ? '请稍候…' : mode === 'login' ? '进入 Studiolo' : '创建账户' }}</span><OpusIcon name="arrowUp" style="rotate:90deg" /></button>
         </form>
       </template>
+      <button v-if="platform === 'android'" class="btn btn-ghost" type="button" :disabled="busy" @click="auth.enterAndroidOffline()">使用本机网站</button>
     </section>
   </main>
 </template>

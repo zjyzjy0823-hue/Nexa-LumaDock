@@ -36,6 +36,7 @@ output/v059/
 backend/build/
 backend/dist/
 src-tauri/target/
+src-tauri/crates/studiolo-local-core/target/
 src-tauri/gen/
 src-tauri/binaries/studiolo-backend-*
 src-tauri/icons/*

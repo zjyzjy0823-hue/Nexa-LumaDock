@@ -56,6 +56,9 @@ const currentPage = ref<Page>(pageFromLocation())
 const android = desktopPlatform() === 'android'
 const desktop = isTauri() && !android
 const auth = useAuthStore()
+watch(() => auth.androidOffline, enabled => {
+  if (enabled && !auth.user) navigate('Websites')
+})
 const settings = useSettingsStore()
 const { theme, rawThemeId, setTheme, bubbleStyle, reducedTransparency } = useWorkbenchTheme()
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
@@ -298,7 +301,7 @@ onUnmounted(() => {
   <div :class="desktop ? 'desktop-app' : undefined">
   <div v-if="(desktopError || !authReady || authStartupError || !auth.user) && desktopPlatform() === 'macos'" class="macos-titlebar-inset" data-tauri-drag-region aria-hidden="true" />
   <div :class="desktop ? 'desktop-body' : undefined">
-  <template v-if="desktopError || !authReady || authStartupError || !auth.user">
+  <template v-if="desktopError || !authReady || authStartupError || (!auth.user && !auth.androidOffline)">
     <div :class="!mobile && desktopPlatform() !== 'macos' ? 'opus-auth-shell' : undefined">
       <template v-if="!mobile && desktopPlatform() !== 'macos'">
         <div class="glass-wallpaper" aria-hidden="true"></div>

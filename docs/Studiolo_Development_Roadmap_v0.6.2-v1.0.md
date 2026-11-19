@@ -1,20 +1,20 @@
 # Studiolo 开发路线图 · v0.6.2–v1.0.0
 
-- **更新日期** 2026-11-19（已完成 `v0.7.0` 主体与多端收口提交，转入 `v0.7.1`）
-- **仓库基线** `main @ 6ab1a0e`（`v0.7.0` Agent Fleet 协同工作台、内联媒体与五款气泡主题、macOS 双架构 DMG CI、Desktop/Android 原生直连 Core Fleet 登录及 OpenCode `allowedRoots` 校验均已落地）
+- **更新日期** 2026-11-19（`v0.8.0` Android 网站离线同步已实现，并通过 Android 真机与实际 Core 的 HTTPS 验收）
+- **v0.7 系列实现基线** `main @ c2fa3df`
 - **关联文档** [当前架构审计、详细设计、迁移与 TBD](architecture-plan-v0.6.2.md)
 
 ## 产品方向与分期
 
 Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设备 Agent Fleet Chat（`/chat`）与 Shared Space（`/space`）在桌面端与手机 Web 端跑通并上线可用**，再补全 Android 原生 Rust `sqlx` 离线数据层与同步闭环，降低先重造第二套本地持久化的前序等待成本。Shared Space 坚持每读必重输密码，Agent Chat 坚持零聊天正文持久化，Cron 管理坚持单所有者语义。TBD 依赖产品确认后开放对应入口。
 
-| 版本 | 主要交付 | 依赖与主要风险 | 建议工作量 |
+| 版本 | 主要交付 | 依赖与主要风险 | 进度或预计工作量 |
 | --- | --- | --- | --- |
 | **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
 | **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审、多端直连 Core 登录与安全边界加固 | 本地全量回归已通过（107 前端 + 6 agent-node + 503 后端），待远端推送 CI 与多节点实机最终验收 | ✅ 主体已收口 |
 | **v0.7.1** | **Shared Space（`/space`）三档分级共享首版 & Theme Engine 标准化**：`standard`（随时查看/专用 Space Token API 直读）+ `protected`（UI 按次输密/细粒度 Vault Token 直读）+ `e2ee`（Argon2id/AES-256-GCM 零知识与 Epoch 轮换）；共用 Theme Registry 与可选 Liquid Glass | 本地全量单测、跨语言密码学向量与生产构建已通过，待远端 CI（含 PostgreSQL 0021 迁移）与真机验收（详单见 [v0.7.1 计划](v0.7.1-plan.md)） | ✅ 主体已落地 |
 | **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 `JobRef` 视图、CronPort 远程适配、通知脱敏与丢确认防重调、PyInstaller 打包加固 | 本地前后端与 AgentNode 单测及构建已通过，待实机 OpenClaw/Hermes 上游联调与 macOS DMG 实装验收 | ✅ 主体已落地 |
-| **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 🚧 下一阶段（12–20 人日） |
+| **v0.8.0** | **Android Local-first MVP**。Rust `sqlx` SQLite 与事务 Outbox、Keystore 配对、网站双向 Sync v3、Studiolo 应用与通知图标 | 已配置 JDK 21、SDK 36 和 NDK r28c，待 GitHub Actions 出包及 Windows、macOS 桌面副本交叉同步验收 | ✅ 已实现，Android 与 Core HTTPS 真机验收通过 |
 | **v0.8.1** | **Android 全业务与移动完整体验闭环**：Ledger / Data / Conflict Center、Automation、Share to Studiolo、Android 本地密文块缓存与无障碍/低端机优化 | 跨端金额/时区语义、父子依赖同步、TalkBack 与 48dp 触控规范、Android 密文块接入 | 14–24 人日 |
 | **v0.9.0** | **功能冻结、安全加固与发布工程**：长离线与密文恢复、桌面旧凭据安全存储迁移、Android WorkManager 后台同步、三端签名/公证候选包 | 跨版本升级与库/blob 一致性恢复、桌面凭据无损迁移、真机持久运行诊断 | 12–22 人日 |
 | **v1.0.0** | **三端正式发布**：Windows / macOS / Android 全量核心业务、Shared Space、Agent Fleet Chat、单所有者 Cron 与支持矩阵通过 | v0.9.0 候选验收、兼容矩阵、升级与故障回退演练 | 5–9 人日 |
@@ -60,13 +60,13 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 
 详细实施拆分与验收清单见 [v0.8.0 实施计划](v0.8.0-plan.md)。
 
-- **080-01b** 补齐干净环境 Android SDK/NDK/JDK21 工具链锁定与 GitHub CI APK 产出。
-- **080-02** 落地 Rust Commands、`sqlx` SQLite 迁移、受限 Repository 与 Websites/Outbox 同事务写入。
-- **080-03** 接入 Core HTTPS 登录、Personal Workspace 确认、Android Keystore 凭据存储与重新授权。
-- **080-04** 实现 Sync v3 前台推拉、游标分页、部分失败重放、冲突登记与快照恢复。
-- **080-05** 在真机上联调 Windows / macOS / Mac Core / Android Websites 端到端离线与重启收敛。
+- **080-01b** 已锁定 Android SDK、NDK、JDK 和 Rust 目标。已在 Windows 构建并安装 ARM64 debug APK。GitHub Actions 干净环境出包待验收。
+- **080-02** 已实现 Rust Commands、SQLite 迁移和网站与 Outbox 同事务写入。
+- **080-03** 已实现 Core HTTPS 配对、个人工作区确认、Android Keystore 和重新授权。
+- **080-04** 已实现前台 Sync v3、游标分页、幂等重试、冲突处理和快照恢复。隔离 Core 验证了冲突裁决和吊销后保留队列。
+- **080-05** Android 真机已通过实际 Core 的离线新增、编辑、删除、强杀重启和联网收敛验收。应用图标、启动标识和原生通知小图标已在真机验证。Windows 和 macOS 桌面副本的交叉同步待验收。
 
-**独立验收** 干净环境 CI 与真机可装可用；Windows/macOS 建站后 Android 可拉取；Android 断网编辑、强杀重启并联网后，UUID 与最终数据在 Core 及桌面端完整收敛。
+**剩余验收** 确认 GitHub Actions 产出的 APK 在真机可安装。Windows 和 macOS 桌面副本连接同一 Core 后，确认桌面与 Android 的网站数据和 UUID 一致。
 
 ## v0.8.1 · Android 全业务与移动离线完整闭环
 

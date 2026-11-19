@@ -17,8 +17,10 @@ import type { CorePlatform } from '../../api/core'
 defineOptions({ inheritAttrs: false })
 const emit = defineEmits<{ action: [message: string] }>()
 const { connection, connectionTest, syncStatus, syncResult, connectionLoading, syncLoading,
-  action, busy, connectionError, syncError, refresh, connect, test, disconnect, sync } = useCoreSync(message => emit('action', message))
+  action, busy, connectionError, syncError, nativeBinding, needsReplica, refresh, connect, test, disconnect, sync, newReplica
+} = useCoreSync(message => emit('action', message))
 const platform = desktopPlatform()
+const android = platform === 'android'
 const platformLabels: Record<CorePlatform, string> = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS', web: 'Web' }
 const coreUrl = ref('')
 const username = ref('')
@@ -26,23 +28,28 @@ const password = ref('')
 const clientName = ref(`Studiolo ${platformLabels[platform]}`)
 const validationError = ref('')
 const conflictsOpen = ref(false)
-const testStatus = computed(() => connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
+const testStatus = computed(() => pairingRequired.value || nativeBinding.value?.status === 'revoked'
+  ? 'unauthorized' : connectionTest.value?.status ?? (connection.value?.connected ? 'connected' : 'disconnected'))
 const statusLabels = { connected: '已连接', disconnected: '未连接', unauthorized: '凭证失效', unreachable: '无法访问 Core' }
 const syncDisplay = computed(() => syncStatus.value ? syncStatusDisplay(syncStatus.value) : null)
 const auth = useAuthStore()
+const pairingRequired = computed(() => android && syncStatus.value?.blocked && syncStatus.value.lastError === 'unauthorized')
+const rejectedToken = () => auth.token ?? (android ? '' : null)
 const rejectedEntries = ref<RejectedEntry[]>([])
 const rejectedBusy = ref<string | null>(null)
 
 async function loadRejected() {
-  if (!auth.token || !syncStatus.value?.rejected) { rejectedEntries.value = []; return }
-  try { rejectedEntries.value = await getSyncRejected(auth.token) } catch { rejectedEntries.value = [] }
+  const token = rejectedToken()
+  if (token === null || !syncStatus.value?.rejected) { rejectedEntries.value = []; return }
+  try { rejectedEntries.value = await getSyncRejected(token) } catch { rejectedEntries.value = [] }
 }
 
 async function decideRejected(entry: RejectedEntry, decision: 'dismiss' | 'retry') {
-  if (!auth.token || rejectedBusy.value) return
+  const token = rejectedToken()
+  if (token === null || rejectedBusy.value) return
   rejectedBusy.value = entry.id
   try {
-    await decideSyncRejected(auth.token, entry.id, decision)
+    await decideSyncRejected(token, entry.id, decision)
     emit('action', decision === 'dismiss' ? '已放弃这条被拒绝的写入。' : '已按当前数据重新排队。')
     await refresh(false)
     await loadRejected()
@@ -51,7 +58,8 @@ async function decideRejected(entry: RejectedEntry, decision: 'dismiss' | 'retry
   } finally { rejectedBusy.value = null }
 }
 
-watch(() => syncStatus.value?.rejected, () => { void loadRejected() })
+watch([() => syncStatus.value?.rejected, () => syncStatus.value?.lastSuccessAt], () => { void loadRejected() })
+watch(() => nativeBinding.value?.coreUrl, value => { if (value) coreUrl.value = value })
 onMounted(() => { void loadRejected() })
 
 function formatTime(value: string | null) {
@@ -85,13 +93,13 @@ onUnmounted(() => { password.value = '' })
 </script>
 
 <template>
-  <SettingsSection v-if="auth.mode === 'core'" title="Core 连接" description="此设备直接访问 Core 中的数据。">
+  <SettingsSection v-if="auth.mode === 'core' && !android" title="Core 连接" description="此设备直接访问 Core 中的数据。">
     <div v-if="auth.androidCoreUrl" class="settings-card">
       <p class="sync-note">{{ auth.androidCoreUrl }}</p>
       <ActionButton variant="secondary" @click="auth.clearAndroidCore()">退出登录并更换服务器</ActionButton>
     </div>
   </SettingsSection>
-  <SettingsSection v-else title="同步" description="本地修改立即保存在这台设备，连接 Studiolo Core 后会在后台自动同步。">
+  <SettingsSection v-else title="同步" :description="android ? '网站修改立即保存在本机，连接 Core 后可在前台同步。' : '本地修改立即保存在这台设备，连接 Studiolo Core 后会在后台自动同步。'">
     <div class="settings-card" :aria-busy="connectionLoading || (!!action && action !== 'sync')">
       <div class="settings-card__heading">
         <span>Core 连接</span>
@@ -100,9 +108,10 @@ onUnmounted(() => { password.value = '' })
       <p v-if="connectionLoading" class="sync-note" role="status">正在加载连接…</p>
       <div v-if="connectionError || validationError" class="notice danger" role="alert">{{ validationError || connectionError }}</div>
 
-      <template v-if="connection?.connected">
+      <template v-if="connection?.connected && !pairingRequired">
         <dl class="connection-details">
           <dt>Core 地址</dt><dd>{{ connection.coreUrl }}</dd>
+          <template v-if="nativeBinding?.workspaceName"><dt>个人工作区</dt><dd>{{ nativeBinding.workspaceName }}</dd></template>
           <dt>设备名称</dt><dd>{{ connection.clientName }}</dd>
           <dt>平台</dt><dd>{{ platformLabels[connection.platform] }}</dd>
           <dt>客户端版本</dt><dd>{{ connection.appVersion }}</dd>
@@ -117,7 +126,7 @@ onUnmounted(() => { password.value = '' })
         </details>
         <p v-if="connectionTest" class="sync-note" role="status">{{ { connected: '连接正常', disconnected: '尚未连接', unreachable: '无法访问 Core，请检查服务和网络。', unauthorized: 'Client 凭证无效，需要重新连接或修复。当前版本不支持自动修复。' }[connectionTest.status] }}</p>
         <div class="settings-button-row">
-          <ActionButton variant="secondary" :disabled="busy" @click="test">{{ action === 'test' ? '测试中…' : '测试连接' }}</ActionButton>
+          <ActionButton v-if="!android" variant="secondary" :disabled="busy" @click="test">{{ action === 'test' ? '测试中…' : '测试连接' }}</ActionButton>
           <ActionButton variant="danger" :disabled="busy" @click="disconnect">{{ action === 'disconnect' ? '断开中…' : '断开连接' }}</ActionButton>
         </div>
       </template>
@@ -129,14 +138,21 @@ onUnmounted(() => { password.value = '' })
           <label class="settings-field"><span>用户名</span><Input v-model="username" aria-label="Core 用户名" autocomplete="off" :disabled="busy" required /></label>
           <label class="settings-field"><span>密码</span><Input v-model="password" type="password" aria-label="Core 密码" autocomplete="off" :disabled="busy" required /></label>
         </div>
-        <p class="sync-note">可信局域网开发环境可使用 HTTP，例如 http://192.168.1.50:8000。密码仅用于本次连接，不会保存。</p>
-        <div class="settings-button-row"><ActionButton type="submit" :disabled="busy">{{ action === 'connect' ? '连接中…' : '连接 Core' }}</ActionButton></div>
+        <p v-if="android" class="sync-note">使用 Core 的 HTTPS 地址。连接前需要确认账号对应的个人工作区。</p>
+        <p v-else class="sync-note">可信局域网开发环境可使用 HTTP，例如 http://192.168.1.50:8000。密码仅用于本次连接，不会保存。</p>
+        <div class="settings-button-row">
+          <ActionButton type="submit" :disabled="busy">{{ action === 'connect' ? '连接中…' : pairingRequired ? '重新授权' : '连接 Core' }}</ActionButton>
+          <ActionButton v-if="pairingRequired" variant="secondary" :disabled="busy" @click="disconnect">断开连接</ActionButton>
+        </div>
       </form>
-      <div class="settings-button-row"><ActionButton variant="ghost" :disabled="busy" @click="refresh()"><RefreshCw :size="14" />刷新状态</ActionButton></div>
+      <div class="settings-button-row">
+        <ActionButton variant="ghost" :disabled="busy" @click="refresh()"><RefreshCw :size="14" />刷新状态</ActionButton>
+        <ActionButton v-if="android && (needsReplica || nativeBinding?.status === 'revoked')" variant="secondary" :disabled="busy" @click="newReplica">新建独立副本</ActionButton>
+      </div>
     </div>
 
     <div class="settings-card" :aria-busy="syncLoading || action === 'sync' || syncStatus?.running">
-      <div class="settings-card__heading"><span>数据同步</span><small>后台自动同步</small></div>
+      <div class="settings-card__heading"><span>数据同步</span><small>{{ android ? '前台同步' : '后台自动同步' }}</small></div>
       <p v-if="syncLoading" class="sync-note" role="status">正在加载同步状态…</p>
       <div v-if="syncError" class="notice danger" role="alert">{{ syncError }}</div>
       <template v-if="syncStatus">
@@ -165,7 +181,10 @@ onUnmounted(() => { password.value = '' })
         {{ syncResult.status === 'ok' ? '同步完成' : '同步未完成' }}：上传 {{ syncResult.pushed }} 项，接收 {{ syncResult.pulled }} 项。
         <span v-if="syncResult.status === 'error'">{{ syncErrorMessage(syncResult.lastError) }}</span>
       </p>
-      <div class="settings-button-row sync-actions"><ActionButton :disabled="busy || !connection?.connected || !syncStatus || !!connectionError" @click="sync"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton></div>
+      <div class="settings-button-row sync-actions">
+        <ActionButton :disabled="busy || !connection?.connected || !syncStatus || (android ? syncStatus.blocked || syncStatus.running : !!connectionError)" @click="sync()"><RefreshCw :size="15" :class="{ 'sync-spin': action === 'sync' || syncStatus?.running }" />{{ action === 'sync' ? '正在同步…' : '立即同步' }}</ActionButton>
+        <ActionButton v-if="android" variant="secondary" :disabled="busy || !connection?.connected || !syncStatus || syncStatus.blocked || syncStatus.running" @click="sync(true)">获取 Core 快照</ActionButton>
+      </div>
     </div>
 
     <div v-if="rejectedEntries.length" class="settings-card">
@@ -180,6 +199,11 @@ onUnmounted(() => { password.value = '' })
           </div>
         </li>
       </ul>
+    </div>
+    <div v-if="android" class="settings-card">
+      <div class="settings-card__heading"><span>在线 Core 账号</span></div>
+      <p class="sync-note">聊天和空间使用在线账号。{{ auth.androidCoreUrl }}</p>
+      <ActionButton variant="secondary" @click="auth.user ? auth.clearAndroidCore() : auth.openAndroidSignIn()">{{ auth.user ? '退出登录并更换服务器' : '登录 Core 账号' }}</ActionButton>
     </div>
   </SettingsSection>
   <ConflictCenter :open="conflictsOpen" :refresh-status="() => refresh(false)" @close="conflictsOpen = false" @action="message => emit('action', message)" />

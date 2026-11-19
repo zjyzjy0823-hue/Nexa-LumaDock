@@ -2,10 +2,13 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '../api/client'
 import { connectCore, disconnectCore, getCoreConnection, testCoreConnection } from '../api/core'
 import type { CoreConnection, CoreConnectionTest, CoreConnectRequest } from '../api/core'
-import { getSyncStatus, runSync } from '../api/sync'
+import { getSyncStatus, runAndroidSync, runSync } from '../api/sync'
 import type { SyncRunResult, SyncStatus } from '../api/sync'
 import { coreSyncRequestError, syncErrorMessage } from '../services/coreSyncErrors'
+import { androidInvoke, AndroidLocalError, isAndroidLocal } from '../desktop/androidLocal'
+import type { AndroidBinding, PairingPreview } from '../desktop/androidLocal'
 import { useAuthStore } from '../stores/auth'
+import { useWebsitesStore } from '../stores/websites'
 import { confirmAction } from './useConfirm'
 
 // This timer only reads Local status. The Local Backend owns all sync cycles,
@@ -14,6 +17,9 @@ export const CORE_SYNC_STATUS_POLL_INTERVAL_MS = 5_000
 
 export function useCoreSync(notify: (message: string) => void) {
   const auth = useAuthStore()
+  const android = isAndroidLocal()
+  const nativeBinding = ref<AndroidBinding | null>(null)
+  const needsReplica = ref(false)
   const connection = ref<CoreConnection | null>(null)
   const connectionTest = ref<CoreConnectionTest | null>(null)
   const syncStatus = ref<SyncStatus | null>(null)
@@ -31,8 +37,26 @@ export function useCoreSync(notify: (message: string) => void) {
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let pollController: AbortController | null = null
   type Session = { token: string; generation: number }
-  const current = (requestSession: Session) => alive && auth.mode === 'local' && requestSession.generation === sessionGeneration && requestSession.token === auth.token
-  const session = (): Session | null => auth.mode === 'local' && auth.token ? { token: auth.token, generation: sessionGeneration } : null
+  const sessionToken = () => android ? '' : auth.mode === 'local' ? auth.token : null
+  const current = (requestSession: Session) => alive && requestSession.generation === sessionGeneration && requestSession.token === sessionToken()
+  const session = (): Session | null => {
+    const token = sessionToken()
+    return token === null ? null : { token, generation: sessionGeneration }
+  }
+
+  async function readConnection(token: string): Promise<CoreConnection> {
+    if (!android) return getCoreConnection(token)
+    const binding = await androidInvoke<AndroidBinding>('android_core_status')
+    nativeBinding.value = binding
+    if (binding.status !== 'connected' || !binding.coreUrl || !binding.clientId || !binding.workspaceId || !binding.clientName || !binding.connectedAt) {
+      return { connected: false }
+    }
+    return {
+      connected: true, coreUrl: binding.coreUrl, clientId: binding.clientId, workspaceId: binding.workspaceId,
+      installationId: binding.installationId, clientName: binding.clientName, connectedAt: binding.connectedAt,
+      platform: 'android', appVersion: binding.appVersion ?? '',
+    }
+  }
 
   function stopPolling() {
     if (pollTimer !== null) clearTimeout(pollTimer)
@@ -76,6 +100,10 @@ export function useCoreSync(notify: (message: string) => void) {
   }
 
   async function errorMessage(error: unknown, requestSession: Session) {
+    if (android && error instanceof AndroidLocalError) {
+      if (error.code === 'client_revoked' || error.code === 'connection_binding_mismatch') needsReplica.value = true
+      return error.message
+    }
     if (current(requestSession) && error instanceof ApiError && error.status === 401) {
       // Core login/Client failures can also return 401. Only auth.restore can
       // decide whether the Local JWT has expired; do not log out a valid user.
@@ -92,7 +120,7 @@ export function useCoreSync(notify: (message: string) => void) {
     if (clearErrors) connectionError.value = syncError.value = ''
     const previousConnection = auth.coreConnection
     try {
-      const results = await Promise.allSettled([getCoreConnection(requestSession.token), getSyncStatus(requestSession.token)])
+      const results = await Promise.allSettled([readConnection(requestSession.token), getSyncStatus(requestSession.token)])
       if (!current(requestSession)) return
       const [core, sync] = results
       if (core.status === 'fulfilled') {
@@ -141,8 +169,22 @@ export function useCoreSync(notify: (message: string) => void) {
   }
 
   async function connect(payload: CoreConnectRequest) {
-    if (connection.value?.connected) return
+    if (connection.value?.connected && !(android && syncStatus.value?.blocked)) return
     await perform('connect', async requestSession => {
+      if (android) {
+        const { platform: _platform, ...request } = payload
+        const preview = await androidInvoke<PairingPreview>('android_core_prepare', { request })
+        const confirmationId = preview.confirmationId
+        if (!current(requestSession) || !await confirmAction(`将本机网站与「${preview.workspaceName}」同步？\n${preview.coreUrl}`) || !current(requestSession)) {
+          await androidInvoke('android_core_cancel_pending', { confirmationId })
+          return
+        }
+        await androidInvoke('android_core_connect', { confirmationId })
+        needsReplica.value = false
+        connectionTest.value = syncResult.value = null
+        notify('Core 已连接，可立即同步本机网站。')
+        return
+      }
       const result = await connectCore(requestSession.token, payload)
       if (!current(requestSession)) return
       connection.value = result
@@ -166,7 +208,9 @@ export function useCoreSync(notify: (message: string) => void) {
     await perform('disconnect', async requestSession => {
       if (!await confirmAction('断开连接只移除这台设备保存的 Core 连接信息，不会删除本地数据，也不会自动撤销 Core 上的 Client。')) return
       if (!current(requestSession)) return
-      const result = await disconnectCore(requestSession.token)
+      const result = android
+        ? (await androidInvoke('android_core_disconnect'), { connected: false } as const)
+        : await disconnectCore(requestSession.token)
       if (!current(requestSession)) return
       connection.value = result
       auth.coreConnection = result
@@ -176,18 +220,33 @@ export function useCoreSync(notify: (message: string) => void) {
     })
   }
 
-  async function sync() {
-    if (busy.value || !auth.token || !connection.value?.connected) return
+  async function sync(resync = false) {
+    if (busy.value || !session() || !connection.value?.connected) return
     syncResult.value = null
     await perform('sync', async requestSession => {
-      const result = await runSync(requestSession.token)
+      if (resync && (!await confirmAction('重新获取 Core 网站快照？本机草稿会保留，存在差异的改动会列为冲突。') || !current(requestSession))) return
+      const result = android ? await runAndroidSync(resync) : await runSync(requestSession.token)
       if (!current(requestSession)) return
+      if (android) useWebsitesStore().invalidate()
       syncResult.value = result
       if (result.status === 'error') {
         syncError.value = syncErrorMessage(result.lastError)
         if (result.lastError === 'unauthorized') connectionTest.value = { connected: false, status: 'unauthorized' }
       }
       notify(result.status === 'ok' ? `同步完成：上传 ${result.pushed} 项，接收 ${result.pulled} 项。` : `同步未完成：${syncError.value}`)
+    })
+  }
+
+  async function newReplica() {
+    if (!android) return
+    await perform('disconnect', async requestSession => {
+      if (!await confirmAction('新建独立网站副本？旧副本及其待同步改动会保存在本机。') || !current(requestSession)) return
+      await androidInvoke('android_core_new_replica')
+      nativeBinding.value = null
+      needsReplica.value = false
+      syncResult.value = null
+      useWebsitesStore().reset()
+      notify('已新建独立网站副本，可以重新配对。')
     })
   }
 
@@ -205,5 +264,6 @@ export function useCoreSync(notify: (message: string) => void) {
   }, { flush: 'sync' })
   onMounted(() => { mounted = true; void refresh() })
   onUnmounted(() => { alive = mounted = false; sessionGeneration += 1; stopPolling() })
-  return { connection, connectionTest, syncStatus, syncResult, connectionLoading, syncLoading, action, busy, connectionError, syncError, refresh, connect, test, disconnect, sync }
+  return { connection, connectionTest, syncStatus, syncResult, connectionLoading, syncLoading, action, busy, connectionError, syncError,
+    nativeBinding, needsReplica, refresh, connect, test, disconnect, sync, newReplica }
 }

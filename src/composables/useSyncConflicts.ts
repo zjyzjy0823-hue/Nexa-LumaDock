@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import { ApiError } from '../api/client'
 import { getSyncConflict, getSyncConflicts, resolveSyncConflict } from '../api/sync'
 import type { ConflictStrategy, SyncConflict } from '../api/sync'
+import { AndroidLocalError, isAndroidLocal } from '../desktop/androidLocal'
 import { conflictConfirmation, conflictRequestError } from '../services/conflictPresentation'
 import { ledgerService } from '../services/ledger'
 import { websiteService } from '../services/websites'
@@ -12,6 +13,8 @@ import { confirmAction } from './useConfirm'
 
 export function useSyncConflicts(open: Ref<boolean>, notify: (message: string) => void, onResolved: () => void | Promise<void>) {
   const auth = useAuthStore()
+  const android = isAndroidLocal()
+  const token = () => android ? '' : auth.token
   const conflicts = ref<SyncConflict[]>([])
   const selected = ref<SyncConflict | null>(null)
   const references = ref<Record<string, string>>({})
@@ -27,15 +30,18 @@ export function useSyncConflicts(open: Ref<boolean>, notify: (message: string) =
   let listController: AbortController | null = null
   let detailController: AbortController | null = null
   type Session = { token: string; generation: number }
-  const session = (): Session | null => auth.token && open.value && alive ? { token: auth.token, generation: sessionGeneration } : null
-  const current = (value: Session) => alive && open.value && value.token === auth.token && value.generation === sessionGeneration
+  const session = (): Session | null => {
+    const value = token()
+    return value !== null && open.value && alive ? { token: value, generation: sessionGeneration } : null
+  }
+  const current = (value: Session) => alive && open.value && value.token === token() && value.generation === sessionGeneration
 
   async function report(cause: unknown, value: Session) {
     if (!current(value)) return
     if (cause instanceof ApiError && cause.status === 401) {
       try { await auth.restore() } catch { /* auth.restore checks the Local session */ }
     }
-    if (current(value)) error.value = conflictRequestError(cause)
+    if (current(value)) error.value = cause instanceof AndroidLocalError ? cause.message : conflictRequestError(cause)
   }
 
   async function select(id: string, clearError = true) {
@@ -102,7 +108,7 @@ export function useSyncConflicts(open: Ref<boolean>, notify: (message: string) =
       if (!current(value)) return
       conflicts.value = conflicts.value.filter(item => item.id !== conflict.id)
       selected.value = null
-      notify(strategy === 'local' ? '已保留最新本机版本，后台将自动同步；若 Core 再次更改，会重新显示冲突。' : '已使用 Core 版本，本机修改和后续编辑已放弃。')
+      notify(strategy === 'local' ? '已保留最新本机版本并重新排队。若 Core 再次更改，会重新显示冲突。' : '已使用 Core 版本，本机修改和后续编辑已放弃。')
       // Refresh the status immediately; scheduling and pushing remain Backend-owned.
       await onResolved()
       if (!current(value)) return
@@ -129,7 +135,7 @@ export function useSyncConflicts(open: Ref<boolean>, notify: (message: string) =
     listLoading.value = detailLoading.value = resolving.value = false
     error.value = ''
   }
-  watch([open, () => auth.token], () => { reset(); if (mounted && alive && open.value && auth.token) void refresh() }, { flush: 'sync' })
+  watch([open, token], () => { reset(); if (mounted && alive && open.value && token() !== null) void refresh() }, { flush: 'sync' })
   onMounted(() => { mounted = true; if (open.value) void refresh() })
   onUnmounted(() => { alive = mounted = false; reset() })
   return { conflicts, selected, references, listLoading, detailLoading, resolving, error, busy, refresh, select, resolve }

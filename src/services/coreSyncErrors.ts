@@ -19,6 +19,13 @@ const syncErrors: Record<string, string> = {
   collection_id_immutable: '同步记录不能更改所属集合',
   unknown_entity_type: '同步数据类型不受支持',
   internal_error: '本机同步未完成，请检查本机后端',
+  network_error: '无法连接 Core，请检查网络',
+  sync_protocol_mismatch: 'Core 与本机同步协议不兼容',
+  sync_in_progress: '正在同步，请稍后重试',
+  client_revoked: 'Core 已吊销此安装身份',
+  resync_required: '同步游标已失效，需要重新获取 Core 快照',
+  snapshot_expired: 'Core 快照已过期，请重试',
+  credential_storage: '无法读写 Android 安全存储',
 }
 
 // Never render an arbitrary server body, traceback, URL or credential.
@@ -36,7 +43,7 @@ export function syncStatusDisplay(status: SyncStatus, now = Date.now()) {
   }
   if (status.blocked) return { label: '需要处理', detail: syncErrorMessage(status.lastError), tone: 'warning' }
   if (!status.connected) return { label: '等待同步', detail: changes ? `${changes} 个更改已安全保存在本机，连接 Core 后将自动同步` : '连接 Core 后将自动同步', tone: 'waiting' }
-  if (status.lastError === 'unreachable' || status.lastError === 'timeout') {
+  if (status.lastError === 'unreachable' || status.lastError === 'timeout' || status.lastError === 'network_error') {
     return { label: 'Core 离线', detail: changes ? `${changes} 个更改已安全保存在本机` : '本机数据已安全保存，后台将自动重试', tone: 'waiting' }
   }
   if (status.lastError) return { label: '需要处理', detail: syncErrorMessage(status.lastError), tone: 'warning' }

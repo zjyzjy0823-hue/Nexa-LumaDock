@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
+import { androidInvoke, isAndroidLocal } from '../desktop/androidLocal'
 import { downloadAndDecryptBlob, encryptAndUploadFile } from '../services/blobTransfer'
 import { normalizeCoreOrigin } from '../services/fleetUrl'
 import {
@@ -235,9 +236,17 @@ export const useFleetStore = defineStore('fleet', () => {
   const forkSeedBySession = ref<Record<string, string>>({})
   const sideChatSessionKeyByParent = ref<Record<string, string>>({})
   const composerModeBySession = ref<Record<string, ComposerMode>>({})
+  const android = isAndroidLocal()
   const notificationsEnabled = ref(
-    typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted',
+    !android && typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted',
   )
+  const androidNotificationsReady = android
+    ? androidInvoke<boolean>('android_notifications_enabled').then(
+      enabled => { notificationsEnabled.value = enabled },
+      () => {},
+    )
+    : null
+  let changingAndroidNotifications = false
   const unreadNotifyTitle = ref('')
   const tokenUsageStateBySession = ref<Record<string, SessionTokenState>>({})
   const todosBySession = ref<Record<string, TodoItem[]>>({})
@@ -2976,6 +2985,21 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   async function toggleDesktopNotifications(): Promise<boolean> {
+    if (androidNotificationsReady) {
+      if (changingAndroidNotifications) return notificationsEnabled.value
+      changingAndroidNotifications = true
+      try {
+        await androidNotificationsReady
+        notificationsEnabled.value = await androidInvoke<boolean>('android_set_notifications_enabled', {
+          enabled: !notificationsEnabled.value,
+        })
+        return notificationsEnabled.value
+      } catch {
+        return false
+      } finally {
+        changingAndroidNotifications = false
+      }
+    }
     if (typeof window === 'undefined' || typeof Notification === 'undefined') return false
     if (notificationsEnabled.value) {
       notificationsEnabled.value = false
@@ -3020,7 +3044,9 @@ export const useFleetStore = defineStore('fleet', () => {
     if (typeof document === 'undefined') return
     if (document.hidden) {
       unreadNotifyTitle.value = title
-      if (notificationsEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      if (android && notificationsEnabled.value) {
+        void androidInvoke('android_show_fleet_notification', { title, body: body.slice(0, 120) }).catch(() => {})
+      } else if (notificationsEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try {
           new Notification(title, { body: body.slice(0, 120) })
         } catch {

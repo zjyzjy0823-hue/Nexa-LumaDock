@@ -12,6 +12,7 @@ export const useWebsitesStore = defineStore('websites', () => {
   const recentLoadedAt = ref(0)
   const loading = ref(false)
   const error = ref('')
+  const revision = ref(0)
   let sequence = 0
 
   async function load(token: string, filters: WebsiteFilters = {}) {
@@ -80,6 +81,6 @@ export const useWebsitesStore = defineStore('websites', () => {
     websites.value = websites.value.map(item => item.categoryId === id ? { ...item, categoryId: null } : item)
   }
   function reset() { ++sequence; websites.value = []; recent.value = []; categories.value = []; error.value = ''; loading.value = false; recentLoading.value = false; recentError.value = ''; recentLoadedAt.value = 0 }
-  function invalidate() { recentLoadedAt.value = 0 }
-  return { websites, recent, categories, loading, error, recentLoading, recentError, load, loadRecent, visit, create, update, remove, createCategory, renameCategory, removeCategory, reset, invalidate }
+  function invalidate() { recentLoadedAt.value = 0; revision.value++ }
+  return { websites, recent, categories, loading, error, revision, recentLoading, recentError, load, loadRecent, visit, create, update, remove, createCategory, renameCategory, removeCategory, reset, invalidate }
 })
