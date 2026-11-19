@@ -12,7 +12,7 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 | --- | --- | --- | --- |
 | **v0.6.2** | **已收口**：架构审计、Sync v3 契约、`0018`/`0019` 迁移与恢复、Android 壳（`3537e1f`）、Studiolo 全面更名与 Mac Core/Fleet 架构冻结 | 仅余可选打 `v0.6.2` 发行 tag | ✅ 已收口 |
 | **v0.7.0** | **Mac Core 部署与多设备 Agent Fleet Chat（`/chat` MVP + 协同工作台）**：Mac 常驻 Core + VPS TLS 反向入口，接入 Hermes / Codex / OpenCode / dsh / Antigravity / OpenClaw、远程审批、Diff 评审、多端直连 Core 登录与安全边界加固 | 本地全量回归已通过（107 前端 + 6 agent-node + 503 后端），待远端推送 CI 与多节点实机最终验收 | ✅ 主体已收口 |
-| **v0.7.1** | **Shared Space（`/space`）加密共享首版 & Theme Engine 标准化**：Argon2id/AEAD 密文、每读重输密码与 Epoch 轮换、Mac/桌面/手机 Web 可用；共用 Theme Registry 与可选 Liquid Glass | TBD-01–04/08/09 参数冻结、密码学跨语言向量、旧 v3 外观严格字段兼容 | 🚧 下一阶段（15–24 人日） |
+| **v0.7.1** | **Shared Space（`/space`）三档分级共享首版 & Theme Engine 标准化**：`standard`（随时查看/专用 Space Token API 直读）+ `protected`（UI 按次输密/细粒度 Vault Token 直读）+ `e2ee`（Argon2id/AES-256-GCM 零知识与 Epoch 轮换）；共用 Theme Registry 与可选 Liquid Glass | 密码学跨语言向量、三档隔离与审计矩阵、旧 v3 外观严格字段兼容（详单见 [v0.7.1 计划](v0.7.1-plan.md)） | 🚧 下一阶段（15–24 人日） |
 | **v0.7.2** | **统一定时任务（Cron）管理 & macOS 桌面端回归**：Studiolo / OpenClaw / Hermes 单所有者 Job/Run 视图、通知脱敏、macOS 打包与 Core 联调 | Hermes/OpenClaw 原生 Cron 接口版本、并发与丢确认防重调、macOS 签名范围 | 12–20 人日 |
 | **v0.8.0** | **Android Local-first MVP**：CI Android SDK 构建链、Rust `sqlx` SQLite + Outbox 同事务、Keystore 认证与 Websites 双向 Sync v3 | Android 工具链配置（JDK21/SDK37/NDK）、Rust 与 Python 双端 schema 一致性 | 12–20 人日 |
 | **v0.8.1** | **Android 全业务与移动完整体验闭环**：Ledger / Data / Conflict Center、Automation、Share to Studiolo、Android 本地密文块缓存与无障碍/低端机优化 | 跨端金额/时区语义、父子依赖同步、TalkBack 与 48dp 触控规范、Android 密文块接入 | 14–24 人日 |
@@ -36,14 +36,16 @@ Studiolo 保留 Local-first 及多端同步。**先让常驻 Mac Core、多设�
 
 **独立验收** 在真实 Mac Core + Windows + 手机 + OCI/腾讯云节点环境下完成 6 类 Harness 建连、历史上游拉取、并发流式输出、远程工具批准、节点休眠离线与断网重连；数据库、日志、Outbox 与诊断导出均无任何聊天正文与模型订阅密钥；既有 Local / Sync v3 / Data Actions 零回归。
 
-## v0.7.1 · Shared Space（`/space`）与 Theme Engine
+## v0.7.1 · Shared Space（`/space`）三档分级共享与 Theme Engine
 
-- **071-01 安全原型与 TBD 冻结**：验证 `Argon2id` + AEAD（`XChaCha20-Poly1305` / `AES-GCM`）密文格式与跨语言测试向量，冻结 TBD-01–04/09 及文件/空间限额。
-- **071-02 密文同步 API 与仓储**：Core 落地隔离 `Space`、`DeviceGrant`、`KeyEnvelope(epoch)`、`EntryRevision`、`CipherBlob`、`Change` 与 `MutationReceipt` 模型和配额/分块游标；桌面 Sidecar 落地本地密文块仓储与 Outbox。
-- **071-03 按次密码解密与轮换**：将 `/space` 占位页（及手机浏览器 WebCrypto / 受控 CLI）实现为完整的 Shared Space UI：每次读取重输密码、离页即清空内存、常规改密（CAS 重包封套）与泄露撤销 `epoch` 轮换。
-- **071-04 Theme Engine 与可选 Liquid Glass**：在共用 Vue 层固化 Design Tokens、Theme Registry（衔接当前 `纯白（默认）`、`纸墨`、`Liquid Glass`）、浅/深与无模糊降级适配，冻结 TBD-08（不污染旧 v3 外观严格字段）。
+详见 [v0.7.1 详细设计决策与开发清单](v0.7.1-plan.md)。
 
-**独立验收** 四类共享对象（小型文件、文本、配置、Key）在 Mac/Windows/手机端同步可读；错密码、无密码、单独令牌、篡改块、旧 epoch 写入、切页/重开/搜索均无法绕过当次密码门禁；三套主题与降级状态对比度 ≥ 4.5:1 且切换无损失。
+- **071-01 安全原型与契约冻结**：确立三档安全分级——**普通共享（`standard`）**、**受控机密（`protected`）**、**极密保险库（`e2ee`）**；验证 `Argon2id` + `AES-256-GCM` 密文格式与 TS/Python 跨语言测试向量，冻结 TBD-01–04/08/09、配额与鉴权矩阵。
+- **071-02 分级同步 API、独立 Token 与仓储**：Core 落地隔离 `Space`、`SpaceToken`（普通 `ss_live_` / 机密 `sv_live_`）、`DeviceGrant`、`KeyEnvelope(epoch)`、`EntryRevision`、`CipherBlob`、`SpaceChange`、`SpaceMutationReceipt` 与访问审计表；`standard` 支持 JWT / `ss_live_` 及 Agent Data Actions 白名单只读，`protected` 仅允许细粒度 `sv_live_` 直读（Core 主密钥信封加密落库），`e2ee` 仅同步密文；桌面 Sidecar 落地本地块仓储与 Outbox。
+- **071-03 `/space` 分级工作台与按次输密/轮换**：将 `/space` 占位页升级为独立 [SpacePage.vue](file:///d:/xiangmu/LumaDock/src/pages/SpacePage.vue)（桌面 + 手机 Web）：`standard` 随时查看/预览/下载；`protected` 与 `e2ee` 每次读取必重输密码、离页即清空内存；支持常规改密（CAS 重包封套）、`e2ee` 泄露撤销 `epoch` 轮换及 Token 签发/吊销/审计视图。
+- **071-04 Theme Engine 与可选 Liquid Glass**：在共用 Vue 层固化 Design Tokens、Theme Registry（衔接当前 `纯白（默认）`、`纸墨`、`Liquid Glass` 与 5 款气泡风格）、浅/深与无模糊降级适配，严格兼容旧 v3 外观字段。
+
+**独立验收** 四类共享对象（小型文件、文本、配置、Key）按三档分级在 Mac/Windows/手机端可用：`standard` 可随时查看及经 `ss_live_` / 白名单 Agent API 读取；`protected` UI 必输密码且仅细粒度 `sv_live_` 可直读并留审计日志；`e2ee` 错密码、无密码、任何令牌、篡改块、旧 epoch 写入、切页/重开/搜索均无法绕过当次密码门禁且 Core 零明文；三套主题与降级状态对比度 ≥ 4.5:1 且切换无损失。
 
 ## v0.7.2 · 统一定时任务（Cron）与 macOS 回归
 
