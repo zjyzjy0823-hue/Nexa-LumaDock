@@ -13,6 +13,7 @@ DataScope = Literal[
     "data:read",
     "data:write",
     "data:delete",
+    "space:read",
 ]
 
 

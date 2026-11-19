@@ -5,6 +5,7 @@ from typing import Callable, Literal
 from uuid import UUID
 from pydantic import BaseModel, create_model
 from ..services import ledger, websites, data
+from ..space import service as space_service
 from .base import Arguments, IdArguments, MonthArguments
 
 
@@ -57,6 +58,15 @@ class WebsiteList(Arguments):
 
 class RecordsList(Arguments):
     collectionId: UUID
+
+
+class SpaceEntriesList(Arguments):
+    spaceId: UUID
+
+
+class SpaceEntryGet(Arguments):
+    spaceId: UUID
+    id: UUID
 
 
 register(
@@ -249,3 +259,31 @@ for (
         entity_type,
         id_field="id",
     )
+
+
+# Shared Space 白名单只读动作（仅限 standard 档，服务层硬拒绝 protected/e2ee）
+register(
+    "space.list",
+    space_service,
+    "agent_list_standard_spaces",
+    Arguments,
+    "read",
+    "space",
+)
+register(
+    "space.entries.list",
+    space_service,
+    "agent_list_standard_entries",
+    SpaceEntriesList,
+    "read",
+    "space.entry",
+)
+register(
+    "space.entry.get",
+    space_service,
+    "agent_get_standard_entry",
+    SpaceEntryGet,
+    "read",
+    "space.entry",
+    id_field="id",
+)

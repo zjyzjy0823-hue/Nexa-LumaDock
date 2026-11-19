@@ -22,6 +22,11 @@ class RuntimeConfig:
     app_timezone: str
     allow_registration: bool
     local_workstation: bool = False
+    shared_space_enabled: bool = True
+    space_blob_dir: str = ""
+    vault_master_key: str = field(default="", repr=False)
+    space_max_file_bytes: int = 50 * 1024 * 1024
+    space_default_quota_bytes: int = 500 * 1024 * 1024
 
 
 def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
@@ -68,6 +73,14 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         mode == "local"
         and environ.get("STUDIOLO_LOCAL_WORKSTATION", "false").strip().lower() in ("1", "true", "yes")
     )
+    shared_space_enabled = environ.get("STUDIOLO_SHARED_SPACE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+    space_blob_dir = environ.get("STUDIOLO_SPACE_BLOB_DIR", "").strip()
+    vault_master_key = environ.get("STUDIOLO_VAULT_MASTER_KEY", "")
+    space_max_file_bytes = max(1024 * 1024, int(environ.get("STUDIOLO_SPACE_MAX_FILE_BYTES", str(50 * 1024 * 1024))))
+    space_default_quota_bytes = max(
+        space_max_file_bytes,
+        int(environ.get("STUDIOLO_SPACE_DEFAULT_QUOTA_BYTES", str(500 * 1024 * 1024))),
+    )
 
     return RuntimeConfig(
         mode=mode,
@@ -77,4 +90,9 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         app_timezone=environ.get("APP_TIMEZONE", "Asia/Shanghai"),
         allow_registration=environ.get("ALLOW_REGISTRATION", "true").lower() == "true",
         local_workstation=local_workstation,
+        shared_space_enabled=shared_space_enabled,
+        space_blob_dir=space_blob_dir,
+        vault_master_key=vault_master_key,
+        space_max_file_bytes=space_max_file_bytes,
+        space_default_quota_bytes=space_default_quota_bytes,
     )

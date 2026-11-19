@@ -1153,5 +1153,65 @@
       "title": "IdArguments",
       "type": "object"
     }
+  },
+  {
+    "action": "space.list",
+    "toolName": "studiolo_space_list",
+    "effect": "read",
+    "description": "space.list. Requires space:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  {
+    "action": "space.entries.list",
+    "toolName": "studiolo_space_entries_list",
+    "effect": "read",
+    "description": "space.entries.list. Requires space:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "spaceId": {
+          "format": "uuid",
+          "title": "Spaceid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId"
+      ],
+      "title": "SpaceEntriesList",
+      "type": "object"
+    }
+  },
+  {
+    "action": "space.entry.get",
+    "toolName": "studiolo_space_entry_get",
+    "effect": "read",
+    "description": "space.entry.get. Requires space:read.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "spaceId": {
+          "format": "uuid",
+          "title": "Spaceid",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "id"
+      ],
+      "title": "SpaceEntryGet",
+      "type": "object"
+    }
   }
 ]

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, UniqueConstraint, Numeric, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, Numeric, text
 from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -575,4 +575,215 @@ class EncryptedBlob(Base):
     manifest_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SharedSpace(Base):
+    """Shared Space（/space）三档分级共享空间元数据：standard / protected / e2ee。"""
+    __tablename__ = "shared_spaces"
+    __table_args__ = (
+        CheckConstraint("tier IN ('standard', 'protected', 'e2ee')", name="ck_shared_spaces_tier"),
+        Index("ix_shared_spaces_workspace_tier", "workspace_id", "tier"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    tier: Mapped[str] = mapped_column(String(20), default="standard", server_default="standard")
+    active_epoch: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    envelope_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # 仅 protected 档保存 Argon2id 口令校验串；standard 与 e2ee 强制为空
+    password_verifier: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    quota_bytes: Mapped[int] = mapped_column(BigInteger, default=500 * 1024 * 1024)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SpaceDeviceGrant(Base):
+    """空间设备级授权边界（预留多设备/多成员细粒度吊销扩展）。"""
+    __tablename__ = "space_device_grants"
+    __table_args__ = (
+        Index("ix_space_device_grants_space_client", "space_id", "client_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    device_label: Mapped[str] = mapped_column(String(120), default="")
+    can_read: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    can_write: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceKeyEnvelope(Base):
+    """极密 e2ee 空间按 epoch 存储的客户端加密 KeyEnvelope（Core 零知识）。"""
+    __tablename__ = "space_key_envelopes"
+    __table_args__ = (
+        UniqueConstraint("space_id", "epoch", name="uq_space_key_envelopes_space_epoch"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    epoch: Mapped[int] = mapped_column(Integer, default=1)
+    envelope_version: Mapped[int] = mapped_column(Integer, default=1)
+    envelope_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SpaceEntry(Base):
+    """Shared Space 共享条目主表（e2ee 档强制不落任何明文标题、文件名与标签）。"""
+    __tablename__ = "space_entries"
+    __table_args__ = (
+        CheckConstraint("entry_type IN ('text', 'config', 'key', 'file')", name="ck_space_entries_type"),
+        Index("ix_space_entries_space_deleted", "space_id", "deleted_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    entry_type: Mapped[str] = mapped_column(String(20), default="text")
+    current_revision: Mapped[int] = mapped_column(Integer, default=1)
+    active_epoch: Mapped[int] = mapped_column(Integer, default=1)
+    # standard/protected 档可见展示元数据；e2ee 档强制置空（全量移入加密 manifest）
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mime: Mapped[str] = mapped_column(String(120), default="text/plain")
+    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SpaceBlob(Base):
+    """Shared Space 分块文件仓储元数据（standard 存明文块，protected/e2ee 存 AES-256-GCM 密文块）。"""
+    __tablename__ = "space_blobs"
+    __table_args__ = (
+        Index("ix_space_blobs_space_committed", "space_id", "committed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    chunk_size: Mapped[int] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer)
+    total_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    chunks_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceEntryRevision(Base):
+    """Shared Space 条目修订快照（支持 CAS 冲突保留与分块关联）。"""
+    __tablename__ = "space_entry_revisions"
+    __table_args__ = (
+        UniqueConstraint("entry_id", "revision", name="uq_space_entry_revisions_entry_rev"),
+        Index("ix_space_entry_revisions_space_entry", "space_id", "entry_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    entry_id: Mapped[str] = mapped_column(ForeignKey("space_entries.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    epoch: Mapped[int] = mapped_column(Integer, default=1)
+    wrapped_dek_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    encrypted_manifest_b64: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 仅 standard 档文本/配置/Key 可存明文；protected 与 e2ee 档严禁落明文
+    plaintext_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blob_id: Mapped[str | None] = mapped_column(ForeignKey("space_blobs.id", ondelete="SET NULL"), nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_size: Mapped[int] = mapped_column(Integer, default=2 * 1024 * 1024)
+    ciphertext_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    plaintext_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    content_sha256: Mapped[str] = mapped_column(String(64), default="")
+    is_conflict: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    base_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceToken(Base):
+    """Shared Space 专用 API Token（ss_live_ 仅普通档；sv_live_ 仅受控机密档，严格隔离）。"""
+    __tablename__ = "space_tokens"
+    __table_args__ = (
+        CheckConstraint("token_kind IN ('standard', 'vault')", name="ck_space_tokens_kind"),
+        Index("ix_space_tokens_space_revoked", "space_id", "revoked_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    token_kind: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(String(120))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_last4: Mapped[str] = mapped_column(String(4))
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list, server_default=text("'[\"read\"]'"))
+    # 可选条目 ID 白名单（null 表示整个空间；非空则仅允许访问指定条目）
+    entry_ids_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceAccessAuditLog(Base):
+    """Shared Space 敏感操作与 Token 访问审计日志（严禁记录任何明文与密码）。"""
+    __tablename__ = "space_access_audit_logs"
+    __table_args__ = (
+        Index("ix_space_audit_space_created", "space_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    entry_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    actor_kind: Mapped[str] = mapped_column(String(24))
+    actor_id: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(48))
+    outcome: Mapped[str] = mapped_column(String(20), default="allowed")
+    detail: Mapped[str] = mapped_column(String(240), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceChange(Base):
+    """Shared Space 隔离增量游标日志（不进入 Sync v3 业务流）。"""
+    __tablename__ = "space_changes"
+    __table_args__ = (
+        Index("ix_space_changes_space_seq", "space_id", "seq"),
+    )
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    entry_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    epoch: Mapped[int] = mapped_column(Integer, default=1)
+    change_type: Mapped[str] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpaceMutationReceipt(Base):
+    """Shared Space 写操作幂等回执（支持断网重试不重复建条目/修订）。"""
+    __tablename__ = "space_mutation_receipts"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "space_id", "mutation_id", name="uq_space_mutation_receipts_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"), index=True)
+    mutation_id: Mapped[str] = mapped_column(String(64))
+    entry_id: Mapped[str] = mapped_column(String(36))
+    result_revision: Mapped[int] = mapped_column(Integer)
+    response_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
