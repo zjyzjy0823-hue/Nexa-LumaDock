@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
+import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import SpacePasswordGate from '../components/space/SpacePasswordGate.vue'
 import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { useSpaceStore } from '../stores/space'
-import { getApiBaseUrl } from '../services/fleetUrl'
-import type { SpaceTier, SpaceTokenScope } from '../services/spaceApi'
+import type { SpaceTier, SpaceTokenScope, StandardSpaceConflict } from '../services/spaceApi'
 import type { SpaceEntryType } from '../services/spaceCrypto'
 
 const props = defineProps<{ mobile: boolean }>()
@@ -15,7 +15,7 @@ const spaceStore = useSpaceStore()
 const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
 
 // 中栏顶部视图切换：内容 / API Token / 审计日志 / 空间与安全
-type SpaceSubView = 'entries' | 'tokens' | 'audit' | 'security'
+type SpaceSubView = 'entries' | 'tokens' | 'audit' | 'security' | 'conflicts'
 type CanvasMode = 'compose' | 'detail'
 type ComposeTab = 'text' | 'file'
 
@@ -33,6 +33,49 @@ const composeTab = ref<ComposeTab>('text')
 const searchQuery = ref('')
 const filterType = ref<SpaceEntryType | 'all'>('all')
 const mobilePanel = ref<'spaces' | 'entries' | 'canvas'>('spaces')
+const deciding = ref('')
+const decisionError = ref('')
+const pinBusy = ref(false)
+const importBusy = ref(false)
+
+async function importLocalSpaces() {
+  if (importBusy.value || !window.confirm('将本机普通共享空间及其中的文件复制到已连接的 Core？本机原件会保留。')) return
+  importBusy.value = true
+  try {
+    const count = await spaceStore.importLocalStandardSpaces()
+    emit('action', count ? `已排队导入 ${count} 条普通共享内容` : '没有需要导入的新条目')
+  } catch (error) {
+    emit('action', error instanceof Error ? error.message : '无法导入本机空间')
+  } finally { importBusy.value = false }
+}
+
+async function changeOfflineCopy(remove: boolean) {
+  const entry = spaceStore.selectedEntryDetail
+  if (!entry || pinBusy.value) return
+  pinBusy.value = true
+  try {
+    if (remove) await spaceStore.unpinEncryptedEntry(entry.id)
+    else await spaceStore.pinEncryptedEntry()
+    emit('action', remove ? '已移除本机密文副本' : '密文已保存，离线仍需密码解锁')
+  } catch (error) {
+    emit('action', error instanceof Error ? error.message : '无法更新离线副本')
+  } finally { pinBusy.value = false }
+}
+
+async function decideConflict(candidate: StandardSpaceConflict, strategy: 'core' | 'candidate') {
+  if (deciding.value) return
+  deciding.value = candidate.id
+  decisionError.value = ''
+  try {
+    await spaceStore.resolveConflict(candidate, strategy)
+    emit('action', strategy === 'core' ? '已保留 Core 版本' : 'Core 已采用设备版本')
+  } catch (error) {
+    decisionError.value = error instanceof Error ? error.message : '无法确认冲突'
+    await spaceStore.loadConflicts()
+  } finally {
+    deciding.value = ''
+  }
+}
 
 // 新建空间原生 <dialog> 状态
 const createSpaceDialogRef = ref<HTMLDialogElement | null>(null)
@@ -166,6 +209,7 @@ const mobileHeaderTitle = computed(() => {
   if (activeTab.value === 'tokens') return 'API Token'
   if (activeTab.value === 'audit') return '审计日志'
   if (activeTab.value === 'security') return '空间与安全'
+  if (activeTab.value === 'conflicts') return '同步冲突'
   if (canvasMode.value === 'compose') return composeTab.value === 'file' ? '上传文件' : '撰写文本'
   return displayEntryTitle(currentDetail.value ?? { id: '', title: '条目详情' })
 })
@@ -579,7 +623,9 @@ function handleGlobalPaste(event: ClipboardEvent) {
 }
 
 async function submitUploadQueue(password?: string) {
-  if (uploadQueue.value.length === 0) return
+  const space = currentSpace.value
+  const route = spaceStore.route
+  if (!space || uploadQueue.value.length === 0) return
   uploadBusy.value = true
   const tags = parseTags(uploadTags.value)
   const snapshot = [...uploadQueue.value]
@@ -587,6 +633,7 @@ async function submitUploadQueue(password?: string) {
   try {
     const sharedNote = uploadNote.value.trim()
     for (let i = 0; i < snapshot.length; i += 1) {
+      if (currentSpace.value?.id !== space.id || spaceStore.route !== route) throw new Error('共享空间已切换，未处理的文件没有提交。')
       const item = snapshot[i]!
       const entryNote = item.note.trim() || sharedNote
       uploadProgressText.value = `正在上传 (${i + 1}/${snapshot.length})：${item.file.name}`
@@ -604,7 +651,8 @@ async function submitUploadQueue(password?: string) {
     uploadTags.value = ''
     uploadNote.value = ''
     canvasMode.value = 'detail'
-    emit('action', `已成功上传 ${uploadedCount} 个文件`)
+    emit('action', space.tier === 'standard' && spaceStore.usingReplica
+      ? `已保存 ${uploadedCount} 个文件，联网后同步到 Core` : `已成功上传 ${uploadedCount} 个文件`)
     if (props.mobile) mobilePanel.value = 'canvas'
   } finally {
     uploadBusy.value = false
@@ -714,6 +762,13 @@ async function copyText(text: string, key: string, isSecret = false) {
   }
 }
 
+async function downloadStandardFile() {
+  const entry = currentDetail.value
+  if (!entry) return
+  try { await spaceStore.downloadStandardEntry(entry) }
+  catch (cause) { emit('action', cause instanceof Error ? cause.message : '无法下载文件') }
+}
+
 function downloadUnlockedFile() {
   const view = currentUnlocked.value
   if (!view?.fileBlob) return
@@ -728,7 +783,7 @@ function apiExampleCurl(): string {
   const sp = currentSpace.value
   const detail = currentDetail.value
   if (!sp || !detail) return ''
-  const origin = getApiBaseUrl() || window.location.origin
+  const origin = spaceStore.apiOrigin || window.location.origin
   const tokenPlaceholder = sp.tier === 'protected' ? 'sv_live_YOUR_VAULT_TOKEN' : 'ss_live_YOUR_SPACE_TOKEN'
   return `curl -H "Authorization: Bearer ${tokenPlaceholder}" \\\n  "${origin}/api/v1/spaces/${sp.id}/entries/${detail.id}"`
 }
@@ -831,6 +886,10 @@ watch(activeTab, tab => {
   if (tab === 'tokens' || tab === 'audit') {
     void spaceStore.loadTokensAndAudit()
   }
+  if (tab === 'conflicts') {
+    decisionError.value = ''
+    void spaceStore.loadConflicts()
+  }
 })
 
 watch(
@@ -846,10 +905,20 @@ watch(
 )
 
 onMounted(() => {
-  void spaceStore.loadSpaces()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('paste', handleGlobalPaste)
 })
+
+watch([() => spaceStore.route, () => spaceStore.available], () => {
+  mobilePanel.value = 'spaces'
+  canvasMode.value = 'compose'
+  activeTab.value = 'entries'
+  composeTitle.value = composeText.value = composeTags.value = uploadNote.value = ''
+  newSpacePassword.value = ''
+  clearUploadQueue()
+  closeGate()
+  void spaceStore.loadSpaces()
+}, { immediate: true })
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -884,7 +953,7 @@ onUnmounted(() => {
         <OpusIcon name="chevL" />
       </button>
       <div class="t">{{ mobileHeaderTitle }}</div>
-      <button v-if="mobilePanel === 'spaces'" type="button" class="icon-btn" aria-label="新建空间" @click="openCreateSpaceDialog()">
+      <button v-if="mobilePanel === 'spaces' && spaceStore.route && !spaceStore.offline" type="button" class="icon-btn" aria-label="新建空间" @click="openCreateSpaceDialog()">
         <OpusIcon name="plus" />
       </button>
       <button
@@ -899,7 +968,14 @@ onUnmounted(() => {
       <span v-else style="width: 40px"></span>
     </div>
 
-    <div class="space-shell" :class="{ 'is-mobile': mobile, 'is-empty-state': !mobile && !spaceStore.loading && spaceStore.spaces.length === 0 }">
+    <div v-if="spaceStore.linkedCore && (!mobile || mobilePanel === 'spaces')" class="space-source" aria-label="共享空间位置">
+      <button type="button" class="btn btn-sm" :class="spaceStore.localView ? 'btn-ghost' : 'btn-primary'" :aria-pressed="!spaceStore.localView" @click="spaceStore.localView = false">Core 共享空间</button>
+      <button type="button" class="btn btn-sm" :class="spaceStore.localView ? 'btn-primary' : 'btn-ghost'" :aria-pressed="spaceStore.localView" @click="spaceStore.localView = true">本机空间</button>
+      <button v-if="!spaceStore.localView && spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-ghost" :disabled="importBusy" @click="importLocalSpaces">{{ importBusy ? '正在导入…' : '导入本机普通空间' }}</button>
+    </div>
+    <FleetCoreSignIn v-if="spaceStore.coreSignInRequired" feature="共享空间" />
+    <p v-if="!spaceStore.available" class="space-route-status muted" role="status">{{ spaceStore.waitingForConnection ? '正在读取 Core 连接…' : '请连接并登录 Core 后打开共享空间。' }}</p>
+    <div v-else class="space-shell" :class="{ 'is-mobile': mobile, 'is-empty-state': !mobile && !spaceStore.loading && spaceStore.spaces.length === 0 }">
       <!-- ================================================================
            左栏：空间导航轨道
            ================================================================ -->
@@ -909,12 +985,19 @@ onUnmounted(() => {
             <h2>共享空间</h2>
             <span class="nav-count num">{{ spaceStore.spaces.length }}</span>
           </div>
-          <button type="button" class="btn btn-sm btn-primary" @click="openCreateSpaceDialog()">
+          <button v-if="spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-primary" @click="openCreateSpaceDialog()">
             <OpusIcon name="plus" /> 新建
           </button>
         </div>
 
         <div v-if="spaceStore.error" class="space-alert" role="alert">{{ spaceStore.error }}</div>
+        <div v-if="spaceStore.offline || spaceStore.pendingCount || spaceStore.syncError || spaceStore.rejected.length" class="space-alert" role="status">
+          <p v-if="spaceStore.offline">离线 · 显示已保存在本机的内容</p>
+          <p v-if="spaceStore.pendingCount">{{ spaceStore.pendingCount }} 项待同步</p>
+          <p v-if="spaceStore.syncError">{{ spaceStore.syncError }}</p>
+          <p v-for="item in spaceStore.rejected" :key="item.id">{{ item.error }}</p>
+          <button v-if="spaceStore.route" type="button" class="btn btn-sm btn-ghost" :disabled="spaceStore.syncing" @click="spaceStore.retrySpaceQueue()">重试同步</button>
+        </div>
 
         <div class="space-nav-list" data-surface-role="list">
           <button
@@ -1002,6 +1085,9 @@ onUnmounted(() => {
               >
                 {{ currentSpace.tier === 'standard' ? '管理' : '安全' }}
               </button>
+              <button v-if="currentSpace.tier === 'standard'" type="button" role="tab"
+                :aria-selected="activeTab === 'conflicts'" :class="{ active: activeTab === 'conflicts' }"
+                @click="switchSubTab('conflicts')">冲突</button>
             </div>
 
             <!-- 搜索与类型胶囊筛选 -->
@@ -1350,7 +1436,7 @@ onUnmounted(() => {
                       <button type="button" class="btn btn-sm btn-ghost" @click="startEditStandard">
                         <OpusIcon name="pencil" /> 备注
                       </button>
-                      <button type="button" class="btn btn-primary btn-sm" @click="spaceStore.downloadStandardEntry(currentDetail)">
+                      <button type="button" class="btn btn-primary btn-sm" @click="downloadStandardFile">
                         <OpusIcon name="download" /> 下载
                       </button>
                     </div>
@@ -1450,6 +1536,10 @@ onUnmounted(() => {
                 <button type="button" class="btn btn-primary" @click="requestUnlockEntry">
                   <OpusIcon name="unlock" /> 解锁
                 </button>
+                <template v-if="currentSpace.tier === 'e2ee'">
+                  <button v-if="spaceStore.canPinEncrypted && spaceStore.pinned[currentDetail.id] !== currentDetail.revision" type="button" class="btn btn-ghost" :disabled="pinBusy" @click="changeOfflineCopy(false)">保存密文供离线使用</button>
+                  <button v-if="spaceStore.pinned[currentDetail.id]" type="button" class="btn btn-ghost" :disabled="pinBusy" @click="changeOfflineCopy(true)">移除本机密文副本</button>
+                </template>
               </div>
 
               <details v-if="currentSpace.tier === 'protected'" class="api-disclosure">
@@ -1625,6 +1715,33 @@ onUnmounted(() => {
           </div>
 
           <!-- 5. 空间管理与安全设置画布 -->
+          <div v-else-if="activeTab === 'conflicts'" class="canvas-inner canvas-subpanel space-conflicts">
+            <h3>同步冲突</h3>
+            <p v-if="spaceStore.conflictsLoading" role="status">正在读取 Core 候选版本…</p>
+            <p v-if="decisionError || spaceStore.conflictError" class="space-alert" role="alert">{{ decisionError || spaceStore.conflictError }}</p>
+            <p v-if="!spaceStore.route">请联网登录 Core 后处理冲突。</p>
+            <p v-else-if="!spaceStore.conflictsLoading && !spaceStore.conflicts.length && !spaceStore.conflictError">没有待处理的冲突。</p>
+            <article v-for="item in spaceStore.conflicts" :key="item.id" class="space-conflict mat">
+              <h4>{{ item.edit?.title || item.current.title || '条目' }}</h4>
+              <p class="muted">{{ item.deviceLabel }} · {{ new Date(item.createdAt).toLocaleString('zh-CN') }}</p>
+              <div class="space-conflict-versions">
+                <section>
+                  <strong>Core · 修订 {{ item.current.currentRevision }}</strong>
+                  <p v-if="item.current.deletedAt">已删除</p>
+                  <template v-else><p>{{ item.current.title }}</p><pre>{{ item.current.contentText }}</pre></template>
+                </section>
+                <section>
+                  <strong>{{ item.deviceLabel }} · 基于修订 {{ item.baseRevision }}</strong>
+                  <p v-if="item.operation === 'delete'">请求删除</p>
+                  <template v-else><p>{{ item.edit?.title }}</p><pre>{{ item.edit?.contentText }}</pre></template>
+                </section>
+              </div>
+              <div class="space-source">
+                <button type="button" class="btn btn-sm btn-ghost" :disabled="!!deciding" @click="decideConflict(item, 'core')">保留 Core 版本</button>
+                <button type="button" class="btn btn-sm" :class="item.operation === 'delete' ? 'btn-danger' : 'btn-primary'" :disabled="!!deciding" @click="decideConflict(item, 'candidate')">{{ item.operation === 'delete' ? '采用设备删除' : '采用设备版本' }}</button>
+              </div>
+            </article>
+          </div>
           <div v-else-if="activeTab === 'security'" class="canvas-inner canvas-subpanel">
             <header class="canvas-head">
               <h3 class="canvas-title">{{ currentSpace.tier === 'standard' ? '管理' : '安全' }}</h3>
@@ -1783,6 +1900,8 @@ onUnmounted(() => {
 
 <style scoped>
 .space-desktop {
+  display: flex;
+  flex-direction: column;
   position: relative;
   height: 100%;
   min-height: 0;
@@ -1793,9 +1912,25 @@ onUnmounted(() => {
   position: relative;
 }
 
+.space-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.space-route-status { padding: 16px; }
+.space-conflicts { display: grid; gap: 12px; }
+.space-conflict { padding: 14px; border-radius: var(--r-sm); }
+.space-conflict-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.space-conflict-versions pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
+.space-mobile .space-conflict-versions { grid-template-columns: 1fr; }
+
 /* 三栏现代保险库画布骨架 */
 .space-shell {
   display: grid;
+  flex: 1;
   grid-template-columns: 248px 304px minmax(0, 1fr);
   height: 100%;
   min-height: 0;

@@ -8,6 +8,7 @@ Not every persistent row is syncable. Sync uses an allowlist, never a denylist.
 | User preferences | Personal user/workspace | Yes |
 | Dashboard layout | Personal user/workspace | Yes |
 | Automation definition | Workspace | Yes |
+| Shared Space | Workspace, space-specific APIs | See below |
 | Device identity, installation.id | Device | No |
 | Device metrics, Agent bindings | Device/runtime | No |
 | Agent definition | Outside this version | No |
@@ -71,6 +72,27 @@ versions with 409 sync_protocol_mismatch before bootstrap or mutation. New Local
 probes before sending/advancing, retains its queue/cursor, and exposes the existing
 protocol_mismatch blocked diagnostic. Upgrade Core and every replica together;
 Protocol 2/3 do not silently filter or skip changes.
+
+## Shared Space
+
+Shared Space uses its existing per-space change stream and attachment endpoints.
+Its first snapshot is anchored to that stream. The client keeps a separate local
+replica and outbox per verified account and Core. Installing the client and Core
+together enables offline edits; earlier Core versions still support online reads
+and writes through the existing Space API.
+
+- Standard entries can be created, edited or deleted while offline. Text entries
+  are cached during pull. Files are saved on demand and uploaded in chunks after
+  reconnection. The Windows client can import existing local standard spaces
+  into its paired Core while preserving the originals.
+- Stale standard edits and deletes become candidates on Core. The workspace user
+  can keep the current Core version or adopt a submitted device version. Core
+  checks the revision and deletion state shown to the user before accepting the
+  decision. Candidates remain durable even if the submitting device goes offline.
+- Protected spaces keep online, per-access verification. E2EE entries can be
+  saved explicitly for offline reading. The replica holds ciphertext, its
+  encrypted key envelope and routing metadata. Passwords, tokens, unwrapped keys
+  and decrypted content are excluded from the replica and outbox.
 
 macOS physical validation is deferred. Backend/Frontend remain shared and
 cross-platform; this version does not claim cross-platform release readiness.

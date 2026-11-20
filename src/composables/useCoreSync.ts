@@ -9,6 +9,7 @@ import { androidInvoke, AndroidLocalError, isAndroidLocal } from '../desktop/and
 import type { AndroidBinding, PairingPreview } from '../desktop/androidLocal'
 import { useAuthStore } from '../stores/auth'
 import { useWebsitesStore } from '../stores/websites'
+import { useSpaceStore } from '../stores/space'
 import { confirmAction } from './useConfirm'
 
 // This timer only reads Local status. The Local Backend owns all sync cycles,
@@ -228,6 +229,7 @@ export function useCoreSync(notify: (message: string) => void) {
       const result = android ? await runAndroidSync(resync) : await runSync(requestSession.token)
       if (!current(requestSession)) return
       if (android) useWebsitesStore().invalidate()
+      void useSpaceStore().syncPending()
       syncResult.value = result
       if (result.status === 'error') {
         syncError.value = syncErrorMessage(result.lastError)

@@ -3108,6 +3108,7 @@ export const useFleetStore = defineStore('fleet', () => {
 
   return {
     nodes,
+    coreWorkspaceRoute: fleetRoute,
     coreSignInUrl,
     signInToCoreFleet,
     nodesLoading,

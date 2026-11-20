@@ -12,7 +12,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..database import runtime_config
@@ -25,6 +25,7 @@ from ..models import (
     SpaceEntryRevision,
     SpaceKeyEnvelope,
     SpaceMutationReceipt,
+    SpaceSyncCandidate,
     SpaceToken,
     User,
     utcnow,
@@ -49,6 +50,11 @@ from .schemas import (
     SpaceEnvelopeUpdateInput,
     SpaceOut,
     SpaceRotateEpochInput,
+    SpaceStandardCandidateOut,
+    SpaceStandardMutation,
+    SpaceStandardMutationOut,
+    SpaceStandardResolution,
+    SpaceStandardSnapshot,
     SpaceTokenCreateInput,
     SpaceTokenCreatedOut,
     SpaceTokenOut,
@@ -161,6 +167,9 @@ def _record_change(
     epoch: int,
     change_type: str,
 ) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        # Allocate change sequences in commit order within a space.
+        db.execute(select(SharedSpace.id).where(SharedSpace.id == space_id).with_for_update())
     db.add(
         SpaceChange(
             workspace_id=workspace_id,
@@ -1055,6 +1064,12 @@ def _entry_summary(db: Session, space: SharedSpace, entry: SpaceEntry, latest_re
             )
         )
     )
+    if space.tier == "standard" and not has_conflict:
+        has_conflict = db.scalar(select(SpaceSyncCandidate.id).where(
+            SpaceSyncCandidate.space_id == space.id,
+            SpaceSyncCandidate.entry_id == entry.id,
+            SpaceSyncCandidate.resolved_at.is_(None),
+        ).limit(1)) is not None
     return SpaceEntrySummaryOut(
         id=entry.id,
         spaceId=entry.space_id,
@@ -1672,9 +1687,14 @@ def update_entry(
     space_id: str,
     entry_id: str,
     payload: SpaceEntryUpdateInput,
+    *,
+    commit: bool = True,
+    file_revision: int | None = None,
 ) -> SpaceEntryDetailOut:
     _require_enabled()
     space = _owned_space(db, actor.workspace_id, space_id)
+    if space.tier == "standard":
+        _lock_standard_entry(db, space, entry_id)
     entry = _owned_entry(db, space, entry_id)
     _enforce_token_space_access(db, actor, space, required_scope="write", entry_id=entry.id, action="entry.update")
 
@@ -1808,7 +1828,7 @@ def update_entry(
         blob = _finalize_staged_blob(db, space, payload.blobId) if payload.blobId else None
         if is_file_entry and blob is None and payload.contentBase64 is None:
             # 仅更新普通文件的标题、标签或备注，复用原有文件二进制分块
-            prev_rev = _entry_revision(db, entry, payload.baseRevision)
+            prev_rev = _entry_revision(db, entry, file_revision if file_revision is not None else payload.baseRevision)
             plaintext_text = prev_rev.plaintext_text
             if "contentText" in payload.model_fields_set:
                 plaintext_text = _normalize_file_note(payload.contentText)
@@ -1935,13 +1955,16 @@ def update_entry(
                 created_at=now,
             )
         )
-    db.commit()
+    if commit:
+        db.commit()
     return response
 
 
-def delete_entry(db: Session, actor: SpaceActor, space_id: str, entry_id: str) -> None:
+def delete_entry(db: Session, actor: SpaceActor, space_id: str, entry_id: str, *, commit: bool = True) -> None:
     _require_enabled()
     space = _owned_space(db, actor.workspace_id, space_id)
+    if space.tier == "standard":
+        _lock_standard_entry(db, space, entry_id)
     entry = _owned_entry(db, space, entry_id)
     _enforce_token_space_access(db, actor, space, required_scope="write", entry_id=entry.id, action="entry.delete")
 
@@ -1967,7 +1990,166 @@ def delete_entry(db: Session, actor: SpaceActor, space_id: str, entry_id: str) -
         action="entry.delete",
         entry_id=entry.id,
     )
+    if commit:
+        db.commit()
+
+
+def _lock_standard_entry(db: Session, space: SharedSpace, entry_id: str) -> SpaceEntry:
+    try:
+        eid = valid_uuid(entry_id)
+    except ValueError as exc:
+        raise HTTPException(404, "Entry not found") from exc
+    scope = (SpaceEntry.id == eid, SpaceEntry.space_id == space.id, SpaceEntry.workspace_id == space.workspace_id)
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite has no row-level SELECT FOR UPDATE. Reserve the write lock before comparing.
+        db.execute(update(SpaceEntry).where(*scope).values(updated_at=SpaceEntry.updated_at))
+    entry = db.scalar(select(SpaceEntry).where(*scope).with_for_update().execution_options(populate_existing=True))
+    if entry is None:
+        raise HTTPException(404, "Entry not found")
+    return entry
+
+
+def _standard_sync_space(db: Session, actor: SpaceActor, space_id: str) -> SharedSpace:
+    _require_enabled()
+    space = _owned_space(db, actor.workspace_id, space_id)
+    if space.tier != "standard" or actor.kind != "user":
+        raise HTTPException(403, "Standard-space sync requires a workspace user")
+    return space
+
+
+def standard_space_snapshot(db: Session, actor: SpaceActor, space_id: str) -> SpaceStandardSnapshot:
+    space = _standard_sync_space(db, actor, space_id)
+    # Anchor first. Any writes after the anchor will be picked up by the next pull.
+    cursor = db.scalar(select(func.max(SpaceChange.seq)).where(SpaceChange.space_id == space.id)) or 0
+    return SpaceStandardSnapshot(cursor=cursor, entries=list_entries(db, actor, space.id))
+
+
+def sync_standard_entry(
+    db: Session, actor: SpaceActor, space_id: str, entry_id: str, payload: SpaceStandardMutation,
+) -> SpaceStandardMutationOut:
+    space = _standard_sync_space(db, actor, space_id)
+    entry = _lock_standard_entry(db, space, entry_id)
+    mid = str(payload.mutationId)
+    receipt = db.scalar(select(SpaceMutationReceipt).where(
+        SpaceMutationReceipt.space_id == space.id, SpaceMutationReceipt.mutation_id == mid,
+    ))
+    if receipt is not None:
+        saved = receipt.response_json
+        if saved.get("entryId") != entry.id or "result" not in saved:
+            raise HTTPException(409, "Mutation ID is already in use")
+        return SpaceStandardMutationOut.model_validate(saved["result"])
+    if (payload.operation == "edit") != (payload.edit is not None):
+        raise HTTPException(422, "Edit fields are required only for edits")
+    fields = payload.edit.model_dump() if payload.edit else {}
+    if payload.edit and not payload.edit.title.strip():
+        raise HTTPException(422, "Title is required")
+    if payload.edit and len(payload.edit.contentText.encode("utf-8")) > _max_file_bytes():
+        raise HTTPException(413, "Entry exceeds max allowed size")
+    _entry_revision(db, entry, payload.baseRevision)
+    if payload.baseRevision != entry.current_revision or entry.deleted_at is not None:
+        existing = db.scalar(select(SpaceSyncCandidate).where(
+            SpaceSyncCandidate.space_id == space.id, SpaceSyncCandidate.mutation_id == mid,
+        ))
+        if existing is not None:
+            if existing.entry_id != entry.id:
+                raise HTTPException(409, "Mutation ID is already in use")
+            return SpaceStandardMutationOut(
+                status="resolved" if existing.resolved_at else "conflict",
+                revision=existing.result_revision or entry.current_revision, candidateId=existing.id,
+            )
+        candidate = SpaceSyncCandidate(
+            id=str(uuid4()), space_id=space.id, entry_id=entry.id, mutation_id=mid,
+            base_revision=payload.baseRevision, device_label=payload.deviceLabel,
+            operation=payload.operation, edited_fields=fields,
+        )
+        db.add(candidate)
+        _record_change(db, workspace_id=space.workspace_id, space_id=space.id, entry_id=entry.id,
+                       revision=entry.current_revision, epoch=space.active_epoch,
+                       change_type="upsert" if entry.deleted_at is None else "delete")
+        result = SpaceStandardMutationOut(status="conflict", revision=entry.current_revision, candidateId=candidate.id)
+        db.commit()
+        return result
+
+    if payload.operation == "delete":
+        delete_entry(db, actor, space.id, entry.id, commit=False)
+        revision = entry.current_revision
+    else:
+        updated = update_entry(
+            db, actor, space.id, entry.id,
+            SpaceEntryUpdateInput(baseRevision=entry.current_revision, **fields), commit=False,
+        )
+        revision = updated.currentRevision
+    result = SpaceStandardMutationOut(status="applied", revision=revision)
+    db.add(SpaceMutationReceipt(
+        id=str(uuid4()), workspace_id=space.workspace_id, space_id=space.id, mutation_id=mid, entry_id=entry.id,
+        result_revision=revision, response_json={"entryId": entry.id, "result": result.model_dump()},
+    ))
     db.commit()
+    return result
+
+
+def list_standard_conflicts(db: Session, actor: SpaceActor, space_id: str) -> list[SpaceStandardCandidateOut]:
+    space = _standard_sync_space(db, actor, space_id)
+    rows = db.execute(
+        select(SpaceSyncCandidate, SpaceEntry)
+        .join(SpaceEntry, SpaceEntry.id == SpaceSyncCandidate.entry_id)
+        .where(SpaceSyncCandidate.space_id == space.id, SpaceSyncCandidate.resolved_at.is_(None))
+        .order_by(SpaceSyncCandidate.created_at, SpaceSyncCandidate.id)
+    )
+    items = []
+    for candidate, entry in rows:
+        current = _entry_revision(db, entry)
+        items.append(SpaceStandardCandidateOut(
+            id=candidate.id, entryId=entry.id, deviceLabel=candidate.device_label,
+            operation=candidate.operation, edit=candidate.edited_fields or None,
+            baseRevision=candidate.base_revision, createdAt=iso_utc(candidate.created_at),
+            current=_entry_detail(db, space, entry, current, content_text=current.plaintext_text),
+        ))
+    return items
+
+
+def resolve_standard_conflict(
+    db: Session, actor: SpaceActor, space_id: str, candidate_id: str, payload: SpaceStandardResolution,
+) -> SpaceStandardMutationOut:
+    space = _standard_sync_space(db, actor, space_id)
+    candidate = db.get(SpaceSyncCandidate, candidate_id)
+    if candidate is None or candidate.space_id != space.id:
+        raise HTTPException(404, "Conflict not found")
+    entry = _lock_standard_entry(db, space, candidate.entry_id)
+    db.refresh(candidate)
+    if candidate.resolved_at is not None:
+        if candidate.resolution != payload.strategy:
+            raise HTTPException(409, "Conflict was already resolved")
+        return SpaceStandardMutationOut(status="resolved", revision=candidate.result_revision, candidateId=candidate.id)
+    deleted = entry.deleted_at is not None
+    if entry.current_revision != payload.expectedRevision or deleted != payload.expectedDeleted:
+        raise HTTPException(409, "Core version changed. Refresh and review the conflict again.")
+
+    revision = entry.current_revision
+    if payload.strategy == "candidate" and candidate.operation == "edit":
+        if deleted:
+            entry.deleted_at = None
+            db.flush()
+        updated = update_entry(
+            db, actor, space.id, entry.id,
+            SpaceEntryUpdateInput(baseRevision=revision, **candidate.edited_fields),
+            commit=False, file_revision=candidate.base_revision,
+        )
+        revision = updated.currentRevision
+    elif payload.strategy == "candidate" and not deleted:
+        delete_entry(db, actor, space.id, entry.id, commit=False)
+    candidate.resolved_at = utcnow()
+    candidate.resolution = payload.strategy
+    candidate.result_revision = revision
+    if payload.strategy == "core":
+        _record_change(db, workspace_id=space.workspace_id, space_id=space.id, entry_id=entry.id,
+                       revision=revision, epoch=space.active_epoch, change_type="delete" if deleted else "upsert")
+    _record_audit(
+        db, workspace_id=space.workspace_id, space_id=space.id, actor_kind=actor.kind,
+        actor_id=actor.actor_id, action="entry.sync.resolve", entry_id=entry.id, detail=payload.strategy,
+    )
+    db.commit()
+    return SpaceStandardMutationOut(status="resolved", revision=revision, candidateId=candidate_id)
 
 
 # ---------------- 隔离增量游标拉取 ----------------
@@ -1984,6 +2166,10 @@ def list_changes(
     _require_enabled()
     space = _owned_space(db, actor.workspace_id, space_id)
     _enforce_token_space_access(db, actor, space, required_scope="read", action="space.changes")
+    if space.tier == "standard" and since_seq:
+        latest = db.scalar(select(func.max(SpaceChange.seq)).where(SpaceChange.space_id == space.id)) or 0
+        if since_seq > latest:
+            raise HTTPException(409, "space_resync_required")
     capped = max(1, min(limit, 500))
     rows = list(
         db.scalars(

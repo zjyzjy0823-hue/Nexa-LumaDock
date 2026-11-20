@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { apiRequest, ApiError } from '../api/client'
 import type { CoreConnection, CoreConnectRequest } from '../api/core'
 import { desktopPlatform } from '../desktop/platform'
 import { androidInvoke } from '../desktop/androidLocal'
-import { normalizeCoreOrigin, setApiBaseUrl } from '../services/fleetUrl'
+import { getApiBaseUrl, normalizeCoreOrigin, setApiBaseUrl } from '../services/fleetUrl'
 import type { User } from '../types/widget'
 
 export interface AuthStatus {
@@ -17,6 +18,18 @@ export interface AuthStatus {
 const tokenKey = 'studiolo:access-token'
 const androidCoreKey = 'studiolo:android-core'
 const androidOfflineKey = 'studiolo:android-offline'
+const replicaAccountKey = 'studiolo:replica-account'
+
+interface ReplicaAccount { origin: string; fingerprint: string; id: number; createdAt: string }
+
+function readReplicaAccount(): ReplicaAccount | null {
+  try { return JSON.parse(localStorage.getItem(replicaAccountKey) ?? 'null') as ReplicaAccount | null }
+  catch { return null }
+}
+
+function sessionFingerprint(token: string) {
+  return Array.from(sha256(new TextEncoder().encode(token)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export const useAuthStore = defineStore('auth', () => {
   localStorage.removeItem('studiolo:local-account:v1')
@@ -31,6 +44,12 @@ export const useAuthStore = defineStore('auth', () => {
     setApiBaseUrl(androidCoreUrl.value)
   }
   const token = ref<string | null>(localStorage.getItem(tokenKey))
+  const savedReplicaAccount = ref(readReplicaAccount())
+  const replicaAccount = computed(() => {
+    const stored = savedReplicaAccount.value
+    if (!stored || !token.value || stored.origin !== getApiBaseUrl() || stored.fingerprint !== sessionFingerprint(token.value)) return null
+    return `${stored.id}/${stored.createdAt}`
+  })
   const androidOffline = ref(android && (localStorage.getItem(androidOfflineKey) === 'true' || !!token.value))
   const user = ref<User | null>(null)
   const mode = ref<AuthStatus['mode']>(android ? 'core' : 'local')
@@ -53,7 +72,13 @@ export const useAuthStore = defineStore('auth', () => {
     const current = () => token.value === restoredToken && sessionGeneration === restoredGeneration
     try {
       const restoredUser = await apiRequest<User>('/api/v1/auth/me', {}, restoredToken)
-      if (current()) user.value = restoredUser
+      if (current()) {
+        const identity = { origin: getApiBaseUrl(), fingerprint: sessionFingerprint(restoredToken), id: restoredUser.id, createdAt: restoredUser.created_at }
+        savedReplicaAccount.value = identity
+        try { localStorage.setItem(replicaAccountKey, JSON.stringify(identity)) }
+        catch { /* The verified session can still use Core online. */ }
+        user.value = restoredUser
+      }
     } catch (error) {
       if (current() && error instanceof ApiError && error.status === 401) logout()
       throw error
@@ -195,10 +220,13 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     user.value = null
     localStorage.removeItem(tokenKey)
+    localStorage.removeItem(replicaAccountKey)
+    savedReplicaAccount.value = null
   }
 
   return {
     token,
+    replicaAccount,
     user,
     mode,
     coreConnection,

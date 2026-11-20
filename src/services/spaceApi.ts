@@ -2,7 +2,7 @@
  * Shared Space（/api/v1/spaces）REST API 客户端与类型定义。
  */
 
-import { apiRequest } from '../api/client'
+import { apiRequest, ApiError } from '../api/client'
 import { getApiBaseUrl } from './fleetUrl'
 import type { KeyEnvelope, SpaceEntryType, WrappedDek } from './spaceCrypto'
 
@@ -85,6 +85,41 @@ export interface SpaceEntryDetail extends SpaceEntrySummary {
   contentBase64: string | null
   locked: boolean
   conflictRevisions: number[]
+}
+
+export interface StandardSpaceEdit {
+  title: string
+  tags: string[]
+  contentText: string
+}
+
+export interface StandardSpaceConflict {
+  id: string
+  entryId: string
+  deviceLabel: string
+  operation: 'edit' | 'delete'
+  edit: StandardSpaceEdit | null
+  baseRevision: number
+  createdAt: string
+  current: SpaceEntryDetail
+}
+
+export interface StandardSpaceSyncResult {
+  status: 'applied' | 'conflict' | 'resolved'
+  revision: number
+  candidateId: string | null
+}
+
+export interface StandardSpaceSnapshot { cursor: number; entries: SpaceEntrySummary[] }
+
+export function fetchStandardSpaceSnapshot(route: SpaceRouteConfig, spaceId: string): Promise<StandardSpaceSnapshot> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/sync-snapshot`, {}, route.token, route.origin)
+}
+
+export function fetchSpaceChanges(route: SpaceRouteConfig, spaceId: string, cursor: number): Promise<{
+  nextSeq: number; hasMore: boolean; changes: { entryId: string | null; changeType: string }[]
+}> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/changes?sinceSeq=${cursor}`, {}, route.token, route.origin)
 }
 
 export interface SpaceTokenItem {
@@ -234,16 +269,17 @@ export async function uploadSpaceBlobChunk(
   const url = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
   const res = await fetch(url, {
     method: 'PUT',
+    credentials: 'omit', redirect: 'error',
     headers: {
       Authorization: `Bearer ${route.token}`,
       'Content-Type': 'application/octet-stream',
       'X-Chunk-Sha256': sha256,
     },
     body: bytes,
-  })
+  }).catch(() => { throw new ApiError(0, '无法上传文件分块') })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(text || `上传分块失败 (${res.status})`)
+    throw new ApiError(res.status, text || `上传分块失败 (${res.status})`)
   }
   return (await res.json()) as SpaceBlobResponse
 }
@@ -256,6 +292,7 @@ export async function downloadSpaceBlobChunk(
 ): Promise<Uint8Array<ArrayBuffer>> {
   const url = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
   const res = await fetch(url, {
+    credentials: 'omit', redirect: 'error',
     headers: { Authorization: `Bearer ${route.token}` },
   })
   if (!res.ok) {
@@ -333,18 +370,20 @@ export async function downloadEntryBlob(
   revision?: number,
 ): Promise<Blob> {
   const base = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/download`
-  const res = password
-    ? await fetch(base, {
+  const res = await (password
+    ? fetch(base, {
         method: 'POST',
+        credentials: 'omit', redirect: 'error',
         headers: {
           Authorization: `Bearer ${route.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ password, revision }),
       })
-    : await fetch(revision ? `${base}?revision=${revision}` : base, {
+    : fetch(revision ? `${base}?revision=${revision}` : base, {
+        credentials: 'omit', redirect: 'error',
         headers: { Authorization: `Bearer ${route.token}` },
-      })
+      })).catch(() => { throw new ApiError(0, '无法连接 Core 下载文件') })
   if (!res.ok) {
     throw new Error(res.status === 403 ? '空间密码不正确或无权下载' : `下载失败 (${res.status})`)
   }
@@ -376,6 +415,25 @@ export function deleteSpaceEntryApi(
     route.token,
     route.origin,
   )
+}
+
+export function pushStandardSpaceMutation(route: SpaceRouteConfig, spaceId: string, entryId: string, payload: {
+  operation: 'edit' | 'delete'; mutationId: string; deviceLabel: string; baseRevision: number; edit?: StandardSpaceEdit
+}): Promise<StandardSpaceSyncResult> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/sync`,
+    { method: 'POST', body: JSON.stringify(payload) }, route.token, route.origin)
+}
+
+export function fetchStandardSpaceConflicts(route: SpaceRouteConfig, spaceId: string): Promise<StandardSpaceConflict[]> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/sync-conflicts`, {}, route.token, route.origin)
+}
+
+export function resolveStandardSpaceConflict(
+  route: SpaceRouteConfig, spaceId: string, conflict: StandardSpaceConflict, strategy: 'core' | 'candidate',
+): Promise<StandardSpaceSyncResult> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/sync-conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+    { method: 'POST', body: JSON.stringify({ strategy, expectedRevision: conflict.current.currentRevision, expectedDeleted: !!conflict.current.deletedAt }) },
+    route.token, route.origin)
 }
 
 export function fetchSpaceTokens(route: SpaceRouteConfig, spaceId: string): Promise<SpaceTokenItem[]> {

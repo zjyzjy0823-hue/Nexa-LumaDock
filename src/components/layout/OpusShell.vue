@@ -7,6 +7,7 @@ import DesktopTitleBar from '../desktop/DesktopTitleBar.vue'
 import { useCoreSync } from '../../composables/useCoreSync'
 import { runAndroidSync } from '../../api/sync'
 import { useWebsitesStore } from '../../stores/websites'
+import { useSpaceStore } from '../../stores/space'
 import {
   readStoredWidth,
   saveStoredWidth,
@@ -37,6 +38,7 @@ const emit = defineEmits<{ navigate: [page: string]; create: [kind: string]; act
 const auth = useAuthStore()
 const automation = useAutomationStore()
 const fleet = useFleetStore()
+const space = useSpaceStore()
 const attentionTasks = computed(() => automation.items.filter(item => {
   if (!item.enabled) return false
   const last = automation.runtimeExecutions.find(run => run.workflowId === item.id)
@@ -306,6 +308,7 @@ function logoutAccount() {
 defineExpose({ openDock: () => { dockOpen.value = true } })
 let resizeObserver: ResizeObserver | null = null
 let androidSyncTimer: ReturnType<typeof setInterval> | undefined
+let spaceSyncTimer: ReturnType<typeof setInterval> | undefined
 let androidSyncActive = false
 async function syncAndroidForeground() {
   const state = syncStatus.value
@@ -322,9 +325,18 @@ async function syncAndroidForeground() {
     androidSyncActive = false
   }
 }
+function syncSpaceForeground() {
+  if (document.hidden || !navigator.onLine) return
+  void space.syncPending().then(() => {
+    if (props.page === 'Space' && space.selectedSpace?.tier === 'standard') void space.refreshCurrentSpace()
+  })
+}
+watch(() => space.route, route => { if (route) syncSpaceForeground() })
 onMounted(() => {
   document.addEventListener('keydown', keydown)
   document.addEventListener('pointerdown', dismissSync)
+  spaceSyncTimer = setInterval(syncSpaceForeground, 30_000)
+  window.addEventListener('online', syncSpaceForeground)
   if (android) {
     androidSyncTimer = setInterval(syncAndroidForeground, 30_000)
     window.addEventListener('online', syncAndroidForeground)
@@ -341,6 +353,8 @@ onUnmounted(() => {
   document.removeEventListener('keydown', keydown)
   document.removeEventListener('pointerdown', dismissSync)
   if (androidSyncTimer !== undefined) clearInterval(androidSyncTimer)
+  if (spaceSyncTimer !== undefined) clearInterval(spaceSyncTimer)
+  window.removeEventListener('online', syncSpaceForeground)
   window.removeEventListener('online', syncAndroidForeground)
   resizeObserver?.disconnect()
   resizeObserver = null

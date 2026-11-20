@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { ApiError } from '../../api/client'
 import { useFleetStore } from '../../stores/fleet'
 
+const props = withDefaults(defineProps<{ feature?: string }>(), { feature: '对话' })
 const fleet = useFleetStore()
 const username = ref('')
 const password = ref('')
@@ -26,13 +27,13 @@ async function signIn() {
 </script>
 
 <template>
-  <form class="card mat core-fleet-sign-in" aria-label="登录 Core 对话" @submit.prevent="signIn">
-    <h3>登录 Core 对话</h3>
+  <form class="card mat core-fleet-sign-in" :aria-label="'登录 Core ' + props.feature" @submit.prevent="signIn">
+    <h3>登录 Core {{ props.feature }}</h3>
     <p>{{ fleet.coreSignInUrl }}</p>
     <label>Core 用户名<input v-model="username" class="input" autocomplete="username" required /></label>
     <label>Core 密码<input v-model="password" class="input" type="password" autocomplete="current-password" required /></label>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? '正在登录…' : '登录 Core 对话' }}</button>
+    <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? '正在登录…' : '登录 Core ' + props.feature }}</button>
   </form>
 </template>
 

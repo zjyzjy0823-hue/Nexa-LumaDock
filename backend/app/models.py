@@ -731,6 +731,27 @@ class SpaceEntryRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class SpaceSyncCandidate(Base):
+    __tablename__ = "space_sync_candidates"
+    __table_args__ = (
+        UniqueConstraint("space_id", "mutation_id", name="uq_space_sync_candidate_mutation"),
+        Index("ix_space_sync_candidates_space_pending", "space_id", "resolved_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_id: Mapped[str] = mapped_column(ForeignKey("shared_spaces.id", ondelete="CASCADE"))
+    entry_id: Mapped[str] = mapped_column(ForeignKey("space_entries.id", ondelete="CASCADE"))
+    mutation_id: Mapped[str] = mapped_column(String(36))
+    base_revision: Mapped[int] = mapped_column(Integer)
+    device_label: Mapped[str] = mapped_column(String(120))
+    operation: Mapped[str] = mapped_column(String(12))
+    edited_fields: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    result_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class SpaceToken(Base):
     """Shared Space 专用 API Token（ss_live_ 仅普通档；sv_live_ 仅受控机密档，严格隔离）。"""
     __tablename__ = "space_tokens"

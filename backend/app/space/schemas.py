@@ -181,6 +181,48 @@ class SpaceEntryDetailOut(SpaceEntrySummaryOut):
     conflictRevisions: list[int] = Field(default_factory=list)
 
 
+class SpaceStandardEdit(StrictModel):
+    title: str = Field(min_length=1, max_length=200)
+    tags: list[str] = Field(max_length=32)
+    contentText: str
+
+
+class SpaceStandardMutation(StrictModel):
+    mutationId: UUID
+    baseRevision: int = Field(ge=1)
+    deviceLabel: str = Field(min_length=1, max_length=120)
+    operation: Literal["edit", "delete"]
+    edit: SpaceStandardEdit | None = None
+
+
+class SpaceStandardCandidateOut(StrictModel):
+    id: str
+    entryId: str
+    deviceLabel: str
+    operation: Literal["edit", "delete"]
+    edit: SpaceStandardEdit | None = None
+    baseRevision: int
+    createdAt: str
+    current: SpaceEntryDetailOut
+
+
+class SpaceStandardResolution(StrictModel):
+    expectedRevision: int = Field(ge=1)
+    expectedDeleted: bool
+    strategy: Literal["core", "candidate"]
+
+
+class SpaceStandardMutationOut(StrictModel):
+    status: Literal["applied", "conflict", "resolved"]
+    revision: int
+    candidateId: str | None = None
+
+
+class SpaceStandardSnapshot(StrictModel):
+    cursor: int
+    entries: list[SpaceEntrySummaryOut]
+
+
 class SpaceTokenCreateInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     scopes: list[SpaceTokenScope] = Field(default_factory=lambda: ["read"], min_length=1)

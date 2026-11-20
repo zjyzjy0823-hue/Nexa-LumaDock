@@ -29,6 +29,11 @@ from .schemas import (
     SpaceOut,
     SpacePasswordUnlockInput,
     SpaceRotateEpochInput,
+    SpaceStandardCandidateOut,
+    SpaceStandardMutation,
+    SpaceStandardMutationOut,
+    SpaceStandardResolution,
+    SpaceStandardSnapshot,
     SpaceTokenCreateInput,
     SpaceTokenCreatedOut,
     SpaceTokenOut,
@@ -314,6 +319,46 @@ def delete_entry(
 ):
     service.delete_entry(db, actor, space_id, entry_id)
     return Response(status_code=204)
+
+
+@router.post("/{space_id}/entries/{entry_id}/sync", response_model=SpaceStandardMutationOut)
+def sync_standard_entry(
+    space_id: str,
+    entry_id: str,
+    payload: SpaceStandardMutation,
+    actor: service.SpaceActor = Depends(_space_actor),
+    db: Session = Depends(get_db),
+):
+    return service.sync_standard_entry(db, actor, space_id, entry_id, payload)
+
+
+@router.get("/{space_id}/sync-conflicts", response_model=list[SpaceStandardCandidateOut])
+def list_standard_conflicts(
+    space_id: str,
+    actor: service.SpaceActor = Depends(_space_actor),
+    db: Session = Depends(get_db),
+):
+    return service.list_standard_conflicts(db, actor, space_id)
+
+
+@router.get("/{space_id}/sync-snapshot", response_model=SpaceStandardSnapshot)
+def standard_space_snapshot(
+    space_id: str,
+    actor: service.SpaceActor = Depends(_space_actor),
+    db: Session = Depends(get_db),
+):
+    return service.standard_space_snapshot(db, actor, space_id)
+
+
+@router.post("/{space_id}/sync-conflicts/{candidate_id}/resolve", response_model=SpaceStandardMutationOut)
+def resolve_standard_conflict(
+    space_id: str,
+    candidate_id: str,
+    payload: SpaceStandardResolution,
+    actor: service.SpaceActor = Depends(_space_actor),
+    db: Session = Depends(get_db),
+):
+    return service.resolve_standard_conflict(db, actor, space_id, candidate_id, payload)
 
 
 # ---------------- 隔离增量游标、专用 Token 与审计 ----------------

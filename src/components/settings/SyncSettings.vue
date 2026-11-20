@@ -9,6 +9,7 @@ import ConflictCenter from './ConflictCenter.vue'
 import { decideSyncRejected, getSyncRejected, type RejectedEntry } from '../../api/sync'
 import { conflictEntityLabel } from '../../services/conflictPresentation'
 import { useAuthStore } from '../../stores/auth'
+import { useSpaceStore } from '../../stores/space'
 import { desktopPlatform } from '../../desktop/platform'
 import { useCoreSync } from '../../composables/useCoreSync'
 import { syncErrorMessage, syncStatusDisplay } from '../../services/coreSyncErrors'
@@ -20,6 +21,7 @@ const { connection, connectionTest, syncStatus, syncResult, connectionLoading, s
   action, busy, connectionError, syncError, nativeBinding, needsReplica, refresh, connect, test, disconnect, sync, newReplica
 } = useCoreSync(message => emit('action', message))
 const platform = desktopPlatform()
+const sharedSpace = useSpaceStore()
 const android = platform === 'android'
 const platformLabels: Record<CorePlatform, string> = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS', web: 'Web' }
 const coreUrl = ref('')
@@ -207,6 +209,14 @@ onUnmounted(() => { password.value = '' })
     </div>
   </SettingsSection>
   <ConflictCenter :open="conflictsOpen" :refresh-status="() => refresh(false)" @close="conflictsOpen = false" @action="message => emit('action', message)" />
+  <SettingsSection v-if="sharedSpace.available && (auth.mode === 'core' || sharedSpace.linkedCore)" title="共享空间同步">
+    <div class="sync-summary" role="status">
+      <p v-if="sharedSpace.coreSignInRequired">请在共享空间登录 Core 后同步。</p>
+      <p v-else>待提交 {{ sharedSpace.pendingCount }} · 待在 Core 处理 {{ sharedSpace.pendingSpaceConflicts }} · 提交失败 {{ sharedSpace.rejected.length }}</p>
+      <p v-if="sharedSpace.syncError">{{ sharedSpace.syncError }}</p>
+      <ActionButton variant="secondary" :disabled="!sharedSpace.route || sharedSpace.syncing" @click="sharedSpace.retrySpaceQueue()">同步共享空间</ActionButton>
+    </div>
+  </SettingsSection>
 </template>
 
 <style scoped>

@@ -39,6 +39,78 @@ def _create_agent_with_scopes(client, headers, scopes: list[str]) -> dict[str, s
     return {"Authorization": f"Bearer {tk_res.json()['token']}"}
 
 
+def test_standard_space_core_can_adopt_offline_edit_or_delete(client, users):
+    owner, stranger = users
+    space = client.post("/api/v1/spaces", headers=owner, json={"name": "Synced notes", "tier": "standard"}).json()
+    url = f"/api/v1/spaces/{space['id']}"
+    row = client.post(f"{url}/entries", headers=owner, json={"title": "Before", "contentText": "Initial"}).json()
+    entry = f"{url}/entries/{row['id']}"
+    newer = client.put(entry, headers=owner, json={"baseRevision": 1, "title": "Core title", "contentText": "Core body"})
+    assert newer.status_code == 200, newer.text
+
+    edit = {
+        "mutationId": str(uuid4()), "baseRevision": 1, "deviceLabel": "Android phone", "operation": "edit",
+        "edit": {"title": "Local title", "tags": ["mobile"], "contentText": "Offline body"},
+    }
+    pending = client.post(f"{entry}/sync", headers=owner, json=edit)
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["status"] == "conflict"
+    candidate_id = pending.json()["candidateId"]
+    assert client.post(f"{entry}/sync", headers=owner, json=edit).json() == pending.json()
+    assert client.get(entry, headers=owner).json()["contentText"] == "Core body"
+    assert client.get(f"{url}/sync-conflicts", headers=stranger).status_code == 404
+    candidate, = client.get(f"{url}/sync-conflicts", headers=owner).json()
+    assert candidate["edit"]["title"] == "Local title"
+    assert candidate["deviceLabel"] == "Android phone"
+    assert candidate["current"]["contentText"] == "Core body"
+
+    decision = f"{url}/sync-conflicts/{candidate_id}/resolve"
+    stale = client.post(decision, headers=owner, json={"strategy": "candidate", "expectedRevision": 1, "expectedDeleted": False})
+    assert stale.status_code == 409
+    payload = {"strategy": "candidate", "expectedRevision": 2, "expectedDeleted": False}
+    accepted = client.post(decision, headers=owner, json=payload)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["revision"] == 3
+    assert client.post(decision, headers=owner, json=payload).json() == accepted.json()
+    assert client.post(f"{entry}/sync", headers=owner, json=edit).json()["status"] == "resolved"
+    current = client.get(entry, headers=owner).json()
+    assert (current["title"], current["contentText"], current["tags"]) == ("Local title", "Offline body", ["mobile"])
+    assert client.get(f"{entry}?revision=2", headers=owner).json()["contentText"] == "Core body"
+
+    delete = {"mutationId": str(uuid4()), "baseRevision": 2, "deviceLabel": "Windows", "operation": "delete"}
+    stale_delete = client.post(f"{entry}/sync", headers=owner, json=delete)
+    assert stale_delete.status_code == 200, stale_delete.text
+    assert stale_delete.json()["status"] == "conflict"
+    conflict = f"{url}/sync-conflicts/{stale_delete.json()['candidateId']}/resolve"
+    keep = client.post(conflict, headers=owner, json={"strategy": "core", "expectedRevision": 3, "expectedDeleted": False})
+    assert keep.status_code == 200, keep.text
+    assert client.get(entry, headers=owner).status_code == 200
+
+    delete.update(mutationId=str(uuid4()), baseRevision=3)
+    removed = client.post(f"{entry}/sync", headers=owner, json=delete)
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["status"] == "applied"
+    assert client.post(f"{entry}/sync", headers=owner, json=delete).json() == removed.json()
+    assert client.get(entry, headers=owner).status_code == 404
+
+    edit.update(mutationId=str(uuid4()), baseRevision=3)
+    restore_candidate = client.post(f"{entry}/sync", headers=owner, json=edit).json()
+    assert restore_candidate["status"] == "conflict"
+    snapshot = client.get(f"{url}/sync-snapshot", headers=owner).json()
+    assert snapshot["entries"] == []
+    past_latest = client.get(f"{url}/changes?sinceSeq={snapshot['cursor'] + 10}", headers=owner)
+    assert past_latest.status_code == 409
+    restored = client.post(
+        f"{url}/sync-conflicts/{restore_candidate['candidateId']}/resolve", headers=owner,
+        json={"strategy": "candidate", "expectedRevision": 3, "expectedDeleted": True},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["revision"] == 4
+    changes = client.get(f"{url}/changes?sinceSeq={snapshot['cursor']}", headers=owner).json()["changes"]
+    assert changes[-1]["entryId"] == row["id"] and changes[-1]["revision"] == 4 and changes[-1]["changeType"] == "upsert"
+    assert client.get(entry, headers=owner).json()["contentText"] == "Offline body"
+
+
 def test_alembic_0021_shared_space_migration_upgrade_and_downgrade(tmp_path, monkeypatch):
     db_file = tmp_path / "migration_test.db"
     db_url = f"sqlite:///{db_file.as_posix()}"
@@ -64,6 +136,7 @@ def test_alembic_0021_shared_space_migration_upgrade_and_downgrade(tmp_path, mon
             "space_access_audit_logs",
             "space_changes",
             "space_mutation_receipts",
+            "space_sync_candidates",
         ):
             assert expected in tables
 
