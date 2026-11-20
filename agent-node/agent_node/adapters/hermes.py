@@ -57,6 +57,7 @@ class HermesAdapter(AgentAdapter):
         # 供“模型选择器”（models.list）使用；current 与 ACP 的真实当前模型保持一致。
         self._picker_models: list[dict[str, Any]] | None = None
         self._current_model: str | None = None
+        self._current_effort: str | None = None
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
         async with self._init_lock:
@@ -166,13 +167,17 @@ class HermesAdapter(AgentAdapter):
             model_id = str(row.get("modelId") or row.get("model_id") or "")
             if not model_id:
                 continue
+            meta = row.get("_meta") if isinstance(row.get("_meta"), dict) else {}
+            hermes_meta = meta.get("hermes") if isinstance(meta.get("hermes"), dict) else {}
+            raw_efforts = hermes_meta.get("efforts") if isinstance(hermes_meta.get("efforts"), list) else []
+            efforts = [str(level).strip().lower() for level in raw_efforts if str(level).strip()]
             models.append({
                 "id": model_id,
                 "label": str(row.get("name") or model_id),
                 "provider": model_id.split(":", 1)[0] if ":" in model_id else "",
-                # FleetModel 契约要求 efforts 必填；ACP 的 ModelInfo 没有思考档位，
-                # 漏掉这个字段会让前端在选择器渲染时 entry.efforts.length 抛错。
-                "efforts": [],
+                # FleetModel 契约要求 efforts 必填；Hermes 在 ModelInfo._meta.hermes.efforts 里
+                # 给出该路由支持的档位（见 acp_adapter/server.py::_with_effort_meta）。
+                "efforts": efforts,
                 "description": row.get("description"),
             })
         if models:
@@ -290,6 +295,15 @@ class HermesAdapter(AgentAdapter):
                 # ACP 的模型切换是会话级的（session/set_model），必须在空闲且发送 prompt 之前完成。
                 await proc.call("session/set_model", {"sessionId": session_id, "modelId": requested_model})
                 self._current_model = requested_model
+                self._current_effort = None  # 换模型会重建 agent，档位需按新路由重设
+            requested_effort = str((options or {}).get("effort") or "").strip().lower()
+            if requested_effort and requested_effort != self._current_effort and self.mode != "gateway":
+                # 思考档位同样走会话级 config option（Hermes ACP 侧已经实现 reasoning_effort）。
+                await proc.call(
+                    "session/set_config_option",
+                    {"sessionId": session_id, "configId": "reasoning_effort", "value": requested_effort},
+                )
+                self._current_effort = requested_effort
             await emit({"type": "Accepted", "sessionId": session_id, "runId": request_id, "requestId": request_id, "provider": self.provider})
             prompt_res = await proc.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": prompt_text}]})
             if isinstance(prompt_res, dict) and isinstance(prompt_res.get("usage"), dict):
