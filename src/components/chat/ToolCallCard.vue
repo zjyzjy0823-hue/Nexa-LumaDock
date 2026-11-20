@@ -194,10 +194,12 @@ onUnmounted(() => {
           <button
             type="button"
             class="tool-copy-btn"
+            :class="{ 'is-copied': copiedTarget === 'input' }"
             :aria-label="`复制 ${tool.name} 输入参数`"
             @click.stop="copyBlock('input', formattedInput)"
           >
-            {{ copiedTarget === 'input' ? '已复制' : '复制' }}
+            <OpusIcon :name="copiedTarget === 'input' ? 'check' : 'copy'" class="tool-copy-ic" />
+            <span>{{ copiedTarget === 'input' ? '已复制' : '复制' }}</span>
           </button>
         </div>
         <pre class="tool-pre">{{ formattedInput }}</pre>
@@ -209,10 +211,12 @@ onUnmounted(() => {
           <button
             type="button"
             class="tool-copy-btn"
+            :class="{ 'is-copied': copiedTarget === 'output' }"
             :aria-label="`复制 ${tool.name} 执行输出`"
             @click.stop="copyBlock('output', tool.output)"
           >
-            {{ copiedTarget === 'output' ? '已复制' : '复制' }}
+            <OpusIcon :name="copiedTarget === 'output' ? 'check' : 'copy'" class="tool-copy-ic" />
+            <span>{{ copiedTarget === 'output' ? '已复制' : '复制' }}</span>
           </button>
         </div>
         <pre v-if="ansiOutputSpans" class="tool-pre tool-pre--out"><span
@@ -409,12 +413,19 @@ onUnmounted(() => {
   color: var(--text-3);
 }
 .tool-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 10.5px;
   color: var(--text-2);
   background: var(--surface-2);
   cursor: pointer;
+}
+.tool-copy-ic {
+  width: 11px;
+  height: 11px;
 }
 .tool-copy-btn:hover { background: var(--surface-3); color: var(--text); }
 .tool-pre {

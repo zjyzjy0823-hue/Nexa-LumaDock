@@ -179,7 +179,7 @@ onUnmounted(() => {
               v-if="getEffectiveView(bIdx, block.lang, block.code) === 'code'"
               type="button"
               class="md-code-copy"
-              :class="{ 'is-copied': wrappedCodeBlocks[bIdx] }"
+              :class="{ 'is-wrapped': wrappedCodeBlocks[bIdx] }"
               :title="wrappedCodeBlocks[bIdx] ? '取消自动换行' : '开启代码自动换行'"
               @click="toggleCodeWrap(bIdx)"
             >
@@ -458,6 +458,9 @@ onUnmounted(() => {
 .md-code-copy:hover {
   background: var(--solid);
   color: var(--text);
+}
+.md-code-copy.is-wrapped {
+  color: var(--accent);
 }
 .md-code-copy.is-copied {
   color: var(--ok);

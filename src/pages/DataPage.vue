@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
+import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import Modal from '../components/ui/Modal.vue'
@@ -181,11 +182,13 @@ async function removeRecord(item: RecordSummary) {
   } catch (error) { emit('action', error instanceof Error ? error.message : '删除失败') }
 }
 
+const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
+
 async function copyCollectionName(collection: CollectionSummary) {
-  try {
-    await navigator.clipboard.writeText(collection.name)
+  const ok = await copyWithFeedback(collection.name, `col-${collection.id}`)
+  if (ok) {
     emit('action', `已复制「${collection.name}」的名称。`)
-  } catch {
+  } else {
     emit('action', '复制失败，请检查浏览器权限。')
   }
 }
@@ -280,7 +283,7 @@ onUnmounted(() => {
         <div v-else-if="selectedCollection" class="insp">
           <h3>{{ selectedCollection.name }}</h3>
           <p v-if="selectedCollection.description" class="muted">{{ selectedCollection.description }}</p>
-          <div class="btn-row"><button class="btn btn-sm btn-ghost" type="button" @click="copyCollectionName(selectedCollection)"><OpusIcon name="copy" />复制名称</button><button class="btn btn-sm btn-ghost" type="button" @click="openEditCollection(selectedCollection)">编辑集合</button><button class="btn btn-sm btn-danger" type="button" @click="removeCollection(selectedCollection)">删除集合</button></div>
+          <div class="btn-row"><button class="btn btn-sm btn-ghost" :class="{ 'is-copied': isCopied(`col-${selectedCollection.id}`) }" type="button" @click="copyCollectionName(selectedCollection)"><OpusIcon :name="isCopied(`col-${selectedCollection.id}`) ? 'check' : 'copy'" />{{ isCopied(`col-${selectedCollection.id}`) ? '已复制' : '复制名称' }}</button><button class="btn btn-sm btn-ghost" type="button" @click="openEditCollection(selectedCollection)">编辑集合</button><button class="btn btn-sm btn-danger" type="button" @click="removeCollection(selectedCollection)">删除集合</button></div>
           <details v-if="store.overview || store.overviewError">
             <summary class="muted" style="cursor:pointer;font-size:12.5px">数据概览</summary>
             <ul v-if="store.overview" class="muted" style="font-size:12.5px;padding-left:18px"><li>活跃 {{ dataOverview.active }} 条 · 已完成 {{ dataOverview.completed }} 条</li><li v-for="item in dataOverview.activities" :key="item.id">{{ item.title }} · {{ item.time }}</li></ul>

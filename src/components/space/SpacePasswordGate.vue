@@ -50,19 +50,19 @@ function handleClose() {
         <span class="space-gate-icon"><OpusIcon name="lock" /></span>
         <div class="space-gate-titles">
           <h3>{{ title }}</h3>
-          <p class="muted">{{ description }}</p>
+          <p v-if="description" class="muted">{{ description }}</p>
         </div>
       </div>
 
       <label class="space-gate-field">
-        <span>空间密码（仅用于本次操作，绝不缓存）</span>
         <input
           ref="inputRef"
           v-model="password"
           class="input"
           type="password"
           autocomplete="off"
-          placeholder="请输入空间密码"
+          placeholder="输入空间密码"
+          aria-label="空间密码"
           required
           :disabled="busy"
         />
@@ -73,7 +73,7 @@ function handleClose() {
       <div class="space-gate-actions">
         <button type="button" class="btn btn-ghost" :disabled="busy" @click="handleClose">取消</button>
         <button type="submit" class="btn btn-primary" :disabled="busy || !password">
-          {{ busy ? '正在验证并解密…' : (confirmLabel ?? '确认解锁') }}
+          {{ busy ? '验证中…' : (confirmLabel ?? '解锁') }}
         </button>
       </div>
     </form>

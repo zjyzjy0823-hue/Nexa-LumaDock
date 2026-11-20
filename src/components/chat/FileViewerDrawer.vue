@@ -298,6 +298,7 @@ onUnmounted(() => {
           v-if="preview && !preview.isBinary"
           type="button"
           class="icon-btn"
+          :class="{ 'is-copied': copied }"
           aria-label="复制文件内容"
           :title="selectedRange ? '复制选中行' : '复制全文'"
           @click="copyContent"

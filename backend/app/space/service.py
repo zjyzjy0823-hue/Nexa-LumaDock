@@ -866,18 +866,30 @@ def _require_protected_password(db: Session, actor: SpaceActor, space: SharedSpa
         raise HTTPException(403, "Invalid space password")
 
 
-def _extract_plaintext_bytes(content_text: str | None, content_base64: str | None) -> tuple[bytes, bool]:
+def _extract_plaintext_bytes(
+    content_text: str | None,
+    content_base64: str | None,
+    *,
+    allow_file_note: bool = False,
+) -> tuple[bytes, bool]:
     """解析请求中提交的文本或 Base64 二进制内容，返回 (raw_bytes, is_text)。"""
-    if content_text is not None and content_base64 is not None:
+    if content_text is not None and content_base64 is not None and not allow_file_note:
         raise HTTPException(422, "Provide either contentText or contentBase64, not both")
-    if content_text is not None:
-        return content_text.encode("utf-8"), True
     if content_base64 is not None:
         try:
             return base64.b64decode(content_base64, validate=True), False
         except Exception as exc:
             raise HTTPException(422, "Invalid contentBase64 payload") from exc
+    if content_text is not None:
+        return content_text.encode("utf-8"), True
     return b"", True
+
+
+def _normalize_file_note(note: str | None) -> str | None:
+    if note is None:
+        return None
+    cleaned = note.strip()
+    return cleaned or None
 
 
 def _store_protected_encrypted_payload(
@@ -887,7 +899,8 @@ def _store_protected_encrypted_payload(
     entry_id: str,
     revision: int,
     raw_bytes: bytes,
-) -> tuple[SpaceBlob, dict[str, Any], int, str]:
+    note_text: str | None = None,
+) -> tuple[SpaceBlob, dict[str, Any], str | None, int, str]:
     """为 protected 档条目生成独立 DEK，服务端信封加密分块落盘，绝不写明文入库。"""
     ws_key = _require_vault_workspace_key(space.workspace_id)
     chunk_size = crypto.DEFAULT_CHUNK_SIZE
@@ -901,6 +914,19 @@ def _store_protected_encrypted_payload(
         revision=revision,
         epoch=int(space.active_epoch),
     )
+
+    encrypted_manifest_b64: str | None = None
+    cleaned_note = _normalize_file_note(note_text)
+    if cleaned_note is not None:
+        encrypted_manifest_b64 = crypto.encrypt_manifest(
+            dek=dek,
+            manifest={"summary": cleaned_note},
+            workspace_id=space.workspace_id,
+            space_id=space.id,
+            entry_id=entry_id,
+            revision=revision,
+            epoch=int(space.active_epoch),
+        )
 
     chunks_raw = [raw_bytes[i : i + chunk_size] for i in range(0, len(raw_bytes), chunk_size)] or [b""]
     blob_id = str(uuid4())
@@ -941,12 +967,13 @@ def _store_protected_encrypted_payload(
     )
     db.add(blob)
     db.flush()
-    return blob, wrapped_dek, total_ct_size, crypto.sha256_hex(raw_bytes)
+    return blob, wrapped_dek, encrypted_manifest_b64, total_ct_size, crypto.sha256_hex(raw_bytes)
 
 
-def _decrypt_protected_revision_bytes(space: SharedSpace, entry: SpaceEntry, rev: SpaceEntryRevision) -> bytes:
+def _decrypt_protected_revision_payload(space: SharedSpace, entry: SpaceEntry, rev: SpaceEntryRevision) -> tuple[bytes, str | None]:
+    """解密 protected 档修订的二进制载荷以及可选的加密文件备注。"""
     if rev.wrapped_dek_json is None or rev.blob_id is None:
-        return b""
+        return b"", None
     ws_key = _require_vault_workspace_key(space.workspace_id)
     dek = crypto.unwrap_dek(
         wrapping_key=ws_key,
@@ -977,7 +1004,26 @@ def _decrypt_protected_revision_bytes(space: SharedSpace, entry: SpaceEntry, rev
                 epoch=int(rev.epoch),
             )
         )
-    return bytes(out)
+    note_text: str | None = None
+    if rev.encrypted_manifest_b64:
+        manifest = crypto.decrypt_manifest(
+            dek=dek,
+            encrypted_manifest_b64=rev.encrypted_manifest_b64,
+            workspace_id=space.workspace_id,
+            space_id=space.id,
+            entry_id=entry.id,
+            revision=int(rev.revision),
+            epoch=int(rev.epoch),
+        )
+        raw_note = manifest.get("summary")
+        if isinstance(raw_note, str) and raw_note.strip():
+            note_text = raw_note
+    return bytes(out), note_text
+
+
+def _decrypt_protected_revision_bytes(space: SharedSpace, entry: SpaceEntry, rev: SpaceEntryRevision) -> bytes:
+    raw, _note = _decrypt_protected_revision_payload(space, entry, rev)
+    return raw
 
 
 def _finalize_staged_blob(db: Session, space: SharedSpace, blob_id: str) -> SpaceBlob:
@@ -1201,14 +1247,25 @@ def create_entry(
             _require_protected_password(db, actor, space, payload.password, entry_id=entry_id, action="entry.create")
         if not payload.title:
             raise HTTPException(422, "Title is required for protected entry")
-        raw_bytes, _is_text = _extract_plaintext_bytes(payload.contentText, payload.contentBase64)
+        is_file_entry = payload.entryType == "file"
+        raw_bytes, _is_text = _extract_plaintext_bytes(
+            payload.contentText,
+            payload.contentBase64,
+            allow_file_note=is_file_entry,
+        )
         if len(raw_bytes) > _max_file_bytes():
             raise HTTPException(413, "Entry exceeds max allowed size")
         if int(space.used_bytes) + len(raw_bytes) > int(space.quota_bytes):
             raise HTTPException(413, "Space storage quota exceeded")
 
-        blob, wrapped_dek, ct_size, pt_sha = _store_protected_encrypted_payload(
-            db, space=space, entry_id=entry_id, revision=revision, raw_bytes=raw_bytes
+        file_note = _normalize_file_note(payload.contentText) if is_file_entry else None
+        blob, wrapped_dek, encrypted_manifest_b64, ct_size, pt_sha = _store_protected_encrypted_payload(
+            db,
+            space=space,
+            entry_id=entry_id,
+            revision=revision,
+            raw_bytes=raw_bytes,
+            note_text=file_note,
         )
         entry = SpaceEntry(
             id=entry_id,
@@ -1233,7 +1290,7 @@ def create_entry(
             revision=revision,
             epoch=int(space.active_epoch),
             wrapped_dek_json=wrapped_dek,
-            encrypted_manifest_b64=None,
+            encrypted_manifest_b64=encrypted_manifest_b64,
             plaintext_text=None,  # protected 档数据库严禁落明文
             blob_id=blob.id,
             chunk_count=int(blob.chunk_count),
@@ -1252,24 +1309,29 @@ def create_entry(
         if not payload.title:
             raise HTTPException(422, "Title is required for standard entry")
         blob = None
-        plaintext_text: str | None = None
+        is_file_entry = payload.entryType == "file"
+        plaintext_text: str | None = _normalize_file_note(payload.contentText) if is_file_entry else None
         size_bytes = 0
         sha = payload.contentSha256
         if payload.blobId:
             blob = _finalize_staged_blob(db, space, payload.blobId)
             size_bytes = int(blob.total_size)
         else:
-            raw_bytes, is_text = _extract_plaintext_bytes(payload.contentText, payload.contentBase64)
+            raw_bytes, is_text = _extract_plaintext_bytes(
+                payload.contentText,
+                payload.contentBase64,
+                allow_file_note=is_file_entry,
+            )
             if len(raw_bytes) > _max_file_bytes():
                 raise HTTPException(413, "Entry exceeds max allowed size")
             if int(space.used_bytes) + len(raw_bytes) > int(space.quota_bytes):
                 raise HTTPException(413, "Space storage quota exceeded")
             size_bytes = len(raw_bytes)
             sha = crypto.sha256_hex(raw_bytes)
-            if is_text and payload.entryType != "file":
+            if is_text and not is_file_entry:
                 plaintext_text = payload.contentText or ""
             else:
-                # 二进制文件分块存入 space_blobs
+                # 二进制文件分块存入 space_blobs（可选文件备注保留在 plaintext_text）
                 chunk_size = crypto.DEFAULT_CHUNK_SIZE
                 parts = [raw_bytes[i : i + chunk_size] for i in range(0, len(raw_bytes), chunk_size)] or [b""]
                 bid = str(uuid4())
@@ -1451,7 +1513,7 @@ def get_entry(
     if space.tier == "protected":
         # 仅细粒度 sv_live_ 可通过 GET 直读明文；UI(JWT) GET 仅返回锁定元数据，必须 POST /unlock 输密
         if actor.kind == "vault_token":
-            raw = _decrypt_protected_revision_bytes(space, entry, rev)
+            raw, note_text = _decrypt_protected_revision_payload(space, entry, rev)
             _record_audit(
                 db,
                 workspace_id=space.workspace_id,
@@ -1469,6 +1531,7 @@ def get_entry(
                     space,
                     entry,
                     rev,
+                    content_text=note_text,
                     content_base64=base64.b64encode(raw).decode("ascii"),
                     locked=False,
                 )
@@ -1505,7 +1568,7 @@ def unlock_protected_entry(
     entry = _owned_entry(db, space, entry_id)
     _require_protected_password(db, actor, space, password, entry_id=entry.id, action="entry.unlock")
     rev = _entry_revision(db, entry, revision)
-    raw = _decrypt_protected_revision_bytes(space, entry, rev)
+    raw, note_text = _decrypt_protected_revision_payload(space, entry, rev)
 
     _record_audit(
         db,
@@ -1525,6 +1588,7 @@ def unlock_protected_entry(
             space,
             entry,
             rev,
+            content_text=note_text,
             content_base64=base64.b64encode(raw).decode("ascii"),
             locked=False,
         )
@@ -1572,9 +1636,7 @@ def download_entry_bytes(
         )
         db.commit()
     else:
-        if rev.plaintext_text is not None:
-            raw = rev.plaintext_text.encode("utf-8")
-        elif rev.blob_id:
+        if rev.blob_id and (entry.entry_type == "file" or rev.plaintext_text is None):
             raw = b"".join(
                 storage.read_chunk_bytes(
                     workspace_id=space.workspace_id,
@@ -1584,6 +1646,8 @@ def download_entry_bytes(
                 )
                 for i in range(int(rev.chunk_count))
             )
+        elif rev.plaintext_text is not None:
+            raw = rev.plaintext_text.encode("utf-8")
         else:
             raw = b""
         if actor.kind == "standard_token":
@@ -1679,9 +1743,30 @@ def update_entry(
     elif space.tier == "protected":
         if actor.kind == "user":
             _require_protected_password(db, actor, space, payload.password, entry_id=entry.id, action="entry.update")
-        raw_bytes, _is_text = _extract_plaintext_bytes(payload.contentText, payload.contentBase64)
-        blob, wrapped_dek, ct_size, pt_sha = _store_protected_encrypted_payload(
-            db, space=space, entry_id=entry.id, revision=next_rev_num, raw_bytes=raw_bytes
+        is_file_entry = entry.entry_type == "file"
+        file_note = _normalize_file_note(payload.contentText) if is_file_entry else None
+        if is_file_entry and payload.contentBase64 is None:
+            previous = _entry_revision(db, entry, payload.baseRevision)
+            raw_bytes, previous_note = _decrypt_protected_revision_payload(space, entry, previous)
+            if "contentText" not in payload.model_fields_set:
+                file_note = previous_note
+        else:
+            raw_bytes, _is_text = _extract_plaintext_bytes(
+                payload.contentText,
+                payload.contentBase64,
+                allow_file_note=is_file_entry,
+            )
+        if len(raw_bytes) > _max_file_bytes():
+            raise HTTPException(413, "Entry exceeds max allowed size")
+        if int(space.used_bytes) + len(raw_bytes) > int(space.quota_bytes):
+            raise HTTPException(413, "Space storage quota exceeded")
+        blob, wrapped_dek, encrypted_manifest_b64, ct_size, pt_sha = _store_protected_encrypted_payload(
+            db,
+            space=space,
+            entry_id=entry.id,
+            revision=next_rev_num,
+            raw_bytes=raw_bytes,
+            note_text=file_note,
         )
         rev = SpaceEntryRevision(
             id=str(uuid4()),
@@ -1691,7 +1776,7 @@ def update_entry(
             revision=next_rev_num,
             epoch=int(space.active_epoch),
             wrapped_dek_json=wrapped_dek,
-            encrypted_manifest_b64=None,
+            encrypted_manifest_b64=encrypted_manifest_b64,
             plaintext_text=None,
             blob_id=blob.id,
             chunk_count=int(blob.chunk_count),
@@ -1719,38 +1804,64 @@ def update_entry(
         detail_kwargs = {"locked": True}
 
     else:
-        raw_bytes, is_text = _extract_plaintext_bytes(payload.contentText, payload.contentBase64)
+        is_file_entry = entry.entry_type == "file"
         blob = _finalize_staged_blob(db, space, payload.blobId) if payload.blobId else None
-        plaintext_text: str | None = payload.contentText if (blob is None and is_text and entry.entry_type != "file") else None
-        size_bytes = int(blob.total_size) if blob else len(raw_bytes)
-        sha = payload.contentSha256 or crypto.sha256_hex(raw_bytes)
-        if blob is None and plaintext_text is None and raw_bytes:
-            chunk_size = crypto.DEFAULT_CHUNK_SIZE
-            parts = [raw_bytes[i : i + chunk_size] for i in range(0, len(raw_bytes), chunk_size)]
-            bid = str(uuid4())
-            cmeta: dict[str, Any] = {}
-            for idx, part in enumerate(parts):
-                dg, sz = storage.write_chunk_bytes(
+        if is_file_entry and blob is None and payload.contentBase64 is None:
+            # 仅更新普通文件的标题、标签或备注，复用原有文件二进制分块
+            prev_rev = _entry_revision(db, entry, payload.baseRevision)
+            plaintext_text = prev_rev.plaintext_text
+            if "contentText" in payload.model_fields_set:
+                plaintext_text = _normalize_file_note(payload.contentText)
+            reused_blob_id = prev_rev.blob_id
+            reused_chunk_count = int(prev_rev.chunk_count)
+            reused_chunk_size = int(prev_rev.chunk_size)
+            size_bytes = int(prev_rev.plaintext_size)
+            sha = prev_rev.content_sha256
+            added_bytes = 0
+        else:
+            raw_bytes, is_text = _extract_plaintext_bytes(
+                payload.contentText,
+                payload.contentBase64,
+                allow_file_note=is_file_entry,
+            )
+            plaintext_text = (
+                _normalize_file_note(payload.contentText)
+                if is_file_entry
+                else (payload.contentText if (blob is None and is_text) else None)
+            )
+            size_bytes = int(blob.total_size) if blob else len(raw_bytes)
+            sha = payload.contentSha256 or crypto.sha256_hex(raw_bytes)
+            if blob is None and (is_file_entry or plaintext_text is None) and raw_bytes:
+                chunk_size = crypto.DEFAULT_CHUNK_SIZE
+                parts = [raw_bytes[i : i + chunk_size] for i in range(0, len(raw_bytes), chunk_size)]
+                bid = str(uuid4())
+                cmeta: dict[str, Any] = {}
+                for idx, part in enumerate(parts):
+                    dg, sz = storage.write_chunk_bytes(
+                        workspace_id=space.workspace_id,
+                        space_id=space.id,
+                        blob_id=bid,
+                        chunk_index=idx,
+                        data=part,
+                    )
+                    cmeta[str(idx)] = {"sha256": dg, "size": sz}
+                blob = SpaceBlob(
+                    id=bid,
                     workspace_id=space.workspace_id,
                     space_id=space.id,
-                    blob_id=bid,
-                    chunk_index=idx,
-                    data=part,
+                    chunk_size=chunk_size,
+                    chunk_count=len(parts),
+                    total_size=size_bytes,
+                    chunks_json=cmeta,
+                    committed_at=now,
+                    created_at=now,
                 )
-                cmeta[str(idx)] = {"sha256": dg, "size": sz}
-            blob = SpaceBlob(
-                id=bid,
-                workspace_id=space.workspace_id,
-                space_id=space.id,
-                chunk_size=chunk_size,
-                chunk_count=len(parts),
-                total_size=size_bytes,
-                chunks_json=cmeta,
-                committed_at=now,
-                created_at=now,
-            )
-            db.add(blob)
-            db.flush()
+                db.add(blob)
+                db.flush()
+            reused_blob_id = blob.id if blob else None
+            reused_chunk_count = int(blob.chunk_count) if blob else 0
+            reused_chunk_size = int(blob.chunk_size) if blob else crypto.DEFAULT_CHUNK_SIZE
+            added_bytes = size_bytes
 
         rev = SpaceEntryRevision(
             id=str(uuid4()),
@@ -1762,9 +1873,9 @@ def update_entry(
             wrapped_dek_json=None,
             encrypted_manifest_b64=None,
             plaintext_text=plaintext_text,
-            blob_id=blob.id if blob else None,
-            chunk_count=int(blob.chunk_count) if blob else 0,
-            chunk_size=int(blob.chunk_size) if blob else crypto.DEFAULT_CHUNK_SIZE,
+            blob_id=reused_blob_id,
+            chunk_count=reused_chunk_count,
+            chunk_size=reused_chunk_size,
             ciphertext_size=size_bytes,
             plaintext_size=size_bytes,
             content_sha256=sha,
@@ -1773,7 +1884,7 @@ def update_entry(
             created_by=f"{actor.kind}:{actor.actor_id}",
             created_at=now,
         )
-        space.used_bytes = int(space.used_bytes) + size_bytes
+        space.used_bytes = int(space.used_bytes) + added_bytes
         if not is_conflict:
             entry.current_revision = next_rev_num
             if payload.title is not None:

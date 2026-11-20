@@ -56,6 +56,7 @@ const auth = useAuthStore()
 const ledger = useLedgerStore()
 const automation = useAutomationStore()
 const websites = useWebsitesStore()
+const failedBookmarkIcons = ref<Record<string, string | null>>({})
 const dataStore = useDataStore()
 const devicesStore = useDevicesStore()
 const fleet = useFleetStore()
@@ -420,6 +421,10 @@ async function visitBookmark(site: Website) {
   } catch { /* 非阻塞 */ }
 }
 
+function showBookmarkIcon(site: Website) {
+  return Boolean(site.icon && /^https?:\/\//i.test(site.icon) && failedBookmarkIcons.value[site.id] !== site.icon)
+}
+
 async function submitCapture() {
   if (!intent.value || captureBusy.value) return
   const current = intent.value
@@ -594,8 +599,8 @@ onUnmounted(() => {
           @activate="visitBookmark(site)"
           @action="emit('action', $event)"
         >
-          <span class="bm-fav">
-            <img v-if="site.icon && /^https?:\/\//i.test(site.icon)" class="opus-favicon" :src="site.icon" alt="" />
+          <span class="bm-fav" :class="{ 'bm-fav--img': showBookmarkIcon(site) }">
+            <img v-if="showBookmarkIcon(site)" class="opus-favicon" :src="site.icon ?? undefined" alt="" @error="failedBookmarkIcons[site.id] = site.icon" />
             <template v-else>{{ site.name[0]?.toUpperCase() }}</template>
           </span>
           <span v-if="bookmarkStyle === 'pill'" class="bm-name">{{ site.name }}</span>
@@ -922,6 +927,11 @@ onUnmounted(() => {
   font-weight: 700;
   flex: none;
   overflow: hidden;
+}
+.bm-fav--img {
+  background: #ffffff;
+  padding: 2px;
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 .is-pill .bm-fav { border-radius: 50%; }
 .is-icon .bm-fav { width: 20px; height: 20px; }

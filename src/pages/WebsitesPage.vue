@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
+import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ExternalLinkButton from '../components/ui/ExternalLink.vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
@@ -39,7 +40,17 @@ const categoryError = ref('')
 const form = reactive({ name: '', url: '', icon: '', description: '', categoryId: '', favorite: false, order: 0 })
 const autoIconValue = ref('')
 const iconPreviewFailed = ref(false)
+const failedIconIds = ref<Record<string, boolean>>({})
 const iconPreviewUrl = computed(() => /^https?:\/\//i.test(form.icon.trim()) ? form.icon.trim() : '')
+
+function hasValidIcon(item: Website): boolean {
+  return Boolean(item.icon && /^https?:\/\//i.test(item.icon) && !failedIconIds.value[item.id])
+}
+
+function markIconFailed(id: string) {
+  failedIconIds.value = { ...failedIconIds.value, [id]: true }
+}
+watch(() => store.websites, () => { failedIconIds.value = {} })
 let faviconTimer: ReturnType<typeof setTimeout> | undefined
 let faviconSequence = 0
 function imageAvailable(url: string) {
@@ -186,10 +197,21 @@ async function removeCategory(id: string, name: string) {
   try { await store.removeCategory(websiteToken.value, id); if (selectedCategory.value === id) selectedCategory.value = 'all'; emit('action', '分类已删除。') }
   catch (error) { categoryError.value = error instanceof Error ? error.message : '删除失败' }
 }
+const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
+let menuCloseTimer: ReturnType<typeof setTimeout> | undefined
+
 async function copyLink(item: Website) {
-  openMenuId.value = null
-  try { await navigator.clipboard.writeText(item.url); emit('action', `已复制「${item.name}」的网址。`) }
-  catch { emit('action', '复制失败，请检查浏览器权限。') }
+  const ok = await copyWithFeedback(item.url, `site-${item.id}`)
+  if (ok) {
+    emit('action', `已复制「${item.name}」的网址。`)
+    if (menuCloseTimer) clearTimeout(menuCloseTimer)
+    menuCloseTimer = setTimeout(() => {
+      if (openMenuId.value === item.id) openMenuId.value = null
+    }, 550)
+  } else {
+    openMenuId.value = null
+    emit('action', '复制失败，请检查浏览器权限。')
+  }
 }
 function onDocumentPointerDown(event: PointerEvent) {
   if (!(event.target as Element).closest('[data-website-menu]')) openMenuId.value = null
@@ -200,7 +222,7 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown); document.addEventListener('keydown', onDocumentKeydown)
   refresh()
 })
-onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointerDown); document.removeEventListener('keydown', onDocumentKeydown); if (searchTimer) clearTimeout(searchTimer); if (faviconTimer) clearTimeout(faviconTimer); faviconSequence++ })
+onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointerDown); document.removeEventListener('keydown', onDocumentKeydown); if (searchTimer) clearTimeout(searchTimer); if (faviconTimer) clearTimeout(faviconTimer); if (menuCloseTimer) clearTimeout(menuCloseTimer); faviconSequence++ })
 </script>
 
 <template>
@@ -223,17 +245,26 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
     <div v-else-if="store.websites.length" :class="mobile || listView ? 'mlist mat-solid' : 'web-grid'">
       <article v-for="(item, i) in store.websites" :key="item.id" class="opus-site-item" :class="{ 'opus-site-item--open': openMenuId === item.id, 'opus-site-item--list': mobile || listView }">
         <ExternalLinkButton :href="item.url" :class="mobile || listView ? 'mrow' : 'web-card mat'" :aria-label="'打开 ' + item.name" @activate="openWebsite(item)" @action="emit('action', $event)">
-          <span v-if="mobile || listView" class="fav" :style="{ width: '36px', height: '36px', borderRadius: '11px', background: colors[i % colors.length] }"><img v-if="item.icon && item.icon.startsWith('http')" class="opus-favicon" :src="item.icon" alt=""><template v-else>{{ item.name[0] }}</template></span>
+          <span
+            v-if="mobile || listView"
+            class="fav"
+            :class="{ 'fav--img': hasValidIcon(item) }"
+            :style="{ width: '36px', height: '36px', borderRadius: '11px', background: hasValidIcon(item) ? undefined : colors[i % colors.length] }"
+          ><img v-if="hasValidIcon(item)" class="opus-favicon" :src="item.icon ?? undefined" alt="" @error="markIconFailed(item.id)"><template v-else>{{ item.name[0] }}</template></span>
           <span v-if="mobile || listView" class="grow"><div class="title">{{ item.name }}</div><div class="sub">{{ item.url }}</div></span>
           <template v-else>
-            <div class="top"><span class="fav" :style="{ width: '36px', height: '36px', borderRadius: '10px', background: colors[i % colors.length] }"><img v-if="item.icon && item.icon.startsWith('http')" class="opus-favicon" :src="item.icon" alt=""><template v-else>{{ item.name[0] }}</template></span><div style="min-width:0"><div style="font-weight:600">{{ item.name }}</div><div class="faint" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.url }}</div></div></div>
+            <div class="top"><span
+              class="fav"
+              :class="{ 'fav--img': hasValidIcon(item) }"
+              :style="{ width: '36px', height: '36px', borderRadius: '10px', background: hasValidIcon(item) ? undefined : colors[i % colors.length] }"
+            ><img v-if="hasValidIcon(item)" class="opus-favicon" :src="item.icon ?? undefined" alt="" @error="markIconFailed(item.id)"><template v-else>{{ item.name[0] }}</template></span><div style="min-width:0"><div style="font-weight:600">{{ item.name }}</div><div class="faint" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.url }}</div></div></div>
             <div class="foot"><span class="chip">{{ store.categories.find(category => category.id === item.categoryId)?.name ?? '未分类' }}</span><span>{{ item.lastVisitedAt ? '最近访问 ' + new Date(item.lastVisitedAt).toLocaleDateString('zh-CN') : '尚未访问' }}</span><span v-if="item.favorite" class="faint" style="margin-left:auto">★ 已收藏</span></div>
           </template>
         </ExternalLinkButton>
         <div class="opus-site-menu" data-website-menu>
           <button class="icon-btn" type="button" :aria-label="item.name + ' 更多操作'" :aria-expanded="openMenuId === item.id" @click="openMenuId = openMenuId === item.id ? null : item.id"><OpusIcon name="more" /></button>
           <div v-if="openMenuId === item.id" class="website-menu mat-solid enter">
-            <button class="row" type="button" @click="copyLink(item)">复制链接</button>
+            <button class="row" :class="{ 'is-copied': isCopied(`site-${item.id}`) }" type="button" @click="copyLink(item)"><OpusIcon :name="isCopied(`site-${item.id}`) ? 'check' : 'copy'" />{{ isCopied(`site-${item.id}`) ? '已复制' : '复制链接' }}</button>
             <button class="row" type="button" @click="openDialog(item)">编辑网站</button>
             <button class="row" type="button" @click="toggleFavorite(item)">{{ item.favorite ? '取消收藏' : '收藏网站' }}</button>
             <button class="row" type="button" :disabled="selectedCategory !== 'all' || !!query || onlyFavorites || sort !== 'order'" @click="moveWebsite(item, -1)">上移</button>
@@ -301,7 +332,8 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
 .website-menu { position: absolute; z-index: 10; top: 100%; right: 0; min-width: 132px; padding: 4px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--solid) 97%, transparent); backdrop-filter: var(--material-filter); -webkit-backdrop-filter: var(--material-filter); box-shadow: var(--shadow-2); }
 .website-menu .row { width: 100%; }
 .website-icon-field { display: grid; grid-template-columns: 1fr 40px; align-items: end; gap: 10px; }
-.website-icon-preview { display: grid; width: 40px; height: 36px; place-items: center; overflow: hidden; color: var(--accent); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--solid); font-size: 16px; font-weight: 700; }
+.fav--img { padding: 5px; background: #ffffff; border: 1px solid var(--line); overflow: hidden; }
+.website-icon-preview { display: grid; width: 40px; height: 36px; place-items: center; overflow: hidden; color: var(--accent); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: #ffffff; font-size: 16px; font-weight: 700; }
 .website-icon-preview img { width: 22px; height: 22px; object-fit: contain; }
 .website-category-form { display: flex; gap: 8px; }
 .website-category-form .input { flex: 1; }

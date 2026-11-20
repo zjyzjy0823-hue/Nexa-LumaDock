@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
+import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { AudioLines, BarChart3, CalendarDays, Code2, Database, FileText, Globe2, Search, Sparkles, Workflow } from 'lucide-vue-next'
@@ -175,9 +176,12 @@ async function revokeAgentToken() {
     notify('Agent Token 已撤销。')
   } catch (error) { notify(error instanceof Error ? error.message : '撤销失败') }
 }
+const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
+
 async function copyAgentToken() {
-  try { await navigator.clipboard.writeText(revealedToken.value); notify('Agent Token 已复制。') }
-  catch { notify('复制失败，请手动复制。') }
+  const ok = await copyWithFeedback(revealedToken.value, 'agent-token')
+  if (ok) notify('Agent Token 已复制。')
+  else notify('复制失败，请手动复制。')
 }
 async function saveAgent() {
   const name = newAgentName.value.trim()
@@ -221,9 +225,9 @@ async function removeTask(task: AgentTask) {
   try { await store.removeTask(auth.token, item.id, task.id); notify('任务已删除。') }
   catch (error) { notify(error instanceof Error ? error.message : '删除失败') }
 }
-async function copyApiPath(path: string) {
-  try { await navigator.clipboard.writeText(path); notify('API 路径已复制') }
-  catch { notify(path) }
+async function copyApiPath(path: string, key: string) {
+  const ok = await copyWithFeedback(path, key)
+  notify(ok ? 'API 路径已复制' : path)
 }
 </script>
 
@@ -377,7 +381,7 @@ async function copyApiPath(path: string) {
               <div class="faint" style="font-size:12px">数据权限由 Scope 控制 · {{ selectedAgent.dataScopes?.length ? `已授权 ${selectedAgent.dataScopes.length} 项` : '无数据权限' }}</div>
             </div>
             <code class="mono">{{ revealedToken || (selectedAgent.tokenLast4 ? `na_live_••••${selectedAgent.tokenLast4}` : '尚未生成') }}</code>
-            <button v-if="revealedToken" class="btn btn-sm btn-ghost" type="button" @click="copyAgentToken">复制</button>
+            <button v-if="revealedToken" class="btn btn-sm btn-ghost" :class="{ 'is-copied': isCopied('agent-token') }" type="button" @click="copyAgentToken"><OpusIcon :name="isCopied('agent-token') ? 'check' : 'copy'" />{{ isCopied('agent-token') ? '已复制' : '复制' }}</button>
             <button class="btn btn-sm btn-ghost" type="button" @click="generateAgentToken">{{ selectedAgent.tokenLast4 ? '重新生成' : '生成 Token' }}</button>
             <button v-if="selectedAgent.tokenLast4" class="btn btn-sm btn-danger" type="button" @click="revokeAgentToken">撤销</button>
           </div>
@@ -410,7 +414,7 @@ async function copyApiPath(path: string) {
 
         <div v-else-if="activeTab === 'api'" class="mat-solid" style="border-radius:var(--r-md);overflow:auto">
           <table v-if="selectedAgent.apiCalls.length" class="tbl"><thead><tr><th>方法</th><th>路径</th><th>时间</th><th>延迟</th><th>状态</th><th></th></tr></thead>
-            <tbody><tr v-for="(call, index) in selectedAgent.apiCalls" :key="`${call.endpoint}-${index}`"><td class="mono">{{ call.method }}</td><td class="mono">{{ call.endpoint }}</td><td class="muted">{{ call.time }}</td><td class="muted">{{ call.duration }}</td><td style="color:var(--ok)">{{ call.status }} OK</td><td class="r"><button class="btn btn-sm btn-ghost" type="button" @click="copyApiPath(call.endpoint)"><OpusIcon name="copy" />复制</button></td></tr></tbody>
+            <tbody><tr v-for="(call, index) in selectedAgent.apiCalls" :key="`${call.endpoint}-${index}`"><td class="mono">{{ call.method }}</td><td class="mono">{{ call.endpoint }}</td><td class="muted">{{ call.time }}</td><td class="muted">{{ call.duration }}</td><td style="color:var(--ok)">{{ call.status }} OK</td><td class="r"><button class="btn btn-sm btn-ghost" :class="{ 'is-copied': isCopied(`api-${index}`) }" type="button" @click="copyApiPath(call.endpoint, `api-${index}`)"><OpusIcon :name="isCopied(`api-${index}`) ? 'check' : 'copy'" />{{ isCopied(`api-${index}`) ? '已复制' : '复制' }}</button></td></tr></tbody>
           </table>
           <div v-else class="cleared" style="padding:24px"><OpusIcon name="api" />暂无 API 调用</div>
         </div>

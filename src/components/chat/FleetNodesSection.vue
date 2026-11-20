@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { confirmAction } from '../../composables/useConfirm'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
 import { resolveSavedModelPref } from '../../services/modelPrefs'
 import { useAuthStore } from '../../stores/auth'
 import { sessionKey, useFleetStore } from '../../stores/fleet'
@@ -130,11 +131,13 @@ async function removeNode(node: AgentNode) {
   }
 }
 
-async function copyText(text: string, tip: string) {
-  try {
-    await navigator.clipboard.writeText(text)
+const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
+
+async function copyText(text: string, tip: string, key = 'node-token') {
+  const ok = await copyWithFeedback(text, key)
+  if (ok) {
     emit('action', tip)
-  } catch {
+  } else {
     emit('action', '请手动复制文本框中的内容')
   }
 }
@@ -337,8 +340,9 @@ const totalReadyAdapters = computed(() =>
           v-if="issuedToken"
           type="button"
           class="btn btn-ghost"
-          @click="copyText(issuedToken.nodeToken, '已复制 sn_live_ 凭证')"
-        ><OpusIcon name="copy" />复制 Token</button>
+          :class="{ 'is-copied': isCopied('node-token') }"
+          @click="copyText(issuedToken.nodeToken, '已复制 sn_live_ 凭证', 'node-token')"
+        ><OpusIcon :name="isCopied('node-token') ? 'check' : 'copy'" />{{ isCopied('node-token') ? '已复制' : '复制 Token' }}</button>
         <button type="button" class="btn btn-primary" @click="issuedToken = null">我已妥善保存</button>
       </template>
     </Modal>

@@ -1,19 +1,27 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { ArrowUpRight, Copy, MoreHorizontal, RadioTower, Send } from 'lucide-vue-next'
+import { ArrowUpRight, Check, Copy, MoreHorizontal, RadioTower, Send } from 'lucide-vue-next'
 import Toggle from '../ui/Toggle.vue'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
 import type { Webhook } from '../../types/api'
 
 const props = defineProps<{ webhook: Webhook }>()
 const emit = defineEmits<{ toggle: [id: string, enabled: boolean]; copyUrl: [url: string]; test: [id: string] }>()
 const root = ref<HTMLElement | null>(null)
 const menuOpen = ref(false)
+const { isCopied, markCopied } = useCopyFeedback()
+let closeTimer: ReturnType<typeof setTimeout> | undefined
 
 function onPointerDown(event: PointerEvent) {
   if (!root.value?.contains(event.target as Node)) menuOpen.value = false
 }
 function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape') menuOpen.value = false }
-function copyUrl() { emit('copyUrl', props.webhook.url); menuOpen.value = false }
+function copyUrl() {
+  emit('copyUrl', props.webhook.url)
+  markCopied('url')
+  if (closeTimer) clearTimeout(closeTimer)
+  closeTimer = setTimeout(() => { menuOpen.value = false }, 550)
+}
 function test() { emit('test', props.webhook.id); menuOpen.value = false }
 onMounted(() => {
   document.addEventListener('pointerdown', onPointerDown)
@@ -22,6 +30,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('pointerdown', onPointerDown)
   document.removeEventListener('keydown', onKeydown)
+  if (closeTimer) clearTimeout(closeTimer)
 })
 </script>
 
@@ -33,7 +42,7 @@ onUnmounted(() => {
       <div class="webhook-card__more-wrap">
         <button class="icon-button webhook-card__more" type="button" :aria-label="`${webhook.name} 更多操作`" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="17" /></button>
         <div v-if="menuOpen" class="webhook-card__menu" role="menu">
-          <button type="button" role="menuitem" @click="copyUrl"><Copy :size="13" />复制 URL</button>
+          <button type="button" role="menuitem" :class="{ 'is-copied': isCopied('url') }" @click="copyUrl"><Check v-if="isCopied('url')" :size="13" /><Copy v-else :size="13" />{{ isCopied('url') ? '已复制' : '复制 URL' }}</button>
           <button type="button" role="menuitem" @click="test"><Send :size="13" />发送测试事件</button>
         </div>
       </div>

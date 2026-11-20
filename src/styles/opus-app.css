@@ -356,3 +356,29 @@ dialog.dlg .dlg-check input { width: 16px; height: 16px; margin: 0; }
   user-select: none;
 }
 .opus-shell .window.nav-collapsed .nav-sec + * { margin-top: 0; }
+
+/* 全局复制按钮点击打勾交互反馈 */
+@keyframes opus-copy-check-pop {
+  0% { transform: scale(0.62); opacity: 0.45; }
+  65% { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.is-copied {
+  color: var(--ok, #17824f) !important;
+}
+.btn.btn-primary.is-copied {
+  background: var(--ok, #17824f);
+  border-color: var(--ok, #17824f);
+  color: #ffffff !important;
+}
+.is-copied svg {
+  animation: opus-copy-check-pop 240ms var(--ease-spring, cubic-bezier(.34, 1.4, .64, 1));
+}
+[data-motion="reduced"] .is-copied svg {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-copied svg {
+    animation: none;
+  }
+}

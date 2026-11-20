@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
+import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { HardDrive, Laptop, Monitor, Server, Smartphone, Tablet } from 'lucide-vue-next'
 import OpusIcon from '../components/ui/OpusIcon.vue'
@@ -163,9 +164,12 @@ async function revokeToken() {
   } catch (error) { tokenError.value = error instanceof Error ? error.message : '撤销失败' }
   finally { tokenBusy.value = false }
 }
+const { copy: copyWithFeedback, isCopied } = useCopyFeedback()
+
 async function copyToken() {
-  try { await navigator.clipboard.writeText(generatedToken.value); emit('action', 'Device Token 已复制。') }
-  catch { tokenError.value = '复制失败，请手动复制。' }
+  const ok = await copyWithFeedback(generatedToken.value, 'device-token')
+  if (ok) emit('action', 'Device Token 已复制。')
+  else tokenError.value = '复制失败，请手动复制。'
 }
 </script>
 
@@ -278,7 +282,7 @@ async function copyToken() {
     <p v-if="tokenError" class="dlg-error" role="alert">{{ tokenError }}</p>
     <template #footer>
       <template v-if="generatedToken">
-        <button class="btn btn-ghost" type="button" @click="copyToken"><OpusIcon name="copy" />复制</button>
+        <button class="btn btn-ghost" :class="{ 'is-copied': isCopied('device-token') }" type="button" @click="copyToken"><OpusIcon :name="isCopied('device-token') ? 'check' : 'copy'" />{{ isCopied('device-token') ? '已复制' : '复制' }}</button>
         <button class="btn btn-primary" type="button" @click="closeTokenDialog">完成</button>
       </template>
       <template v-else>

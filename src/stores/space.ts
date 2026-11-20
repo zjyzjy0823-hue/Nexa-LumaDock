@@ -392,6 +392,7 @@ export const useSpaceStore = defineStore('space', () => {
           )
         }
 
+        const noteSummary = input.entryType === 'file' ? (input.contentText?.trim() || undefined) : undefined
         const manifest: SpaceEntryManifest = {
           version: 1,
           entryType: input.entryType,
@@ -403,6 +404,7 @@ export const useSpaceStore = defineStore('space', () => {
           chunkSize,
           plaintextSha256: await sha256Hex(rawBytes),
           tags: input.tags ?? [],
+          summary: noteSummary,
         }
         const wrappedDek = await wrapDek({ wrappingKey: spaceKey, dek, scope })
         const encryptedManifestB64 = await encryptManifest({ dek, manifest, scope })
@@ -436,6 +438,10 @@ export const useSpaceStore = defineStore('space', () => {
     }
     if (input.file) {
       payload.contentBase64 = bytesToBase64(rawBytes)
+      const fileNote = input.contentText?.trim()
+      if (fileNote) {
+        payload.contentText = fileNote
+      }
     } else {
       payload.contentText = input.contentText ?? ''
     }
@@ -586,7 +592,7 @@ export const useSpaceStore = defineStore('space', () => {
           entryId: targetDetail.id,
           revision: targetDetail.revision,
           manifest,
-          contentText: isFile ? null : TEXT_DECODER.decode(merged),
+          contentText: isFile ? (manifest.summary?.trim() || null) : TEXT_DECODER.decode(merged),
           fileBlob: isFile ? new Blob([merged], { type: manifest.mime }) : undefined,
           fileName: manifest.fileName ?? manifest.title,
           mime: manifest.mime,

@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onUnmounted, ref } from 'vue'
 import type { Component } from 'vue'
-import { AppWindow, ArrowUpRight, Copy, FolderKanban, Globe2, HardDrive, Layers3, MoreHorizontal, Repeat2, Server } from 'lucide-vue-next'
+import { AppWindow, ArrowUpRight, Check, Copy, FolderKanban, Globe2, HardDrive, Layers3, MoreHorizontal, Repeat2, Server } from 'lucide-vue-next'
 import GlassCard from '../ui/GlassCard.vue'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
 import type { CollectionIcon, CollectionSummary } from '../../types/data'
 
 defineProps<{ collection: CollectionSummary; selected: boolean }>()
 const emit = defineEmits<{ select: []; copy: []; edit: []; remove: [] }>()
 const menuOpen = ref(false)
+const { isCopied, markCopied } = useCopyFeedback()
+let closeTimer: ReturnType<typeof setTimeout> | undefined
 
 const icons: Record<CollectionIcon, Component> = {
   projects: FolderKanban,
@@ -25,9 +28,15 @@ function selectCollection() {
 }
 
 function copyName() {
-  menuOpen.value = false
   emit('copy')
+  markCopied('name')
+  if (closeTimer) clearTimeout(closeTimer)
+  closeTimer = setTimeout(() => { menuOpen.value = false }, 550)
 }
+
+onUnmounted(() => {
+  if (closeTimer) clearTimeout(closeTimer)
+})
 </script>
 
 <template>
@@ -42,7 +51,7 @@ function copyName() {
       <button class="collection-card__more" type="button" :aria-label="`${collection.name} 更多操作`" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="18" /></button>
       <div v-if="menuOpen" class="collection-card__menu" role="menu">
         <button type="button" role="menuitem" @click="selectCollection"><ArrowUpRight :size="14" />查看记录</button>
-        <button type="button" role="menuitem" @click="copyName"><Copy :size="14" />复制名称</button>
+        <button type="button" role="menuitem" :class="{ 'is-copied': isCopied('name') }" @click="copyName"><Check v-if="isCopied('name')" :size="14" /><Copy v-else :size="14" />{{ isCopied('name') ? '已复制' : '复制名称' }}</button>
         <button type="button" role="menuitem" @click="menuOpen = false; emit('edit')">编辑集合</button>
         <button type="button" role="menuitem" @click="menuOpen = false; emit('remove')">删除集合</button>
       </div>

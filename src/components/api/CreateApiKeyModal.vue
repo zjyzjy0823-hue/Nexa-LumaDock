@@ -2,6 +2,7 @@
 import { nextTick, ref, watch } from 'vue'
 import OpusIcon from '../ui/OpusIcon.vue'
 import Modal from '../ui/Modal.vue'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
 import { apiExpirations } from '../../mock/api'
 import type { ApiKeyCreate, ApiKeyCreated, ApiKeyExpirationDays, ApiScope } from '../../types/api'
 
@@ -12,7 +13,7 @@ const name = ref('')
 const selectedScopes = ref<ApiScope[]>(['Read'])
 const expiration = ref('90')
 const error = ref('')
-const copied = ref(false)
+const { copy: copyWithFeedback, isCopied, reset: resetCopy } = useCopyFeedback()
 
 watch(() => props.open, async open => {
   if (!open) return
@@ -20,7 +21,7 @@ watch(() => props.open, async open => {
   selectedScopes.value = ['Read']
   expiration.value = '90'
   error.value = ''
-  copied.value = false
+  resetCopy()
   await nextTick()
   form.value?.querySelector('input')?.focus()
 })
@@ -40,8 +41,8 @@ function submit() {
 }
 async function copySecret() {
   if (!props.created) return
-  try { await navigator.clipboard.writeText(props.created.secret); copied.value = true }
-  catch { error.value = '复制失败，请手动选中并复制。' }
+  const ok = await copyWithFeedback(props.created.secret, 'secret')
+  if (!ok) error.value = '复制失败，请手动选中并复制。'
 }
 </script>
 
@@ -51,7 +52,7 @@ async function copySecret() {
       <div class="notice warn"><OpusIcon name="alert" /><div>请现在复制并安全保存。刷新或关闭窗口后只会显示掩码。</div></div>
       <div class="secret-box">{{ created.secret }}</div>
       <p v-if="error" class="dlg-error" role="alert">{{ error }}</p>
-      <div class="dlg-actions"><button class="btn btn-ghost" type="button" @click="emit('close')">完成</button><button class="btn btn-primary" type="button" @click="copySecret"><OpusIcon name="copy" />{{ copied ? '已复制' : '复制 Key' }}</button></div>
+      <div class="dlg-actions"><button class="btn btn-ghost" type="button" @click="emit('close')">完成</button><button class="btn btn-primary" :class="{ 'is-copied': isCopied('secret') }" type="button" @click="copySecret"><OpusIcon :name="isCopied('secret') ? 'check' : 'copy'" />{{ isCopied('secret') ? '已复制' : '复制 Key' }}</button></div>
     </div>
     <form v-else ref="form" @submit.prevent="submit">
       <div class="field"><label for="api-key-name">名称</label><input id="api-key-name" v-model="name" class="input" type="text" placeholder="例如：Production App" aria-label="API Key 名称" :maxlength="48" required data-initial-focus /></div>

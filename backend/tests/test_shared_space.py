@@ -598,3 +598,133 @@ def test_e2ee_tier_zero_knowledge_cas_epoch_rotation_and_changes(client, users, 
 
     # 跨工作区访问 404
     assert client.get(f"/api/v1/spaces/{space_id}/envelope", headers=owner_b).status_code == 404
+
+
+def test_file_entry_notes_standard_and_protected(client, users):
+    owner_a, _owner_b = users
+    raw_file = b"%PDF-1.4\nfake-binary-payload-for-note-test\n"
+    raw_b64 = base64.b64encode(raw_file).decode("ascii")
+
+    # 1. standard 档：上传文件并携带备注，随后仅修订备注并确认原文件内容可完整下载
+    sp_std = client.post(
+        "/api/v1/spaces",
+        headers=owner_a,
+        json={"name": "普通文件备注空间", "tier": "standard"},
+    ).json()
+    create_std = client.post(
+        f"/api/v1/spaces/{sp_std['id']}/entries",
+        headers=owner_a,
+        json={
+            "entryType": "file",
+            "title": "设计稿.pdf",
+            "fileName": "design-v1.pdf",
+            "mime": "application/pdf",
+            "tags": ["design"],
+            "contentBase64": raw_b64,
+            "contentText": "初版交互原型，待评审",
+        },
+    )
+    assert create_std.status_code == 201, create_std.text
+    std_entry = create_std.json()
+    assert std_entry["contentText"] == "初版交互原型，待评审"
+
+    detail_std = client.get(f"/api/v1/spaces/{sp_std['id']}/entries/{std_entry['id']}", headers=owner_a)
+    assert detail_std.status_code == 200
+    assert detail_std.json()["contentText"] == "初版交互原型，待评审"
+
+    # 仅更新备注与标题，不重传文件
+    upd_std = client.put(
+        f"/api/v1/spaces/{sp_std['id']}/entries/{std_entry['id']}",
+        headers=owner_a,
+        json={
+            "baseRevision": 1,
+            "title": "设计稿定稿.pdf",
+            "tags": ["design", "final"],
+            "contentText": "已按方案 C 定稿，确认发布",
+        },
+    )
+    assert upd_std.status_code == 200, upd_std.text
+    assert upd_std.json()["revision"] == 2
+    assert upd_std.json()["contentText"] == "已按方案 C 定稿，确认发布"
+
+    dl_std = client.get(f"/api/v1/spaces/{sp_std['id']}/entries/{std_entry['id']}/download", headers=owner_a)
+    assert dl_std.status_code == 200
+    assert dl_std.content == raw_file
+    retitled_std = client.put(
+        f"/api/v1/spaces/{sp_std['id']}/entries/{std_entry['id']}",
+        headers=owner_a,
+        json={"baseRevision": 2, "title": "设计稿已发布.pdf"},
+    )
+    assert retitled_std.status_code == 200, retitled_std.text
+    assert retitled_std.json()["contentText"] == "已按方案 C 定稿，确认发布"
+
+    # 2. protected 档：上传文件并携带机密备注，锁定态不泄露备注，解锁与 sv_live_ 均返回备注与文件
+    space_pwd = "Protected-File-Note#2026"
+    sentinel_note = "SENTINEL_PROTECTED_FILE_NOTE_98765"
+    sp_pro = client.post(
+        "/api/v1/spaces",
+        headers=owner_a,
+        json={"name": "机密文件备注库", "tier": "protected", "password": space_pwd},
+    ).json()
+    create_pro = client.post(
+        f"/api/v1/spaces/{sp_pro['id']}/entries",
+        headers=owner_a,
+        json={
+            "entryType": "file",
+            "title": "prod-cert.pem",
+            "fileName": "prod-cert.pem",
+            "mime": "application/x-pem-file",
+            "tags": ["tls"],
+            "contentBase64": raw_b64,
+            "contentText": sentinel_note,
+            "password": space_pwd,
+        },
+    )
+    assert create_pro.status_code == 201, create_pro.text
+    pro_entry = create_pro.json()
+    assert pro_entry["locked"] is True
+    assert pro_entry["contentText"] is None
+
+    # UI GET 锁定态绝不返回备注明文
+    locked_get = client.get(f"/api/v1/spaces/{sp_pro['id']}/entries/{pro_entry['id']}", headers=owner_a)
+    assert locked_get.status_code == 200
+    assert locked_get.json()["locked"] is True
+    assert locked_get.json()["contentText"] is None
+
+    # 按次输密解锁返回文件与备注
+    unlocked = client.post(
+        f"/api/v1/spaces/{sp_pro['id']}/entries/{pro_entry['id']}/unlock",
+        headers=owner_a,
+        json={"password": space_pwd},
+    )
+    assert unlocked.status_code == 200, unlocked.text
+    assert unlocked.json()["contentText"] == sentinel_note
+    assert base64.b64decode(unlocked.json()["contentBase64"]) == raw_file
+
+    # Vault Token 直读同样返回加密备注与文件
+    tk = client.post(
+        f"/api/v1/spaces/{sp_pro['id']}/tokens",
+        headers=owner_a,
+        json={"name": "cert-reader", "scopes": ["read"], "entryIds": [pro_entry["id"]], "password": space_pwd},
+    ).json()
+    vt_get = client.get(
+        f"/api/v1/spaces/{sp_pro['id']}/entries/{pro_entry['id']}",
+        headers={"Authorization": f"Bearer {tk['token']}"},
+    )
+    assert vt_get.status_code == 200
+    assert vt_get.json()["contentText"] == sentinel_note
+    assert base64.b64decode(vt_get.json()["contentBase64"]) == raw_file
+    updated_pro = client.put(
+        f"/api/v1/spaces/{sp_pro['id']}/entries/{pro_entry['id']}",
+        headers=owner_a,
+        json={"baseRevision": 1, "contentText": "Updated file note", "password": space_pwd},
+    )
+    assert updated_pro.status_code == 200, updated_pro.text
+    assert updated_pro.json()["contentText"] is None
+    updated_read = client.get(
+        f"/api/v1/spaces/{sp_pro['id']}/entries/{pro_entry['id']}",
+        headers={"Authorization": f"Bearer {tk['token']}"},
+    )
+    assert updated_read.status_code == 200, updated_read.text
+    assert updated_read.json()["contentText"] == "Updated file note"
+    assert base64.b64decode(updated_read.json()["contentBase64"]) == raw_file

@@ -2221,6 +2221,7 @@ async function retryTurn(msg: ChatMessage) {
                       v-if="msg.text"
                       type="button"
                       class="btn btn-subtle btn-sm"
+                      :class="{ 'is-copied': copiedMsgId === msg.id }"
                       @click="copyMessageText(msg)"
                     >
                       <OpusIcon :name="copiedMsgId === msg.id ? 'check' : 'copy'" />
@@ -2377,6 +2378,7 @@ async function retryTurn(msg: ChatMessage) {
                       v-if="msg.text"
                       type="button"
                       class="btn btn-subtle btn-sm"
+                      :class="{ 'is-copied': copiedMsgId === msg.id }"
                       @click="copyMessageText(msg)"
                     >
                       <OpusIcon :name="copiedMsgId === msg.id ? 'check' : 'copy'" />
