@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { effectScope, ref } from 'vue'
 
 import {
   NONCE_BYTES,
@@ -13,6 +14,7 @@ import {
   sha256Hex,
 } from '../src/services/blobTransfer.ts'
 import { buildFleetWsUrl, normalizeCoreOrigin } from '../src/services/fleetUrl.ts'
+import { useRecordedTokenUsage } from '../src/services/recordedTokenUsage.ts'
 import {
   applyTokenUsageEvent,
   estimateTurnUsageFallback,
@@ -61,6 +63,52 @@ import {
   suggestCommitMessageFromDiff,
   switchMessageBranch,
 } from '../src/services/chatHelpers.ts'
+
+test('首页实测用量按代理轮次去重并隔离本机记录', t => {
+  const data = {
+    getItem(key) { return this[key] ?? null },
+    setItem(key, value) { Object.defineProperty(this, key, { value, enumerable: true, configurable: true, writable: true }) },
+    removeItem(key) { delete this[key] },
+  }
+  for (const key of ['getItem', 'setItem', 'removeItem']) Object.defineProperty(data, key, { enumerable: false })
+  t.mock.method(Date, 'now', () => 1_790_000_000_000)
+  const storage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: data })
+  t.after(() => {
+    if (storage) Object.defineProperty(globalThis, 'localStorage', storage)
+    else delete globalThis.localStorage
+  })
+
+  const account = ref('account-1')
+  const firstScope = effectScope()
+  t.after(() => firstScope.stop())
+  const usage = firstScope.run(() => useRecordedTokenUsage(account))
+  const session = 'node::adapter::session'
+  usage.record(session, { runId: 'estimated', source: 'estimated', inputTokens: 100 })
+  usage.record(session, { runId: 'cumulative-only', source: 'exact', scope: 'cumulative', inputTokens: 1000 })
+  assert.equal(usage.entries.value.size, 0)
+
+  const measured = { runId: 'run', requestId: 'request', source: 'exact' }
+  usage.record(session, { ...measured, messageId: 'first', inputTokens: 100, cachedInputTokens: 75, outputTokens: 20 }, 3)
+  usage.record(session, { ...measured, messageId: 'second', inputTokens: 30, outputTokens: 8 }, 4)
+  usage.record(session, { ...measured, messageId: 'first', inputTokens: 10 }, 2)
+  assert.equal(usage.entries.value.size, 1)
+  assert.equal([...usage.entries.value.values()][0].total, 158)
+
+  usage.record(session, { ...measured, scope: 'cumulative', totalTokens: 1000, lastInputTokens: 140, lastCachedInputTokens: 80, lastOutputTokens: 20, lastTotalTokens: 165 }, 5)
+  const totals = { recordedAt: Date.now(), total: 165, cached: 80, otherInput: 60, output: 20, other: 5 }
+  assert.deepEqual([...usage.entries.value.values()], [totals])
+
+  firstScope.stop()
+  const reopenedScope = effectScope()
+  t.after(() => reopenedScope.stop())
+  const reopened = reopenedScope.run(() => useRecordedTokenUsage(account))
+  assert.deepEqual([...reopened.entries.value.values()], [totals])
+  account.value = 'account-2'
+  assert.equal(reopened.entries.value.size, 0)
+  account.value = 'account-1'
+  assert.deepEqual([...reopened.entries.value.values()], [totals])
+})
 
 test('AES-256-GCM 分块加解密、Base64URL 编解码与防篡改校验', async () => {
   const key = generateFileKey()

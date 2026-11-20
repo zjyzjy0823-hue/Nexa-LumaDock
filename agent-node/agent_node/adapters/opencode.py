@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -169,6 +170,35 @@ def _failure_from_error(error: Any) -> tuple[str, str]:
     return (str(error).strip() or "opencode 运行失败"), ""
 
 
+def _go_quota_windows(meters: object, *, console: bool) -> list[dict[str, Any]]:
+    if not isinstance(meters, dict):
+        return []
+    windows = []
+    for key, kind, minutes in (("rolling", "primary", 300), ("weekly", "secondary", 10080), ("monthly", "monthly", None)):
+        meter = meters.get(key)
+        if not isinstance(meter, dict):
+            continue
+        percent = meter.get("percent")
+        if type(percent) not in (int, float) or not 0 <= percent <= 100:
+            continue
+        reset = meter.get("resetsAt")
+        resets_at = None
+        if console and type(reset) in (int, float) and 1000 <= reset <= 253402300799000:
+            resets_at = int(reset / 1000)
+        elif not console and isinstance(reset, str):
+            try:
+                parsed = datetime.fromisoformat(reset)
+                timestamp = parsed.timestamp() if parsed.tzinfo is not None else 0
+                if 1 <= timestamp <= 253402300799:
+                    resets_at = int(timestamp)
+            except (ValueError, OverflowError, OSError):
+                pass
+        limited = meter.get("limited") is True if console else meter.get("status") == "rate-limited"
+        windows.append({"group": "OpenCode Go", "kind": kind, "windowMinutes": minutes,
+                        "remainingPercent": 0 if limited else 100 - percent, "resetsAt": resets_at})
+    return windows
+
+
 class OpenCodeAdapter(AgentAdapter):
     provider = "opencode"
 
@@ -195,9 +225,46 @@ class OpenCodeAdapter(AgentAdapter):
         self._model_context_windows: dict[str, int] = {}
         self._managed_proc: asyncio.subprocess.Process | None = None
         self._managed_lock = asyncio.Lock()
+        self._go_api_key = os.environ.get("OPENCODE_GO_API_KEY", "").strip()
+        self._quota_lock = asyncio.Lock()
+        self._quota_cache: tuple[float, dict[str, Any]] | None = None
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(auth=self._auth, timeout=httpx.Timeout(180.0, connect=4.0))
+
+    async def read_subscription_quota(self) -> dict[str, Any]:
+        async with self._quota_lock:
+            if self._quota_cache and time.monotonic() - self._quota_cache[0] < 60:
+                return self._quota_cache[1]
+            windows = []
+            try:
+                if self._go_api_key:
+                    async with httpx.AsyncClient(timeout=6, follow_redirects=False) as client:
+                        response = await client.get("https://opencode.ai/zen/go/v1/usage", headers={
+                            "Authorization": f"Bearer {self._go_api_key}",
+                            "Accept": "application/json",
+                            "User-Agent": "Studiolo-Agent-Node",
+                        })
+                    response.raise_for_status()
+                    payload = response.json()
+                    windows = _go_quota_windows(payload.get("usage") if isinstance(payload, dict) else None, console=False)
+                else:
+                    async with self._client() as client:
+                        response = await client.get(f"{self.serve_url}/api/experimental/usage/limits", timeout=6)
+                    response.raise_for_status()
+                    payload = response.json()
+                    info = payload.get("data") if isinstance(payload, dict) else None
+                    windows = _go_quota_windows(info.get("go") if isinstance(info, dict) else None, console=True)
+                status = "ready" if windows else "no_data"
+            except httpx.HTTPStatusError as exc:
+                status = "no_data" if exc.response.status_code in (401, 403) else "unavailable"
+                if not self._go_api_key and exc.response.status_code == 404:
+                    status = "unsupported"
+            except (httpx.HTTPError, ValueError):
+                status = "unavailable"
+            result = {"status": status, "windows": windows, "checkedAt": int(time.time())}
+            self._quota_cache = (time.monotonic(), result)
+            return result
 
     async def _ensure_managed_serve(self) -> None:
         """若开启 auto_start 且本机 loopback serve 未监听，自动拉起托管 `opencode serve` 并注入随机/配置密钥。"""
@@ -301,20 +368,21 @@ class OpenCodeAdapter(AgentAdapter):
             "forms",
             "subagents",
         )
+        key_quota_caps = (*caps, "subscription-quota") if self._go_api_key else caps
         await self._ensure_managed_serve()
         try:
             async with self._client() as c:
                 r_v2 = await c.get(f"{self.serve_url}/api/session")
                 if self._is_json_response(r_v2):
                     self._api_prefix = "/api"
-                    return AdapterProbe(provider=self.provider, version="serve-v2", status="ready", capabilities=caps)
+                    return AdapterProbe(provider=self.provider, version="serve-v2", status="ready", capabilities=(*caps, "subscription-quota"))
                 r_v1 = await c.get(f"{self.serve_url}/session")
                 if self._is_json_response(r_v1):
                     self._api_prefix = ""
-                    return AdapterProbe(provider=self.provider, version="serve-http", status="ready", capabilities=caps)
+                    return AdapterProbe(provider=self.provider, version="serve-http", status="ready", capabilities=key_quota_caps)
         except Exception:
             pass
-        return AdapterProbe(provider=self.provider, version="", status="unavailable", capabilities=caps)
+        return AdapterProbe(provider=self.provider, version="", status="unavailable", capabilities=key_quota_caps)
 
     async def list_models(self) -> list[dict[str, Any]]:
         async with self._client() as client:

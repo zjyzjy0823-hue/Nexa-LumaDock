@@ -3,10 +3,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity,
   Bookmark,
-  CheckCircle2,
+  Gauge,
   Database,
   LayoutGrid,
-  LayoutList,
+  ChartNoAxesCombined,
   Plus,
   RefreshCw,
   Server,
@@ -16,7 +16,10 @@ import {
   Wallet,
 } from 'lucide-vue-next'
 import ExternalLink from '../components/ui/ExternalLink.vue'
+import DashboardGauge from '../components/ui/DashboardGauge.vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
+import TokenUsageChart from '../components/ui/TokenUsageChart.vue'
+import SubscriptionQuotaPanel from '../components/ui/SubscriptionQuotaPanel.vue'
 import type { SyncStatus } from '../api/sync'
 import { useAuthStore } from '../stores/auth'
 import { useLedgerStore } from '../stores/ledger'
@@ -24,24 +27,15 @@ import { useAutomationStore } from '../stores/automation'
 import { useWebsitesStore } from '../stores/websites'
 import { useDataStore } from '../stores/data'
 import { useDevicesStore } from '../stores/devices'
+import { useFleetStore } from '../stores/fleet'
 import { websiteService } from '../services/websites'
 import { localDateKey, localMonthKey } from '../services/localTime'
+import type { RecordedTokenUsage } from '../services/recordedTokenUsage'
+import type { FleetUsageDay } from '../types/fleet'
 import type { Website } from '../types/website'
 
 type RangeMode = '7d' | 'month'
 type BookmarkStyle = 'pill' | 'card' | 'icon'
-type ActivityFilter = 'all' | 'ledger' | 'automation' | 'data'
-
-interface ActivityEntry {
-  id: string
-  kind: 'ledger' | 'automation' | 'data' | 'website'
-  title: string
-  meta: string
-  badge: string
-  tone: 'default' | 'ok' | 'danger' | 'warn'
-  timestamp: string
-  targetPage: string
-}
 
 const props = defineProps<{
   mobile: boolean
@@ -55,7 +49,6 @@ const emit = defineEmits<{
   create: [kind: string, value?: string]
   action: [message: string]
   sync: []
-  add: [kind: string]
   askAgent: []
 }>()
 
@@ -65,6 +58,7 @@ const automation = useAutomationStore()
 const websites = useWebsitesStore()
 const dataStore = useDataStore()
 const devicesStore = useDevicesStore()
+const fleet = useFleetStore()
 
 const allSites = ref<Website[]>([])
 const recentTxIds = ref<string[]>([])
@@ -75,26 +69,39 @@ const bookmarkStyle = ref<BookmarkStyle>(
     ? storedBookmarkStyle
     : 'pill',
 )
-const activityFilter = ref<ActivityFilter>('all')
 
 // 两段式数据加载动效控制：骨架屏 -> 数据入场递增 / 生长动画
 const refreshing = ref(false)
 const revealSeq = ref(0)
 const gaugeProgress = ref(0)
-const animExpense = ref(0)
+const balanceProgress = ref(0)
+const animBalance = ref(0)
 const animActive = ref(0)
 const animRecords = ref(0)
-const hoveredBarIndex = ref<number | null>(null)
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let countFrame: number | undefined
 
 const now = new Date()
-const month = (now.getMonth() + 1) + ' 月'
+const tokenUsageDemo = import.meta.env.DEV && new URLSearchParams(window.location.search).get('token-usage-demo') === '1'
+const tokenRecords = computed<ReadonlyMap<string, RecordedTokenUsage>>(() => {
+  if (!tokenUsageDemo) return fleet.recordedTokenUsage
+  const records = new Map<string, RecordedTokenUsage>()
+  const dailyRequests = [11, 45, 16, 0, 62, 9, 24, 0, 18, 7, 4, 15, 0, 5]
+  const dailySize = [90, 36, 105, 0, 72, 190, 44, 0, 58, 115, 201, 35, 0, 60]
+  dailyRequests.forEach((requests, daysAgo) => {
+    const recordedAt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo, 9).getTime()
+    for (let index = 0; index < requests; index++) {
+      const input = dailySize[daysAgo]! * (780 + index % 8 * 43)
+      const cached = Math.round(input * (0.65 + daysAgo % 4 * 0.06))
+      const output = (index % 7 + 2) * 1370
+      records.set(`${daysAgo}-${index}`, { recordedAt, cached, otherInput: input - cached, output, other: 0, total: input + output })
+    }
+  })
+  return records
+})
 const monthKey = localMonthKey(now.toISOString())
-const todayKey = localDateKey(now.toISOString())
 
 const money = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' })
-const moneyCompact = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', maximumFractionDigits: 0 })
 
 function setRange(next: RangeMode) {
   if (range.value === next) return
@@ -141,7 +148,45 @@ function previousDateKey(daysAgo: number): string {
 }
 
 const current7dKeys = computed(() => Array.from({ length: 7 }, (_, i) => previousDateKey(6 - i)))
-const prev7dKeys = computed(() => new Set(Array.from({ length: 7 }, (_, i) => previousDateKey(13 - i))))
+const usageDates = computed(() => range.value === '7d'
+  ? current7dKeys.value
+  : Array.from({ length: now.getDate() }, (_, index) => previousDateKey(now.getDate() - index - 1)))
+const usageReport = ref<FleetUsageDay[] | null>(null)
+const usageLabel = computed(() => {
+  if (tokenUsageDemo) return '示例数据'
+  if (!usageReport.value) return '本机收到的实测用量'
+  return auth.mode === 'core' || auth.coreConnection?.connected ? 'Core 汇总' : '本机后端汇总'
+})
+let usageFetch: AbortController | undefined
+let usageTimer: ReturnType<typeof setTimeout> | undefined
+
+async function refreshTokenUsage() {
+  usageFetch?.abort()
+  if (tokenUsageDemo || fleet.usageOrigin === null) return
+  const start = usageDates.value[0]
+  const end = usageDates.value.at(-1)
+  if (!start || !end) return
+  const controller = new AbortController()
+  usageFetch = controller
+  try {
+    const report = await fleet.loadTokenUsage(start, end, controller.signal)
+    if (!controller.signal.aborted) usageReport.value = report
+  } catch {
+    // Local telemetry is still available when the Core is offline or predates this endpoint.
+    if (!controller.signal.aborted) usageReport.value = null
+  }
+}
+
+watch([usageDates, () => fleet.usageOrigin, () => auth.token], () => {
+  usageReport.value = null
+  void refreshTokenUsage()
+}, { immediate: true })
+
+watch([() => fleet.recordedTokenUsage, () => fleet.wsState], ([, state]) => {
+  if (tokenUsageDemo || state !== 'online') return
+  clearTimeout(usageTimer)
+  usageTimer = setTimeout(() => { void refreshTokenUsage() }, 400)
+})
 
 const periodExpense = computed(() => {
   if (range.value === 'month') {
@@ -169,28 +214,15 @@ const periodIncome = computed(() => {
     .reduce((sum, tx) => sum + Number(tx.amount), 0)
 })
 
-const periodTxCount = computed(() => {
-  if (range.value === 'month') {
-    return ledger.items.filter(tx => localMonthKey(tx.occurredAt) === monthKey).length
-  }
-  const set = new Set(current7dKeys.value)
-  return ledger.items.filter(tx => set.has(localDateKey(tx.occurredAt))).length
-})
-
-const expenseTrendDelta = computed(() => {
-  if (range.value === 'month') {
-    const trend = ledger.summary?.monthlyTrend ?? []
-    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    const prevKey = localMonthKey(prevDate.toISOString())
-    const prevValue = Number(trend.find(item => item.month === prevKey)?.expense ?? 0)
-    if (prevValue <= 0) return null
-    return Math.round(((periodExpense.value - prevValue) / prevValue) * 100)
-  }
-  const prevValue = ledger.items
-    .filter(tx => tx.type === 'expense' && prev7dKeys.value.has(localDateKey(tx.occurredAt)))
-    .reduce((sum, tx) => sum + Number(tx.amount), 0)
-  if (prevValue <= 0) return null
-  return Math.round(((periodExpense.value - prevValue) / prevValue) * 100)
+const periodBalance = computed(() => Math.round((periodIncome.value - periodExpense.value) * 100) / 100)
+const balancePercent = computed(() => periodIncome.value > 0
+  ? Math.min(100, Math.max(0, Math.round(periodBalance.value / periodIncome.value * 100)))
+  : 0)
+const balanceCaption = computed(() => {
+  if (ledger.error) return '账本读取失败'
+  if (periodBalance.value < 0) return '支出超过收入'
+  if (periodIncome.value <= 0) return '暂无收入记录'
+  return `剩余收入 ${balancePercent.value}%`
 })
 
 // 小卡 2：系统与任务（自动化启用数 + 在线设备数）
@@ -211,21 +243,9 @@ const totalCollections = computed(() => dataStore.overview?.totalCollections ?? 
 const activeRecords = computed(() => dataStore.overview?.active ?? 0)
 const completedRecords = computed(() => dataStore.overview?.completed ?? 0)
 
-// 小卡 4：半圆弧表盘（优先收支结余比例；未录收入时智能展示同步与待处理就绪度）
+// 工作台状态表盘根据同步队列和冲突显示就绪度。
 const queued = computed(() => (props.syncStatus?.pending ?? 0) + (props.syncStatus?.inFlight ?? 0))
 const gaugeState = computed(() => {
-  if (periodIncome.value > 0) {
-    const ratio = Math.min(100, Math.round((periodExpense.value / periodIncome.value) * 100))
-    const balance = periodIncome.value - periodExpense.value
-    return {
-      title: '收支占比',
-      sub: range.value === '7d' ? '近 7 天支出占收入' : '本月支出占收入',
-      centerText: moneyCompact.format(balance),
-      caption: `结余 · 已用 ${ratio}%`,
-      pct: ratio,
-      target: 'Ledger' as const,
-    }
-  }
   const conflicts = props.syncStatus?.conflicts ?? 0
   // 无论在线同步中还是离线积压，只要存在待同步项就按队列压力扣减就绪度
   const healthPct =
@@ -235,155 +255,11 @@ const gaugeState = computed(() => {
         ? Math.max(20, 100 - Math.min(queued.value, 20) * 4)
         : 100
   return {
-    title: '工作台状态',
     sub: props.syncStatus?.connected ? 'Core 同步状态' : '本机优先运行中',
     centerText: conflicts > 0 ? `${conflicts} 冲突` : queued.value > 0 ? `${queued.value} 待传` : '100%',
     caption: conflicts > 0 ? '点此前往冲突处理' : props.syncLabel,
     pct: healthPct,
-    target: 'Sync' as const,
   }
-})
-
-// 左下大卡：Delivry 同款双色对比柱状图（深黑 = 支出，冷灰 = 收入）
-interface ChartColumn {
-  label: string
-  fullLabel: string
-  expense: number
-  income: number
-}
-
-const chartColumns = computed<ChartColumn[]>(() => {
-  if (range.value === '7d') {
-    return current7dKeys.value.map(key => {
-      let exp = 0
-      let inc = 0
-      for (const tx of ledger.items) {
-        if (localDateKey(tx.occurredAt) !== key) continue
-        if (tx.type === 'expense') exp += Number(tx.amount)
-        else inc += Number(tx.amount)
-      }
-      const [, mm, dd] = key.split('-')
-      return {
-        label: key === todayKey ? '今天' : `${Number(mm)}/${Number(dd)}`,
-        fullLabel: key,
-        expense: exp,
-        income: inc,
-      }
-    })
-  }
-  // 本月按周（W1..W5）分段统计收支
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
-  const weeksCount = Math.ceil(daysInMonth / 7)
-  const buckets = Array.from({ length: weeksCount }, (_, idx) => ({
-    label: `第${idx + 1}周`,
-    fullLabel: `${month}第 ${idx * 7 + 1}-${Math.min((idx + 1) * 7, daysInMonth)} 日`,
-    expense: 0,
-    income: 0,
-  }))
-  for (const tx of ledger.items) {
-    if (localMonthKey(tx.occurredAt) !== monthKey) continue
-    const dayNum = Number(localDateKey(tx.occurredAt).slice(8, 10)) || 1
-    const bucketIndex = Math.min(weeksCount - 1, Math.floor((dayNum - 1) / 7))
-    const target = buckets[bucketIndex]
-    if (!target) continue
-    if (tx.type === 'expense') target.expense += Number(tx.amount)
-    else target.income += Number(tx.amount)
-  }
-  return buckets
-})
-
-const maxColumnTotal = computed(() => {
-  const max = Math.max(...chartColumns.value.map(col => col.expense + col.income), 0)
-  return max > 0 ? max : 100
-})
-
-const yTicks = computed(() => {
-  const max = maxColumnTotal.value
-  return [max, Math.round(max * 0.66), Math.round(max * 0.33), 0]
-})
-
-function colHeightPercent(value: number) {
-  if (value <= 0) return 0
-  return Math.max(5, Math.round((value / maxColumnTotal.value) * 100))
-}
-
-// 右下大卡：近期动态清单（真实整合流水、任务执行、数据记录与网站访问）
-function formatRelative(iso: string): string {
-  const ms = Date.parse(iso)
-  if (Number.isNaN(ms)) return ''
-  const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000))
-  if (diffSec < 60) return '刚刚'
-  const diffMin = Math.floor(diffSec / 60)
-  if (diffMin < 60) return `${diffMin} 分钟前`
-  const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24) return `${diffHour} 小时前`
-  const d = new Date(ms)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
-
-const activityItems = computed<ActivityEntry[]>(() => {
-  const entries: ActivityEntry[] = []
-
-  for (const tx of ledger.items.slice(0, 12)) {
-    entries.push({
-      id: `tx-${tx.id}`,
-      kind: 'ledger',
-      title: tx.description || tx.categoryName || '账本记录',
-      meta: `${tx.categoryName || '未分类'} · ${formatRelative(tx.occurredAt)}`,
-      badge: `${tx.type === 'income' ? '+' : '-'}${money.format(Number(tx.amount))}`,
-      tone: tx.type === 'income' ? 'ok' : 'default',
-      timestamp: tx.occurredAt,
-      targetPage: 'Ledger',
-    })
-  }
-
-  for (const run of automation.runtimeExecutions.slice(0, 8)) {
-    const wf = automation.items.find(item => item.id === run.workflowId)
-    entries.push({
-      id: `run-${run.id}`,
-      kind: 'automation',
-      title: wf?.name ?? '自动化任务执行',
-      meta: `自动化 · ${formatRelative(run.createdAt)}`,
-      badge: run.status === 'failed' ? '失败' : run.status === 'running' ? '运行中' : '已完成',
-      tone: run.status === 'failed' ? 'danger' : run.status === 'running' ? 'warn' : 'ok',
-      timestamp: run.createdAt,
-      targetPage: 'Automation',
-    })
-  }
-
-  for (const rec of dataStore.overview?.recentRecords ?? []) {
-    entries.push({
-      id: `rec-${rec.id}`,
-      kind: 'data',
-      title: rec.name,
-      meta: `${rec.collectionName} · ${formatRelative(rec.updatedAt)}`,
-      badge: rec.status || '已更新',
-      tone: rec.statusTone === 'success' ? 'ok' : rec.statusTone === 'warning' ? 'warn' : 'default',
-      timestamp: rec.updatedAt,
-      targetPage: 'Data',
-    })
-  }
-
-  for (const site of allSites.value.filter(s => s.lastVisitedAt).slice(0, 6)) {
-    entries.push({
-      id: `web-${site.id}`,
-      kind: 'website',
-      title: `访问 ${site.name}`,
-      meta: `${siteHostname(site.url)} · ${formatRelative(site.lastVisitedAt!)}`,
-      badge: '网站',
-      tone: 'default',
-      timestamp: site.lastVisitedAt!,
-      targetPage: 'Websites',
-    })
-  }
-
-  const filtered = activityFilter.value === 'all'
-    ? entries
-    : entries.filter(item => item.kind === activityFilter.value)
-
-  return filtered
-    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
-    .slice(0, 8)
 })
 
 let isCounting = false
@@ -395,7 +271,8 @@ function runCountUp() {
   const reduced = document.documentElement.dataset.motion === 'reduced'
   if (reduced) {
     isCounting = false
-    animExpense.value = periodExpense.value
+    animBalance.value = periodBalance.value
+    balanceProgress.value = balancePercent.value
     animActive.value = systemCombinedActive.value
     animRecords.value = totalRecords.value
     gaugeProgress.value = gaugeState.value.pct
@@ -403,7 +280,8 @@ function runCountUp() {
   }
 
   isCounting = true
-  animExpense.value = 0
+  animBalance.value = 0
+  balanceProgress.value = 0
   animActive.value = 0
   animRecords.value = 0
   gaugeProgress.value = 0
@@ -414,11 +292,13 @@ function runCountUp() {
     const progress = Math.min(1, (nowTs - start) / duration)
     const eased = 1 - Math.pow(1 - progress, 3)
     // 每帧读取最新响应式目标值，确保异步完成的同步状态/设备请求平滑汇入终值
-    const targetExp = periodExpense.value
+    const targetBalance = periodBalance.value
+    const targetBalanceProgress = balancePercent.value
     const targetSys = systemCombinedActive.value
     const targetRec = totalRecords.value
     const targetGauge = gaugeState.value.pct
-    animExpense.value = targetExp * eased
+    animBalance.value = targetBalance * eased
+    balanceProgress.value = targetBalanceProgress * eased
     animActive.value = Math.round(targetSys * eased)
     animRecords.value = Math.round(targetRec * eased)
     gaugeProgress.value = targetGauge * eased
@@ -426,7 +306,8 @@ function runCountUp() {
       countFrame = requestAnimationFrame(tick)
     } else {
       isCounting = false
-      animExpense.value = targetExp
+      animBalance.value = targetBalance
+      balanceProgress.value = targetBalanceProgress
       animActive.value = targetSys
       animRecords.value = targetRec
       gaugeProgress.value = targetGauge
@@ -461,6 +342,7 @@ async function refreshAll() {
       automation.load(auth.token, true),
       dataStore.loadOverview(auth.token, true),
       devicesStore.load(auth.token, true),
+      refreshTokenUsage(),
       websiteService.list(auth.token, { sort: 'recent' }).then(items => { allSites.value = items }),
     ])
   } finally {
@@ -478,14 +360,16 @@ watch(
       runCountUp()
     }
   },
+  { immediate: true },
 )
 
 // 后台同步状态或快速录入异步到达时，实时同步最新指标与表盘弧度
 watch(
-  [periodExpense, systemCombinedActive, totalRecords, () => gaugeState.value.pct],
-  ([exp, sys, rec, pct]) => {
+  [periodBalance, balancePercent, systemCombinedActive, totalRecords, () => gaugeState.value.pct],
+  ([balance, remaining, sys, rec, pct]) => {
     if (revealSeq.value > 0 && !showSkeleton.value && !isCounting) {
-      animExpense.value = exp
+      animBalance.value = balance
+      balanceProgress.value = remaining
       animActive.value = sys
       animRecords.value = rec
       gaugeProgress.value = pct
@@ -495,16 +379,6 @@ watch(
 
 // 移动端与旧兼容层所需计算属性
 const transactions = computed(() => [...ledger.items].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)))
-const mobileBars = computed(() => {
-  const days = Array.from({ length: now.getDate() }, () => 0)
-  for (const item of transactions.value) {
-    if (item.type !== 'expense' || localMonthKey(item.occurredAt) !== monthKey) continue
-    const day = new Date(item.occurredAt).getDate() - 1
-    days[day] = (days[day] ?? 0) + Number(item.amount)
-  }
-  const max = Math.max(1, ...days)
-  return days.map(value => 100 * value / max)
-})
 const jobs = computed(() => automation.items.slice(0, 3).map(item => {
   const last = automation.runtimeExecutions.find(run => run.workflowId === item.id)
   const status: 'paused' | 'running' | 'fail' | 'ok' | 'unknown' =
@@ -610,29 +484,56 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  usageFetch?.abort()
+  clearTimeout(usageTimer)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (countFrame) cancelAnimationFrame(countFrame)
 })
 </script>
 
 <template>
-  <!-- 移动端保持既有简洁体验：去掉顶部臃肿文字与头像，只在右上角保留设置图标 -->
-  <div v-if="mobile" class="mpage">
+  <div v-if="mobile" class="mpage mobile-today">
     <div class="mhead-minimal">
+      <div class="home-seg" role="group" aria-label="统计周期">
+        <button type="button" :aria-pressed="range === '7d'" @click="setRange('7d')">近 7 天</button>
+        <button type="button" :aria-pressed="range === 'month'" @click="setRange('month')">本月</button>
+      </div>
       <button class="mhead-settings" type="button" aria-label="设置" title="设置" @click="emit('navigate', 'Settings')">
         <Settings :size="18" :stroke-width="1.9" />
       </button>
     </div>
-    <div class="quick">
-      <button type="button" @click="emit('add', 'tx')"><span class="qi"><OpusIcon name="ledger" /></span>记一笔</button>
-      <button type="button" @click="emit('add', 'web')"><span class="qi"><OpusIcon name="globe" /></span>收藏</button>
-      <button type="button" @click="emit('navigate', 'Chat')"><span class="qi"><OpusIcon name="chat" /></span>问 Agent</button>
-      <button type="button" @click="emit('navigate', 'Space')"><span class="qi"><OpusIcon name="shield" /></span>共享空间</button>
-    </div>
-    <section class="mcard mat">
-      <div class="mcard-h"><OpusIcon name="ledger" /> {{ month }}支出<span class="spacer"></span><button class="btn btn-sm btn-subtle" type="button" @click="emit('navigate', 'Ledger')">账本 <OpusIcon name="chevR" /></button></div>
-      <div class="mbig num">{{ money.format(periodExpense) }}<small v-if="periodIncome > 0">/ 收入 {{ money.format(periodIncome) }}</small><small v-else>未录收入</small></div>
-      <div :key="revealSeq" class="spark" aria-hidden="true"><i v-for="(value, i) in mobileBars" :key="i" :style="{ height: Math.max(8, value) + '%', animationDelay: i * 15 + 'ms' }"></i></div>
+    <section class="mcard mat mobile-balance" aria-labelledby="m-balance-title">
+      <div class="mcard-h">
+        <span class="deliv-icon"><Wallet :size="15" :stroke-width="1.9" /></span>
+        <div class="deliv-head-copy">
+          <strong id="m-balance-title">余额</strong>
+          <span>{{ range === '7d' ? '近 7 天收支结余' : '本月收支结余' }}</span>
+        </div>
+        <span class="spacer" />
+        <button class="btn btn-sm btn-subtle" type="button" @click="emit('navigate', 'Ledger')">账本 <OpusIcon name="chevR" /></button>
+      </div>
+      <div v-if="showSkeleton" class="sk sk-gauge" aria-hidden="true"></div>
+      <DashboardGauge v-else :progress="balanceProgress" :value="ledger.error ? '—' : money.format(animBalance)" :caption="balanceCaption" compact />
+    </section>
+    <section class="mcard mat mobile-token" aria-labelledby="m-token-usage-title">
+      <div class="mcard-h">
+        <span class="deliv-icon"><ChartNoAxesCombined :size="15" :stroke-width="1.9" /></span>
+        <div class="deliv-head-copy">
+          <strong id="m-token-usage-title">Token 用量</strong>
+          <span>{{ range === '7d' ? '最近 7 日' : '本月' }} · {{ usageLabel }}</span>
+        </div>
+      </div>
+      <div v-if="showSkeleton" class="sk-bars" aria-hidden="true">
+        <span v-for="height in [42, 68, 86, 36, 58, 92, 64]" :key="height" class="sk sk-bar" :style="{ height: height + '%' }"></span>
+      </div>
+      <TokenUsageChart v-else :key="revealSeq" :dates="usageDates" :records="tokenRecords" :report="usageReport" />
+    </section>
+    <section class="mcard mat mobile-quota" aria-labelledby="m-subscription-quota-title">
+      <div class="mcard-h">
+        <span class="deliv-icon"><Gauge :size="15" :stroke-width="1.9" /></span>
+        <div class="deliv-head-copy"><strong id="m-subscription-quota-title">订阅额度</strong></div>
+      </div>
+      <SubscriptionQuotaPanel @sign-in="emit('navigate', 'Chat')" @action="emit('action', $event)" />
     </section>
     <section class="mcard mat">
       <div class="mcard-h"><OpusIcon name="tasks" /> 任务<span class="spacer"></span><button class="btn btn-sm btn-subtle" type="button" @click="emit('navigate', 'Automation')">全部 <OpusIcon name="chevR" /></button></div>
@@ -734,7 +635,7 @@ onUnmounted(() => {
             <span class="sk sk-icon"></span>
             <div class="deliv-head-copy"><span class="sk sk-title"></span><span class="sk sk-sub"></span></div>
           </div>
-          <template v-if="idx === 4">
+          <template v-if="idx === 1 || idx === 4">
             <div class="sk sk-gauge"></div>
           </template>
           <template v-else>
@@ -745,22 +646,15 @@ onUnmounted(() => {
       </template>
 
       <template v-else>
-        <!-- 小卡 1：支出总额 -->
         <button type="button" class="deliv-card is-clickable" @click="emit('navigate', 'Ledger')">
           <div class="deliv-head">
             <span class="deliv-icon"><Wallet :size="15" :stroke-width="1.9" /></span>
             <div class="deliv-head-copy">
-              <strong>{{ range === '7d' ? '近 7 天支出' : '本月支出' }}</strong>
-              <span>账本消费总额</span>
+              <strong>余额</strong>
+              <span>{{ range === '7d' ? '近 7 天收支结余' : '本月收支结余' }}</span>
             </div>
           </div>
-          <div class="deliv-kpi-body">
-            <div class="deliv-value num">{{ money.format(animExpense) }}</div>
-            <div v-if="expenseTrendDelta !== null" class="deliv-delta" :class="expenseTrendDelta <= 0 ? 'is-good' : 'is-bad'">
-              {{ expenseTrendDelta > 0 ? `↗ +${expenseTrendDelta}%` : `↘ ${expenseTrendDelta}%` }} 较上期
-            </div>
-            <div v-else class="deliv-delta">共 {{ periodTxCount }} 笔流水</div>
-          </div>
+          <DashboardGauge :progress="balanceProgress" :value="ledger.error ? '—' : money.format(animBalance)" :caption="balanceCaption" compact />
         </button>
 
         <!-- 小卡 2：系统与任务（自动化 + 设备在线） -->
@@ -801,40 +695,20 @@ onUnmounted(() => {
           </div>
         </button>
 
-        <!-- 小卡 4：半圆弧形表盘（收支比 / 同步健康智能降级） -->
-        <button
-          type="button"
-          class="deliv-card is-clickable"
-          @click="gaugeState.target === 'Sync' ? emit('sync') : emit('navigate', 'Ledger')"
-        >
+        <button type="button" class="deliv-card is-clickable" @click="emit('sync')">
           <div class="deliv-head">
             <span class="deliv-icon"><Activity :size="15" :stroke-width="1.9" /></span>
             <div class="deliv-head-copy">
-              <strong>{{ gaugeState.title }}</strong>
+              <strong>工作台状态</strong>
               <span>{{ gaugeState.sub }}</span>
             </div>
           </div>
-          <div class="deliv-gauge-wrap">
-            <div class="deliv-gauge-arc">
-              <svg viewBox="0 0 132 72" class="deliv-gauge-svg" aria-hidden="true">
-                <path class="gauge-track" d="M 14 64 A 52 52 0 0 1 118 64" />
-                <path
-                  class="gauge-fill"
-                  d="M 14 64 A 52 52 0 0 1 118 64"
-                  :stroke-dasharray="163.36"
-                  :stroke-dashoffset="163.36 * (1 - gaugeProgress / 100)"
-                />
-              </svg>
-              <div class="deliv-gauge-val num">{{ gaugeState.centerText }}</div>
-            </div>
-            <div class="deliv-gauge-cap">{{ gaugeState.caption }}</div>
-          </div>
+          <DashboardGauge :progress="gaugeProgress" :value="gaugeState.centerText" :caption="gaugeState.caption" />
         </button>
       </template>
     </section>
 
-    <!-- 第二行：2 张等高大卡（左：收支对比柱状图 · 右：近期动态清单） -->
-    <section class="wide-grid" aria-label="趋势与近期动态">
+    <section class="wide-grid" aria-label="用量与订阅额度">
       <template v-if="showSkeleton">
         <div class="deliv-card deliv-wide is-skeleton" aria-hidden="true">
           <div class="deliv-head">
@@ -851,116 +725,31 @@ onUnmounted(() => {
             <div class="deliv-head-copy"><span class="sk sk-title"></span><span class="sk sk-sub"></span></div>
           </div>
           <div class="sk-rows">
-            <span v-for="n in 5" :key="n" class="sk sk-row"></span>
+            <span v-for="n in 3" :key="n" class="sk sk-row"></span>
           </div>
         </div>
       </template>
 
       <template v-else>
-        <!-- 左大卡：Delivry 双色对比柱状图 -->
         <section class="deliv-card deliv-wide" aria-labelledby="h-chart">
           <div class="deliv-wide-top">
             <div class="deliv-head">
-              <span class="deliv-icon"><LayoutList :size="15" :stroke-width="1.9" /></span>
+              <span class="deliv-icon"><ChartNoAxesCombined :size="15" :stroke-width="1.9" /></span>
               <div class="deliv-head-copy">
-                <strong id="h-chart">收支统计</strong>
-                <span>{{ range === '7d' ? '最近 7 日支出与收入对照' : `${month} 各周支出与收入对照` }}</span>
-              </div>
-            </div>
-            <div class="chart-legend">
-              <span><i class="dot-exp"></i>支出</span>
-              <span><i class="dot-inc"></i>收入</span>
-            </div>
-          </div>
-
-          <div class="deliv-chart-area" :key="'chart-' + revealSeq">
-            <div class="chart-y" aria-hidden="true">
-              <span v-for="(tick, idx) in yTicks" :key="idx">{{ tick >= 1000 ? `${(tick / 1000).toFixed(1)}k` : tick }}</span>
-            </div>
-            <div class="chart-plot">
-              <div class="chart-gridlines" aria-hidden="true">
-                <span></span><span></span><span></span><span></span>
-              </div>
-              <div class="chart-cols">
-                <div
-                  v-for="(col, i) in chartColumns"
-                  :key="col.fullLabel"
-                  class="chart-col-wrap"
-                  @mouseenter="hoveredBarIndex = i"
-                  @mouseleave="hoveredBarIndex = null"
-                >
-                  <div v-if="hoveredBarIndex === i" class="chart-tooltip" role="status">
-                    <div class="tt-title">{{ col.fullLabel }}</div>
-                    <div class="tt-row"><i class="dot-exp"></i>支出 {{ money.format(col.expense) }}</div>
-                    <div class="tt-row"><i class="dot-inc"></i>收入 {{ money.format(col.income) }}</div>
-                  </div>
-                  <div class="chart-stack">
-                    <span
-                      v-if="col.income > 0"
-                      class="bar-inc"
-                      :style="{ height: colHeightPercent(col.income) + '%', animationDelay: i * 32 + 'ms' }"
-                    ></span>
-                    <span
-                      class="bar-exp"
-                      :class="{ 'is-empty': col.expense === 0 && col.income === 0 }"
-                      :style="{
-                        height: col.expense > 0 ? colHeightPercent(col.expense) + '%' : col.income > 0 ? '0%' : '3px',
-                        animationDelay: i * 32 + 'ms',
-                      }"
-                    ></span>
-                  </div>
-                  <span class="chart-x">{{ col.label }}</span>
-                </div>
+                <strong id="h-chart">Token 用量</strong>
+                <span>{{ range === '7d' ? '最近 7 日' : '本月' }} · {{ usageLabel }}</span>
               </div>
             </div>
           </div>
+          <TokenUsageChart :key="revealSeq" :dates="usageDates" :records="tokenRecords" :report="usageReport" />
         </section>
 
-        <!-- 右大卡：近期动态清单 -->
-        <section class="deliv-card deliv-wide" aria-labelledby="h-feed">
-          <div class="deliv-wide-top">
-            <div class="deliv-head">
-              <span class="deliv-icon"><CheckCircle2 :size="15" :stroke-width="1.9" /></span>
-              <div class="deliv-head-copy">
-                <strong id="h-feed">近期动态</strong>
-                <span>来自账本、任务、数据与网站</span>
-              </div>
-            </div>
-            <div class="feed-tabs" role="group" aria-label="动态筛选">
-              <button type="button" :aria-pressed="activityFilter === 'all'" @click="activityFilter = 'all'">全部</button>
-              <button type="button" :aria-pressed="activityFilter === 'ledger'" @click="activityFilter = 'ledger'">账本</button>
-              <button type="button" :aria-pressed="activityFilter === 'automation'" @click="activityFilter = 'automation'">任务</button>
-              <button type="button" :aria-pressed="activityFilter === 'data'" @click="activityFilter = 'data'">数据</button>
-            </div>
+        <section class="deliv-card deliv-wide quota-card" aria-labelledby="h-subscription-quota">
+          <div class="deliv-head">
+            <span class="deliv-icon"><Gauge :size="15" :stroke-width="1.9" /></span>
+            <div class="deliv-head-copy"><strong id="h-subscription-quota">订阅额度</strong></div>
           </div>
-
-          <div class="feed-list" :key="'feed-' + revealSeq + '-' + activityFilter">
-            <button
-              v-for="(item, idx) in activityItems"
-              :key="item.id"
-              type="button"
-              class="feed-row"
-              :style="{ animationDelay: idx * 35 + 'ms' }"
-              @click="emit('navigate', item.targetPage)"
-            >
-              <span class="feed-kind-dot" :class="`is-${item.kind}`">
-                <OpusIcon :name="item.kind === 'ledger' ? 'ledger' : item.kind === 'automation' ? 'tasks' : item.kind === 'data' ? 'data' : 'globe'" />
-              </span>
-              <span class="feed-main">
-                <strong class="feed-title">{{ item.title }}</strong>
-                <small class="feed-meta">{{ item.meta }}</small>
-              </span>
-              <span class="feed-badge num" :class="`is-${item.tone}`">{{ item.badge }}</span>
-            </button>
-
-            <div v-if="!activityItems.length" class="feed-empty">
-              <span>暂无近期动态</span>
-              <div class="feed-empty-actions">
-                <button type="button" class="btn btn-sm btn-ghost" @click="emit('create', 'ledger')">+ 记一笔</button>
-                <button type="button" class="btn btn-sm btn-ghost" @click="emit('create', 'website')">+ 收藏网站</button>
-              </div>
-            </div>
-          </div>
+          <SubscriptionQuotaPanel @sign-in="emit('navigate', 'Chat')" @action="emit('action', $event)" />
         </section>
       </template>
     </section>
@@ -1288,40 +1077,6 @@ onUnmounted(() => {
 .deliv-delta.is-good { color: var(--ok); }
 .deliv-delta.is-bad { color: var(--danger); }
 
-/* 半圆弧表盘（绝对居中定位，随卡片同步放大不位移） */
-.deliv-gauge-wrap {
-  display: grid;
-  justify-items: center;
-  margin: auto 0;
-}
-.deliv-gauge-arc {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-.deliv-gauge-svg { width: clamp(132px, 12cqi, 232px); height: auto; aspect-ratio: 132 / 72; overflow: visible; }
-.gauge-track { fill: none; stroke: var(--surface-3); stroke-width: 11; stroke-linecap: butt; }
-.gauge-fill {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 11;
-  stroke-linecap: butt;
-  transition: stroke-dashoffset 680ms var(--ease-out);
-}
-[data-motion="reduced"] .gauge-fill { transition: none; }
-.deliv-gauge-val {
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  translate: -50% 0;
-  font-size: clamp(14px, 1.35cqi, 24px);
-  font-weight: 750;
-  color: var(--text);
-  letter-spacing: -.02em;
-  white-space: nowrap;
-}
-.deliv-gauge-cap { font-size: clamp(11px, 0.85cqi, 14px); color: var(--text-3); margin-top: 4px; }
-
 /* 第二行宽卡与图表 */
 .deliv-wide { min-height: 308px; }
 .deliv-wide-top {
@@ -1331,198 +1086,7 @@ onUnmounted(() => {
   gap: 12px;
   flex-wrap: wrap;
 }
-.chart-legend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-.chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.dot-exp, .dot-inc { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
-.dot-exp { background: var(--accent); }
-.dot-inc { background: var(--line-strong); }
-
-.deliv-chart-area {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
-  flex: 1;
-  min-height: 224px;
-  padding-top: 8px;
-}
-.chart-y {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding-bottom: 24px;
-  font-size: 11px;
-  color: var(--text-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-.chart-plot {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.chart-gridlines {
-  position: absolute;
-  inset: 0 0 24px 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  pointer-events: none;
-}
-.chart-gridlines span {
-  border-top: 1px dashed var(--line);
-}
-.chart-gridlines span:last-child {
-  border-top: 1px solid var(--line-strong);
-}
-.chart-cols {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  display: flex;
-  align-items: stretch;
-  gap: 10px;
-}
-.chart-col-wrap {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 0;
-}
-.chart-stack {
-  flex: 1;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 2px;
-  padding-bottom: 6px;
-}
-.bar-exp, .bar-inc {
-  display: block;
-  width: clamp(14px, 42%, 26px);
-  border-radius: 3px 3px 0 0;
-  transform-origin: bottom;
-  animation: colRise 460ms var(--ease-out) both;
-}
-.bar-exp { background: var(--accent); }
-.bar-exp.is-empty { background: var(--surface-3); border-radius: 2px; }
-.bar-inc { background: var(--line-strong); border-radius: 3px 3px 0 0; }
-.bar-inc + .bar-exp { border-radius: 0; }
-@keyframes colRise {
-  from { transform: scaleY(0); opacity: .45; }
-  to { transform: scaleY(1); opacity: 1; }
-}
-[data-motion="reduced"] .bar-exp,
-[data-motion="reduced"] .bar-inc { animation: none; }
-
-.chart-x {
-  height: 18px;
-  font-size: 11px;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-.chart-tooltip {
-  position: absolute;
-  top: 4px;
-  z-index: 10;
-  padding: 7px 9px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--line-strong);
-  background: var(--solid);
-  box-shadow: var(--shadow-2);
-  font-size: 11px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.tt-title { font-weight: 650; color: var(--text); margin-bottom: 3px; }
-.tt-row { display: flex; align-items: center; gap: 5px; color: var(--text-2); }
-
-/* 右大卡：近期动态清单 */
-.feed-tabs {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: 7px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  gap: 2px;
-}
-.feed-tabs button {
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 5px;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-.feed-tabs button[aria-pressed="true"] {
-  background: var(--solid);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .06);
-}
-.feed-list {
-  display: grid;
-  gap: clamp(3px, 0.7vh, 10px);
-  align-content: start;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-.feed-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: clamp(7px, 1vh, 13px) 10px;
-  border-radius: var(--r-sm);
-  text-align: left;
-  transition: background-color var(--dur-1);
-  animation: rowFade 320ms var(--ease-out) both;
-}
-.feed-row:hover { background: var(--surface-2); }
-@keyframes rowFade {
-  from { opacity: 0; translate: 0 4px; }
-  to { opacity: 1; translate: none; }
-}
-[data-motion="reduced"] .feed-row { animation: none; }
-.feed-kind-dot {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text-2);
-  flex: none;
-}
-.feed-kind-dot svg { width: 14px; height: 14px; }
-.feed-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
-.feed-title { font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-meta { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-badge { font-size: 12px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
-.feed-badge.is-ok { color: var(--ok); }
-.feed-badge.is-danger { color: var(--danger); }
-.feed-badge.is-warn { color: var(--warn); }
-
-.feed-empty {
-  display: grid;
-  place-items: center;
-  gap: 10px;
-  padding: 44px 16px;
-  color: var(--text-3);
-  font-size: 12.5px;
-}
-.feed-empty-actions { display: flex; gap: 8px; }
+.quota-card { gap: 5px; }
 
 /* 骨架屏 Shimmer 动效 */
 .sk {
@@ -1547,7 +1111,8 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-end;
   gap: 14px;
-  height: 200px;
+  flex: 1;
+  min-height: 200px;
   padding: 16px 8px 8px;
 }
 .sk-bar { flex: 1; border-radius: 4px 4px 0 0; }
@@ -1566,10 +1131,9 @@ onUnmounted(() => {
   .home-controls { margin-left: auto; }
 }
 
-/* 移动端极简顶部角落设置按钮 */
 .mhead-minimal {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   padding: 6px 0 10px;
 }
@@ -1585,4 +1149,8 @@ onUnmounted(() => {
   transition: background-color var(--dur-1), color var(--dur-1);
 }
 .mhead-settings:hover { color: var(--text); background: var(--surface-3); }
+.mobile-token { min-height: 294px; }
+.mobile-today .deliv-icon { width: 30px; height: 30px; }
+.mobile-today .mobile-quota .mcard-h { margin-bottom: 2px; }
+.mobile-balance .sk-gauge { margin-bottom: 16px; }
 </style>

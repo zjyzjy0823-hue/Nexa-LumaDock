@@ -45,6 +45,26 @@ class Workspace(Base):
     clients: Mapped[list["Client"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
 
+class FleetUsageSample(Base):
+    __tablename__ = "fleet_usage_samples"
+    __table_args__ = (
+        Index("ix_fleet_usage_workspace_time", "workspace_id", "recorded_at"),
+        Index("ix_fleet_usage_workspace_turn", "workspace_id", "turn_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    turn_key: Mapped[str] = mapped_column(String(64))
+    whole_turn: Mapped[bool] = mapped_column(Boolean)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sequence: Mapped[int] = mapped_column(BigInteger)
+    cached: Mapped[int] = mapped_column(BigInteger)
+    other_input: Mapped[int] = mapped_column(BigInteger)
+    output: Mapped[int] = mapped_column(BigInteger)
+    other: Mapped[int] = mapped_column(BigInteger)
+    total: Mapped[int] = mapped_column(BigInteger)
+
+
 class Client(Base):
     __tablename__ = "clients"
     __table_args__ = (UniqueConstraint("workspace_id", "installation_id"),)

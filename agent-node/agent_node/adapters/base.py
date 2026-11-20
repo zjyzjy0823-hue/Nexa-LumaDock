@@ -285,6 +285,9 @@ class AgentAdapter(ABC):
     async def list_models(self) -> list[dict[str, Any]]:
         return []
 
+    async def read_subscription_quota(self) -> dict[str, Any]:
+        return {"status": "unsupported"}
+
     @abstractmethod
     async def probe(self) -> AdapterProbe:
         """检查本地 CLI / Gateway 是否安装就绪及支持的能力清单。"""

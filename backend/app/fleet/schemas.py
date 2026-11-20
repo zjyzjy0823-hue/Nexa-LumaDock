@@ -71,6 +71,20 @@ class AdapterInfo(BaseModel):
     capabilities: list[str] = Field(default_factory=list, max_length=32)
 
 
+class SubscriptionQuotaWindow(BaseModel):
+    group: str = Field(min_length=1, max_length=100)
+    kind: Literal["primary", "secondary", "monthly"]
+    remainingPercent: float = Field(ge=0, le=100)
+    windowMinutes: int | None = Field(default=None, ge=1, le=1_000_000)
+    resetsAt: int | None = Field(default=None, ge=1, le=253402300799)
+
+
+class SubscriptionQuota(BaseModel):
+    status: Literal["ready", "no_data", "unavailable", "offline", "unsupported"]
+    checkedAt: int | None = Field(default=None, ge=1, le=253402300799)
+    windows: list[SubscriptionQuotaWindow] = Field(default_factory=list, max_length=16)
+
+
 class NodeCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

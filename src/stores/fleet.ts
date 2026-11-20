@@ -31,6 +31,7 @@ import type {
   DiffFileEntry,
   FilePreviewState,
   FleetConnectionState,
+  FleetUsageDay,
   FleetWsEvent,
   FleetModel,
   McpServerInfo,
@@ -42,6 +43,8 @@ import type {
   PermissionRequestCard,
   SessionDiffState,
   SessionTokenUsage,
+  SubscriptionQuota,
+  SubscriptionQuotaProvider,
   TerminalSessionState,
   TodoItem,
   WorkspaceRule,
@@ -61,6 +64,7 @@ import {
   switchMessageBranch,
 } from '../services/chatHelpers'
 import { loadSoundPref, playCueSound, saveSoundPref } from '../services/soundCue'
+import { useRecordedTokenUsage } from '../services/recordedTokenUsage'
 import {
   applyTokenUsageEvent,
   estimateTurnUsageFallback,
@@ -105,6 +109,15 @@ export const useFleetStore = defineStore('fleet', () => {
       ? previous : { origin: target.origin, token: target.token }
   })
   const coreSignInUrl = computed(() => linkedCore.value && !fleetRoute.value ? linkedCore.value.coreUrl : '')
+  const usageOrigin = computed(() => fleetRoute.value?.origin ?? null)
+  const subscriptionQuotas = ref<Record<string, SubscriptionQuota>>({})
+  const subscriptionQuotaLoading = ref<Record<string, boolean>>({})
+  const recordedUsage = useRecordedTokenUsage(computed(() => {
+    if (!auth.token || !auth.user) return ''
+    return JSON.stringify([
+      auth.user.id, auth.user.created_at, linkedCore.value?.coreUrl ?? getApiBaseUrl(), linkedCore.value?.workspaceId ?? '',
+    ])
+  }))
   let fleetRequested = false
 
   async function signInToCoreFleet(username: string, password: string) {
@@ -130,6 +143,38 @@ export const useFleetStore = defineStore('fleet', () => {
 
   function checkFleetRoute(route: FleetRoute) {
     if (fleetRoute.value !== route) throw new Error('对话连接已变更，请重试')
+  }
+
+  async function loadTokenUsage(start: string, end: string, signal: AbortSignal) {
+    const route = fleetRoute.value
+    if (!route) return null
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    const query = new URLSearchParams({ start, end, tz })
+    const report = await apiRequest<FleetUsageDay[]>(`/api/v1/fleet/usage/daily?${query}`, { signal }, route.token, route.origin)
+    return fleetRoute.value === route ? report : null
+  }
+
+  async function refreshSubscriptionQuota(nodeId: string, provider: SubscriptionQuotaProvider = 'codex') {
+    const route = fleetRoute.value
+    const key = `${provider}:${nodeId}`
+    if (!route || subscriptionQuotaLoading.value[key]) return
+    subscriptionQuotaLoading.value[key] = true
+    try {
+      const quota = await apiRequest<SubscriptionQuota>(
+        `/api/v1/fleet/nodes/${encodeURIComponent(nodeId)}/subscription-quota?provider=${provider}`, { method: 'POST' }, route.token, route.origin,
+      )
+      if (fleetRoute.value === route) subscriptionQuotas.value[key] = quota
+    } catch (error) {
+      if (fleetRoute.value === route) {
+        subscriptionQuotas.value[key] = {
+          status: error instanceof ApiError && error.status === 404 ? 'unsupported' : 'unavailable',
+          checkedAt: null,
+          windows: [],
+        }
+      }
+    } finally {
+      if (fleetRoute.value === route) delete subscriptionQuotaLoading.value[key]
+    }
   }
 
   // ---------------- 节点元信息（允许从 Core REST 刷新，不包含聊天正文） ----------------
@@ -429,6 +474,8 @@ export const useFleetStore = defineStore('fleet', () => {
     nodes.value = []
     selectedNodeId.value = ''
     nodesLoading.value = false
+    subscriptionQuotas.value = {}
+    subscriptionQuotaLoading.value = {}
     lastError.value = null
     if (route && fleetRequested) {
       void loadNodes()
@@ -1103,6 +1150,7 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'TokenUsage') {
+      recordedUsage.record(sKey, frame, frame.seq)
       tokenUsageStateBySession.value = {
         ...tokenUsageStateBySession.value,
         [sKey]: applyTokenUsageEvent(tokenUsageStateBySession.value[sKey], frame),
@@ -1477,13 +1525,11 @@ export const useFleetStore = defineStore('fleet', () => {
         ...(modelLabel ? { modelLabel } : {}),
       }))
       if (frame.usage && typeof frame.usage === 'object') {
+        const usage = { ...(frame.usage as TokenUsageInput), runId: frame.runId, requestId: frame.requestId }
+        recordedUsage.record(sKey, usage, frame.seq)
         tokenUsageStateBySession.value = {
           ...tokenUsageStateBySession.value,
-          [sKey]: applyTokenUsageEvent(tokenUsageStateBySession.value[sKey], {
-            ...(frame.usage as TokenUsageInput),
-            runId: frame.runId,
-            requestId: frame.requestId,
-          }),
+          [sKey]: applyTokenUsageEvent(tokenUsageStateBySession.value[sKey], usage),
         }
       } else if (!hasRecordedTurnUsage(tokenUsageStateBySession.value[sKey], [frame.runId, frame.requestId])) {
         const list = messagesBySession.value[sKey] ?? []
@@ -3118,6 +3164,12 @@ export const useFleetStore = defineStore('fleet', () => {
     notificationsEnabled,
     unreadNotifyTitle,
     tokenUsageBySession,
+    recordedTokenUsage: recordedUsage.entries,
+    usageOrigin,
+    loadTokenUsage,
+    subscriptionQuotas,
+    subscriptionQuotaLoading,
+    refreshSubscriptionQuota,
     todosBySession,
     currentTodos,
     diffBySession,

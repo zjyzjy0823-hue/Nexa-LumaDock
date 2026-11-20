@@ -18,6 +18,32 @@ export type ApprovalDecision = 'allow_once' | 'allow_session' | 'allow_trust' | 
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type TokenUsageSource = 'exact' | 'estimated'
 
+export interface FleetUsageDay {
+  date: string
+  requests: number
+  tokens: number
+  cached: number
+  otherInput: number
+  output: number
+  other: number
+}
+
+export type SubscriptionQuotaProvider = 'codex' | 'opencode'
+
+export interface SubscriptionQuotaWindow {
+  group: string
+  kind: 'primary' | 'secondary' | 'monthly'
+  remainingPercent: number
+  windowMinutes: number | null
+  resetsAt: number | null
+}
+
+export interface SubscriptionQuota {
+  status: 'ready' | 'no_data' | 'unavailable' | 'offline' | 'unsupported'
+  checkedAt: number | null
+  windows: SubscriptionQuotaWindow[]
+}
+
 export interface SessionTokenUsage {
   totalInputTokens: number
   totalCachedTokens: number

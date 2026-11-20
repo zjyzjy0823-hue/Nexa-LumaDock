@@ -100,6 +100,7 @@ ALLOWED_NODE_EVENTS = frozenset({
     "Failed",
     "NodeHeartbeat",
     "CronRpcResult",
+    "SubscriptionQuotaResult",
 })
 
 
@@ -224,7 +225,7 @@ class FleetRelayHub:
         *,
         timeout: float = 10.0,
     ) -> dict[str, Any]:
-        """向工作区内目标在线 AgentNode 发送一次性控制 RPC 并等待 CronRpcResult 回执。"""
+        """向工作区内目标在线 AgentNode 发送一次性控制 RPC 并等待回执。"""
         node = await self.get_online_node(workspace_id, node_id)
         if node is None:
             return {"ok": False, "code": "node_offline", "error": "Target device node is offline"}
@@ -253,7 +254,7 @@ class FleetRelayHub:
                 self._pending_rpcs.pop(rpc_id, None)
 
     async def resolve_node_rpc(self, workspace_id: str, node_id: str, rpc_id: str, payload: dict[str, Any]) -> bool:
-        """收到节点回传的 CronRpcResult 时唤醒等待中的 Core REST 调用。"""
+        """收到节点回执时唤醒等待中的 Core REST 调用。"""
         async with self._lock:
             entry = self._pending_rpcs.get(rpc_id)
             if entry is None:

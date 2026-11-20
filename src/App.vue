@@ -209,8 +209,9 @@ async function navigate(page: string, section?: 'sync', back = false) {
     document.querySelector('.main')?.scrollTo(0, 0)
     document.querySelector('.mpage')?.scrollTo(0, 0)
   }
-  if (document.startViewTransition && !motionReduced.value) {
-    const transition = document.startViewTransition({ update, types: mobile.value ? [back ? 'backward' : pushed ? 'forward' : 'tab'] : [] })
+  // Snapshot transitions can cover the fixed tab bar and intercept a second tap.
+  if (document.startViewTransition && !motionReduced.value && (!mobile.value || pushed || back)) {
+    const transition = document.startViewTransition({ update, types: mobile.value ? [back ? 'backward' : 'forward'] : [] })
     await transition.updateCallbackDone
   } else await update()
 }
@@ -319,8 +320,8 @@ onUnmounted(() => {
   </template>
   <OpusShell v-else ref="shellRef" :page="currentPage" :mobile="mobile" :hide-mobile-tabbar="hideMobileTabbar" :toast="toast" :toast-key="toastKey" :theme="theme" :mode="mode" :reduced-motion="motionReduced"
     @navigate="navigate" @create="create" @action="showToast" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
-    <template #default="{ syncStatus, syncLabel, syncKind, openSync, openAdd, inLibrary }">
-      <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @add="openAdd" @sync="openSync" @ask-agent="shellRef?.openDock()" />
+    <template #default="{ syncStatus, syncLabel, syncKind, openSync, inLibrary }">
+      <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @sync="openSync" @ask-agent="shellRef?.openDock()" />
       <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" @mobile-fullscreen="hideMobileTabbar = $event" />
       <SpacePage v-else-if="currentPage === 'Space'" :mobile="mobile" @action="showToast" @back="back" />
       <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">

@@ -20,6 +20,81 @@ from agent_node.crypto_chunks import generate_file_key
 from agent_node.transfer import download_and_decrypt_artifact, publish_file_artifact
 
 
+def test_codex_quota_queries_the_official_rpc_once_and_filters_response(tmp_path, monkeypatch):
+    calls = []
+
+    class FixtureProcess:
+        async def call(self, method, *, timeout):
+            calls.append(method)
+            return {
+                "rateLimits": {"primary": {"usedPercent": 90}},
+                "rateLimitsByLimitId": {"codex": {"primary": {"usedPercent": 25, "windowDurationMins": 300,
+                                                             "resetsAt": 1795000000, "accountEmail": "sentinel@example.invalid"},
+                                                   "secondary": {"usedPercent": 100}}},
+                "credits": {"secret": "do-not-export"},
+            }
+
+    async def run():
+        adapter = CodexAdapter((tmp_path,))
+
+        async def ensure():
+            return FixtureProcess()
+
+        monkeypatch.setattr(adapter, "_ensure_proc", ensure)
+        first, second = await asyncio.gather(adapter.read_subscription_quota(), adapter.read_subscription_quota())
+        assert calls == ["account/rateLimits/read"]
+        assert first == second and first["status"] == "ready"
+        assert first["windows"] == [
+            {"group": "Codex", "kind": "primary", "remainingPercent": 75, "windowMinutes": 300, "resetsAt": 1795000000},
+            {"group": "Codex", "kind": "secondary", "remainingPercent": 0, "windowMinutes": None, "resetsAt": None},
+        ]
+        assert "sentinel" not in json.dumps(first) and "do-not-export" not in json.dumps(first)
+
+    asyncio.run(run())
+
+
+def test_opencode_go_quota_from_service_and_explicit_key(tmp_path, monkeypatch):
+    async_client = httpx.AsyncClient
+    paths = []
+
+    def handle(request):
+        paths.append(request.url.path)
+        if request.url.host == "opencode.ai":
+            assert request.headers["Authorization"] == "Bearer test-go-key"
+            return httpx.Response(200, json={"usage": {
+                "rolling": {"percent": 20, "status": "ok", "resetsAt": "2026-11-20T05:00:00Z"},
+                "weekly": {"percent": 30, "status": "rate-limited"},
+                "monthly": {"percent": 50},
+            }})
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json={"data": {"workspace": {"id": "hidden-account"}, "go": {
+            "rolling": {"percent": 20, "limited": False, "resetsAt": 1795150800000},
+            "weekly": {"percent": 30, "limited": True},
+            "monthly": {"percent": 50},
+        }}})
+
+    def mock_client(**kwargs):
+        return async_client(transport=httpx.MockTransport(handle), **kwargs)
+
+    async def run():
+        monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+        monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+        monkeypatch.delenv("OPENCODE_SERVER_PASSWORD", raising=False)
+        service = OpenCodeAdapter((tmp_path,), serve_url="http://127.0.0.1:4096")
+        service_data = await service.read_subscription_quota()
+        monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")
+        direct = OpenCodeAdapter((tmp_path,), serve_url="http://127.0.0.1:4096")
+        direct_data, cached = await asyncio.gather(direct.read_subscription_quota(), direct.read_subscription_quota())
+        assert paths == ["/api/experimental/usage/limits", "/zen/go/v1/usage"]
+        assert service_data["status"] == direct_data["status"] == "ready"
+        assert direct_data["windows"] == cached["windows"] == service_data["windows"]
+        assert [item["remainingPercent"] for item in direct_data["windows"]] == [80, 0, 50]
+        assert direct_data["windows"][2]["kind"] == "monthly"
+        assert "hidden-account" not in json.dumps(service_data) and "test-go-key" not in json.dumps(direct_data)
+
+    asyncio.run(run())
+
+
 CODEX_MOCK_SCRIPT = """
 import sys, json
 for line in sys.stdin:

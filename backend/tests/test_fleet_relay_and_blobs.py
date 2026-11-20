@@ -1,11 +1,14 @@
 """Wave 1 验收测试：0020 迁移、sn_live_ 节点认证、加密分块总线、WSS 中继及零正文持久化哨兵。"""
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from time import monotonic, sleep
 
 from fastapi.testclient import TestClient
 import jwt
@@ -39,12 +42,46 @@ def test_0020_migration_upgrade_and_downgrade(tmp_path):
         tables = set(inspect(conn).get_table_names())
         assert {"agent_nodes", "encrypted_blobs"}.issubset(tables)
 
+    migrate("upgrade", "head")
+    with engine.connect() as conn:
+        assert "fleet_usage_samples" in inspect(conn).get_table_names()
     migrate("downgrade", "0019_local_automation_events")
     with engine.connect() as conn:
         tables = set(inspect(conn).get_table_names())
-        assert "agent_nodes" not in tables
-        assert "encrypted_blobs" not in tables
+        assert tables.isdisjoint({"agent_nodes", "encrypted_blobs", "fleet_usage_samples"})
     engine.dispose()
+
+
+def test_usage_is_persisted_before_a_dashboard_connects(client, users, monkeypatch):
+    monkeypatch.setattr("app.fleet.usage.utcnow", lambda: datetime(2026, 11, 19, 18, tzinfo=timezone.utc))
+    owner, other_workspace = users
+    node = client.post("/api/v1/fleet/nodes", headers=owner, json={"name": "Usage Node", "platform": "linux"}).json()
+    node_headers = {"Authorization": f"Bearer {node['nodeToken']}"}
+    base = {"type": "TokenUsage", "provider": "codex", "sessionId": "s1", "source": "exact"}
+    path = "/api/v1/fleet/usage/daily?start=2026-11-20&end=2026-11-20&tz=Asia/Shanghai"
+    expected = [{"date": "2026-11-20", "requests": 2, "tokens": 183, "cached": 80, "otherInput": 68, "output": 30, "other": 5}]
+    with client.websocket_connect("/ws/fleet/node", headers=node_headers) as ws:
+        assert ws.receive_json()["type"] == "NodeReady"
+        ws.send_json({**base, "runId": "one", "messageId": "a", "inputTokens": 40, "seq": 1})
+        ws.send_json({**base, "runId": "one", "scope": "cumulative", "totalTokens": 2000,
+                      "lastInputTokens": 140, "lastCachedInputTokens": 80, "lastOutputTokens": 20, "lastTotalTokens": 165, "seq": 3})
+        ws.send_json({**base, "runId": "one", "inputTokens": 500, "seq": 2})
+        ws.send_json({**base, "runId": "skip", "source": "estimated", "inputTokens": 50})
+        ws.send_json({**base, "runId": "aggregate-only", "scope": "cumulative", "inputTokens": 1000})
+        ws.send_json({**base, "type": "Completed", "requestId": "two", "usage": {"source": "exact", "inputTokens": 8, "outputTokens": 10}})
+        deadline = monotonic() + 2
+        while monotonic() < deadline:
+            result = client.get(path, headers=owner)
+            if result.json() == expected:
+                break
+            sleep(0.01)
+        assert result.status_code == 200 and result.json() == expected
+
+    assert client.get(path, headers=owner).json() == expected
+    assert client.get(path, headers=other_workspace).json() == []
+    assert client.get(path, headers=node_headers).status_code == 401
+    assert client.get(path.replace("Asia/Shanghai", "UTC"), headers=owner).json() == []
+    assert client.get(path.replace("start=2026-11-20", "start=2026-09-01"), headers=owner).status_code == 422
 
 
 def test_node_lifecycle_isolation_and_revocation(client, users):
@@ -80,6 +117,37 @@ def test_node_lifecycle_isolation_and_revocation(client, users):
         headers={"Authorization": f"Bearer {token2}"},
         json={"digest": "0" * 64, "ciphertextSize": 100, "chunkSize": 1024, "chunkCount": 1},
     ).status_code == 401
+
+
+def test_subscription_quota_is_read_only_and_scoped_to_the_owner(client, users):
+    owner, other_workspace = users
+    node = client.post("/api/v1/fleet/nodes", headers=owner, json={"name": "Codex Node", "platform": "linux"}).json()
+    path = f"/api/v1/fleet/nodes/{node['node']['id']}/subscription-quota"
+    assert client.post(path, headers=owner).json()["status"] == "offline"
+    assert client.post(path, headers=other_workspace).status_code == 404
+    assert client.post(path + "?provider=antigravity", headers=owner).status_code == 422
+
+    window = {"group": "Codex", "kind": "primary", "remainingPercent": 63, "windowMinutes": 300, "resetsAt": 1795000000}
+    with client.websocket_connect("/ws/fleet/node") as node_ws:
+        node_ws.send_json({"type": "auth", "token": node["nodeToken"], "hello": {"adapters": [
+            {"provider": "codex", "status": "ready", "capabilities": ["subscription-quota"]},
+            {"provider": "opencode", "status": "unavailable", "capabilities": ["subscription-quota"]},
+        ]}})
+        assert node_ws.receive_json()["type"] == "NodeReady"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            response = pool.submit(client.post, path, headers=owner)
+            request = node_ws.receive_json()
+            assert request["type"] == "subscription.quota.read" and request["provider"] == "codex"
+            node_ws.send_json({"type": "SubscriptionQuotaResult", "_rpcId": request["_rpcId"],
+                               "status": "ready", "checkedAt": 1794900000,
+                               "windows": [{**window, "rawAnomaly": "test-private-value"}]})
+            assert response.result(timeout=5).json() == {"status": "ready", "checkedAt": 1794900000, "windows": [window]}
+            response = pool.submit(client.post, path + "?provider=opencode", headers=owner)
+            request = node_ws.receive_json()
+            assert request["type"] == "subscription.quota.read" and request["provider"] == "opencode"
+            monthly = {"group": "OpenCode Go", "kind": "monthly", "remainingPercent": 46, "windowMinutes": None, "resetsAt": 1795000000}
+            node_ws.send_json({"type": "SubscriptionQuotaResult", "_rpcId": request["_rpcId"], "status": "ready", "windows": [monthly]})
+            assert response.result(timeout=5).json() == {"status": "ready", "checkedAt": None, "windows": [monthly]}
 
 
 def test_encrypted_chunked_blob_transfer_and_range(client, users, tmp_path, monkeypatch):

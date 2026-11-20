@@ -353,7 +353,7 @@ onUnmounted(() => {
       <div class="screen">
         <div class="glass-wallpaper" aria-hidden="true"></div>
         <div class="mview">
-          <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :open-add="(kind: string) => add = kind" :in-library="inLibrary" />
+          <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :in-library="inLibrary" />
         </div>
         <nav v-if="!hideMobileTabbar" class="tabbar" aria-label="主导航">
           <template v-for="tab in mobileTabs" :key="tab.page">
@@ -364,7 +364,7 @@ onUnmounted(() => {
             </button>
           </template>
         </nav>
-        <OpusQuickAdd :kind="add" :offline="syncKind === 'offline'" @change="add = $event" @create="add = ''; emit('create', $event)" @action="emit('action', $event)" />
+        <OpusQuickAdd :kind="add" :offline="syncKind === 'offline'" @change="add = $event" @create="add = ''; emit('create', $event)" @action="emit('action', $event)" @open-share="go('Space')" />
         <div class="toast-host mtoast"><div v-for="item in toasts" :key="item.id" class="toast" :class="{ out: item.out }" role="status">{{ item.text }}</div></div>
       </div>
     </template>
@@ -450,7 +450,7 @@ onUnmounted(() => {
             />
           </nav>
           <main id="main" class="main" tabindex="-1" data-desktop-scroll>
-            <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :open-add="(kind: string) => add = kind" :in-library="false" />
+            <slot :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" :open-sync="openSyncSettings" :in-library="false" />
           </main>
           <aside class="dock" aria-label="Agent 侧板" :inert="!dockOpen">
             <div

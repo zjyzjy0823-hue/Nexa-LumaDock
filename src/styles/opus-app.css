@@ -56,7 +56,12 @@ dialog.msheet-dlg::backdrop { overflow: hidden; overscroll-behavior: contain; ba
   color: #eeeeee;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
 }
-.opus-shell .tabbar { bottom: calc(14px + env(safe-area-inset-bottom)); }
+.opus-shell .tabbar {
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  -webkit-tap-highlight-color: transparent;
+}
+.opus-shell .tabbar .tab:focus-visible { outline: none; }
+.opus-shell .tabbar .tab:focus-visible .ico { outline: 2px solid var(--text); outline-offset: 1px; }
 .opus-shell .sheet { padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
 .opus-shell .opus-mac { padding-left: 78px; }
 .opus-shell .win-ctl button { display: grid; place-items: center; }

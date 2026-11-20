@@ -2,15 +2,20 @@
 
 import asyncio
 from contextlib import contextmanager
+from datetime import date
 import hashlib
+import logging
 import secrets
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -18,7 +23,7 @@ from ..models import AgentNode, User, utcnow
 from ..security import authenticate_node_token, authenticate_user_jwt, bearer, current_user
 from ..utils.time import iso_utc
 from ..workspaces import get_personal_workspace
-from . import blobs
+from . import blobs, usage
 from .hub import ALLOWED_NODE_EVENTS, ConnectedNode, fleet_hub
 from .schemas import (
     AdapterInfo,
@@ -32,12 +37,14 @@ from .schemas import (
     NodeOut,
     NodePatchInput,
     NodeTokenOut,
+    SubscriptionQuota,
     TransferEndpoint,
     valid_uuid,
 )
 
 router = APIRouter(prefix="/api/v1/fleet", tags=["fleet"])
 ws_router = APIRouter(tags=["fleet-ws"])
+logger = logging.getLogger(__name__)
 
 
 def _node_to_out(item: AgentNode, *, live_online: bool | None = None) -> NodeOut:
@@ -103,6 +110,48 @@ async def list_nodes(user: User = Depends(current_user), db: Session = Depends(g
         online = await fleet_hub.get_online_node(workspace.id, item.id)
         out.append(_node_to_out(item, live_online=online is not None))
     return out
+
+
+@router.get("/usage/daily")
+def usage_daily(
+    start: date, end: date, tz: str = Query(default="UTC", max_length=64),
+    user: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    if not date.min < start <= end < date.max or (end - start).days >= 31:
+        raise HTTPException(422, "Invalid usage date range (maximum 31 days)")
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(422, "Invalid time zone") from exc
+    workspace = get_personal_workspace(db, user)
+    return usage.daily_totals(db, workspace.id, start, end, zone)
+
+
+@router.post("/nodes/{node_id}/subscription-quota", response_model=SubscriptionQuota)
+async def read_subscription_quota(
+    node_id: str, provider: Literal["codex", "opencode"] = "codex",
+    user: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    workspace = get_personal_workspace(db, user)
+    node = _owned_node(db, workspace.id, node_id)
+    connected = await fleet_hub.get_online_node(workspace.id, node.id)
+    if connected is None or node.revoked_at is not None:
+        return SubscriptionQuota(status="offline")
+    if not any(
+        adapter.get("provider") == provider and "subscription-quota" in adapter.get("capabilities", [])
+        and (provider == "opencode" or adapter.get("status") == "ready")
+        for adapter in connected.adapters
+    ):
+        return SubscriptionQuota(status="unsupported")
+    result = await fleet_hub.call_node_rpc(
+        workspace.id, node.id, {"type": "subscription.quota.read", "provider": provider}, timeout=10,
+    )
+    if result.get("code") in ("node_offline", "node_disconnected"):
+        return SubscriptionQuota(status="offline")
+    try:
+        return SubscriptionQuota.model_validate(result)
+    except ValidationError:
+        return SubscriptionQuota(status="unavailable")
 
 
 @router.post("/nodes", status_code=201, response_model=NodeTokenOut)
@@ -320,6 +369,14 @@ def _open_ws_db(websocket: WebSocket):
         gen.close()
 
 
+def _persist_node_usage(websocket: WebSocket, workspace_id: str, node_id: str, frame: dict) -> None:
+    try:
+        with _open_ws_db(websocket) as db:
+            usage.record_frame(db, workspace_id, node_id, frame)
+    except SQLAlchemyError:
+        logger.warning("Could not persist Fleet usage for node %s", node_id)
+
+
 async def _recv_first_auth_frame(websocket: WebSocket) -> dict[str, Any] | None:
     try:
         frame = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
@@ -425,11 +482,14 @@ async def fleet_node_ws(websocket: WebSocket):
                     db.commit()
                 continue
 
-            if evt_type == "CronRpcResult":
+            if evt_type in ("CronRpcResult", "SubscriptionQuotaResult"):
                 rpc_id = str(frame.get("_rpcId") or "").strip()
                 if rpc_id:
                     await fleet_hub.resolve_node_rpc(workspace_id, node_id, rpc_id, frame)
                 continue
+
+            if evt_type == "TokenUsage" or (evt_type == "Completed" and isinstance(frame.get("usage"), dict)):
+                await run_in_threadpool(_persist_node_usage, websocket, workspace_id, node_id, frame)
 
             target_client_id = frame.pop("_clientConnId", None)
             outbound = {**frame, "nodeId": node_id}

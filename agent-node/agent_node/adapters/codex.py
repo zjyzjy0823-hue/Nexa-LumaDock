@@ -70,6 +70,38 @@ def _parse_unified_diff_text(diff_text: str) -> dict[str, Any]:
     }
 
 
+def _quota_windows(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return []
+    primary = raw.get("rateLimits")
+    buckets = raw.get("rateLimitsByLimitId")
+    by_id = {}
+    if isinstance(primary, dict):
+        key = primary.get("limitId")
+        by_id[key if isinstance(key, str) and key else "codex"] = primary
+    if isinstance(buckets, dict):
+        by_id.update((key, value) for key, value in buckets.items() if isinstance(value, dict))
+    windows = []
+    for key, bucket in list(by_id.items())[:8]:
+        name = bucket.get("limitName")
+        group = name.strip() if isinstance(name, str) and name.strip() else ("Codex" if key == "codex" else key)
+        for kind in ("primary", "secondary"):
+            item = bucket.get(kind)
+            if not isinstance(item, dict):
+                continue
+            used = item.get("usedPercent")
+            if type(used) not in (int, float) or not 0 <= used <= 100:
+                continue
+            duration = item.get("windowDurationMins")
+            resets_at = item.get("resetsAt")
+            windows.append({
+                "group": group[:100], "kind": kind, "remainingPercent": 100 - used,
+                "windowMinutes": duration if type(duration) is int and 0 < duration <= 1_000_000 else None,
+                "resetsAt": resets_at if type(resets_at) is int and 0 < resets_at <= 253402300799 else None,
+            })
+    return windows
+
+
 class CodexAdapter(AgentAdapter):
     provider = "codex"
 
@@ -85,31 +117,53 @@ class CodexAdapter(AgentAdapter):
         self._tool_meta: dict[str, dict[str, Any]] = {}
         self._turn_usage_seen: set[str] = set()
         self._initialized = False
+        self._init_lock = asyncio.Lock()
+        self._quota_lock = asyncio.Lock()
+        self._quota_cache: tuple[float, dict[str, Any]] | None = None
 
     async def _ensure_proc(self) -> StdioJsonRpcProcess:
-        if self._proc is None:
-            self._proc = StdioJsonRpcProcess(
-                [self.command, "app-server"],
-                cwd=self.allowed_roots[0],
-                on_notification=self._on_notification,
-                on_request=self._on_server_request,
-            )
-        await self._proc.start()
-        if not self._initialized:
-            await self._proc.call(
-                "initialize",
-                {"clientInfo": {"name": "studiolo-agent-node", "version": "0.7.0"}},
-            )
-            await self._proc.notify("initialized")
-            self._initialized = True
-        return self._proc
+        async with self._init_lock:
+            if self._proc is None:
+                self._proc = StdioJsonRpcProcess(
+                    [self.command, "app-server"],
+                    cwd=self.allowed_roots[0],
+                    on_notification=self._on_notification,
+                    on_request=self._on_server_request,
+                )
+            await self._proc.start()
+            if not self._initialized:
+                await self._proc.call(
+                    "initialize",
+                    {"clientInfo": {"name": "studiolo-agent-node", "version": "0.7.0"}},
+                )
+                await self._proc.notify("initialized")
+                self._initialized = True
+            return self._proc
 
     async def probe(self) -> AdapterProbe:
         return probe_cli_binary(
             self.provider,
             self.command,
-            ("chat", "history", "approval", "worktree", "models", "read-only", "files", "diff", "checkpoints", "todos"),
+            ("chat", "history", "approval", "worktree", "models", "read-only", "files", "diff", "checkpoints", "todos", "subscription-quota"),
         )
+
+    async def read_subscription_quota(self) -> dict[str, Any]:
+        async with self._quota_lock:
+            if self._quota_cache and time.monotonic() - self._quota_cache[0] < 60:
+                return self._quota_cache[1]
+            try:
+                async with asyncio.timeout(8):
+                    proc = await self._ensure_proc()
+                    raw = await proc.call("account/rateLimits/read", timeout=6)
+                windows = _quota_windows(raw)
+            except (OSError, RuntimeError, TimeoutError):
+                windows = []
+                status = "unavailable"
+            else:
+                status = "ready" if windows else "no_data"
+            result = {"status": status, "windows": windows, "checkedAt": int(time.time())}
+            self._quota_cache = (time.monotonic(), result)
+            return result
 
     async def list_models(self) -> list[dict[str, Any]]:
         proc = await self._ensure_proc()
@@ -305,6 +359,8 @@ class CodexAdapter(AgentAdapter):
             return {"supported": False}
 
     async def _on_notification(self, method: str, params: dict[str, Any]) -> None:
+        if method == "account/updated":
+            self._quota_cache = None
         emit = self._emit
         if emit is None:
             return

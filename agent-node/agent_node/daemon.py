@@ -365,6 +365,14 @@ class AgentNodeDaemon:
             await self._send_ws(ws, {"type": "TrustPolicySnapshot", "patterns": list(self._trust_patterns)})
             return
 
+        if cmd == "subscription.quota.read":
+            rpc_id = frame.get("_rpcId")
+            if not isinstance(rpc_id, str) or not rpc_id:
+                return
+            result = await adapter.read_subscription_quota() if adapter is not None else {"status": "unsupported"}
+            await send_back({"type": "SubscriptionQuotaResult", "_rpcId": rpc_id, **result})
+            return
+
         if cmd.startswith("cron."):
             rpc_id = str(frame.get("_rpcId") or "").strip()
 

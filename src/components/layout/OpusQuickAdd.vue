@@ -8,7 +8,7 @@ import { websiteService } from '../../services/websites'
 import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{ kind: string; offline?: boolean }>()
-const emit = defineEmits<{ change: [kind: string]; create: [kind: string]; action: [message: string] }>()
+const emit = defineEmits<{ change: [kind: string]; create: [kind: string]; action: [message: string]; openShare: [] }>()
 const auth = useAuthStore()
 const ledger = useLedgerStore()
 const websites = useWebsitesStore()
@@ -26,8 +26,10 @@ const amountEl = ref<HTMLElement>()
 let bumpTimer: ReturnType<typeof setTimeout> | undefined
 
 const types = [
-  { kind: 'tx', label: '记一笔', icon: 'ledger' }, { kind: 'web', label: '网站', icon: 'globe' },
-  { kind: 'rec', label: '记录', icon: 'data' }, { kind: 'share', label: '共享', icon: 'shield' },
+  { kind: 'share', label: '共享', icon: 'shield' },
+  { kind: 'tx', label: '记一笔', icon: 'ledger' },
+  { kind: 'web', label: '网站', icon: 'globe' },
+  { kind: 'rec', label: '记录', icon: 'data' },
 ] as const
 const categories = computed(() => ledger.categories.filter(item => item.type === 'expense'))
 const keys = ['1', '2', '3', '⌫', '保存', '4', '5', '6', '7', '8', '9', '.', '0', '00']
@@ -152,7 +154,9 @@ async function paste() {
         <button type="button" class="btn btn-primary btn-lg" style="width:100%" @click="emit('create', 'collection')">新建集合</button>
       </template>
     </form>
-    <div v-else-if="kind === 'share'" class="notice"><OpusIcon name="lock" /><div>共享空间待接入</div></div>
+    <button v-else-if="kind === 'share'" class="btn btn-primary btn-lg" style="width:100%" type="button" @click="emit('openShare')">
+      <OpusIcon name="shield" /> 打开共享空间
+    </button>
     <p v-if="error" role="alert" style="color:var(--danger);font-size:12.5px;margin:8px 0 0">{{ error }}</p>
     <div v-if="offline" class="offline-note"><OpusIcon name="wifiOff" />当前离线 · 保存在本机，联网后自动同步</div>
   </section>
