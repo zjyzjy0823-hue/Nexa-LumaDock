@@ -645,11 +645,17 @@ export function suggestCommitMessageFromDiff(
   return `${prefix}: 优化 ${topDir} 等 ${paths.length} 个文件变更`
 }
 
+export function redactSessionTitleCredentials(title: string): string {
+  return title
+    .replace(/\b(?:sk-(?:proj-|ant-|or-v1-)?[\w-]{16,}|gh[pousr]_[\w]{20,}|github_pat_[\w]{20,}|AIza[\w-]{30,})\b/g, '[密钥已隐藏]')
+    .replace(/((?:api[ _-]?key|access[ _-]?token|authorization|密钥)\s*[:=：]\s*(?:Bearer\s+)?["'`]?)[\w+./=-]{12,}/gi, '$1[密钥已隐藏]')
+}
+
 /**
  * 从用户首句提炼简洁可读的乐观会话标题。
  */
 export function deriveOptimisticSessionTitle(text: string): string {
-  const clean = text
+  const clean = redactSessionTitleCredentials(text)
     .replace(/^\[附加上下文\][\s\S]*?\n\n/, '')
     .replace(/^\[Plan Mode\][^\n]*\n+/, '')
     .replace(/^\[重新生成上一轮回答\][^\n]*\n+/, '')

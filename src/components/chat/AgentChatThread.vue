@@ -1889,6 +1889,9 @@ const queuedThumbUrls = ref<Map<File, string>>(new Map())
 const lightboxEl = ref<HTMLDialogElement | null>(null)
 const lightboxSrc = ref('')
 const lightboxAlt = ref('')
+const lightboxDownload = ref<(() => Promise<void>) | null>(null)
+const lightboxHandoff = ref<(() => void) | null>(null)
+const lightboxDownloading = ref(false)
 const copiedMsgId = ref<string | null>(null)
 let msgCopyTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -1916,9 +1919,11 @@ function queuedFileThumb(file: File): string | undefined {
   return queuedThumbUrls.value.get(file)
 }
 
-function openImageLightbox(src: string, alt: string) {
+function openImageLightbox(src: string, alt: string, download?: () => Promise<void>, handoff?: () => void) {
   lightboxSrc.value = src
   lightboxAlt.value = alt
+  lightboxDownload.value = download ?? null
+  lightboxHandoff.value = handoff ?? null
   void nextTick(() => {
     lightboxEl.value?.showModal()
   })
@@ -1944,14 +1949,30 @@ function triggerBrowserDownload(url: string, fileName: string) {
   emit('action', `正在下载 ${cleanName}`)
 }
 
-function downloadLightboxImage() {
-  if (!lightboxSrc.value) return
-  triggerBrowserDownload(lightboxSrc.value, lightboxAlt.value || 'image.png')
+async function downloadLightboxImage() {
+  if (lightboxDownloading.value) return
+  if (lightboxDownload.value) {
+    lightboxDownloading.value = true
+    try {
+      await lightboxDownload.value()
+    } finally {
+      lightboxDownloading.value = false
+    }
+  } else if (lightboxSrc.value) {
+    triggerBrowserDownload(lightboxSrc.value, lightboxAlt.value || 'image.png')
+  }
+}
+
+function handoffLightboxImage() {
+  lightboxEl.value?.close()
+  lightboxHandoff.value?.()
 }
 
 function onLightboxClose() {
   lightboxSrc.value = ''
   lightboxAlt.value = ''
+  lightboxDownload.value = null
+  lightboxHandoff.value = null
 }
 
 function onLightboxBackdropFallback(event: MouseEvent) {
@@ -3529,14 +3550,22 @@ async function retryTurn(msg: ChatMessage) {
           <span class="lightbox-title">{{ lightboxAlt || '图片预览' }}</span>
           <div class="lightbox-actions">
             <button
-              v-if="lightboxSrc"
+              v-if="lightboxHandoff"
+              type="button"
+              class="btn btn-subtle btn-sm"
+              title="将此产物交接给其他节点"
+              @click="handoffLightboxImage"
+            >@Handoff</button>
+            <button
+              v-if="lightboxSrc || lightboxDownload"
               type="button"
               class="btn btn-subtle btn-sm"
               title="下载原图"
+              :disabled="lightboxDownloading"
               @click="downloadLightboxImage"
             >
               <OpusIcon name="download" />
-              <span>下载</span>
+              <span>{{ lightboxDownloading ? '下载中' : '下载' }}</span>
             </button>
             <button type="submit" class="icon-btn lightbox-close" aria-label="关闭大图预览" autofocus>
               <OpusIcon name="x" />
@@ -3544,6 +3573,7 @@ async function retryTurn(msg: ChatMessage) {
           </div>
         </header>
         <img v-if="lightboxSrc" :src="lightboxSrc" :alt="lightboxAlt" class="lightbox-img" />
+        <p v-else class="lightbox-unavailable">无法预览此图片</p>
       </form>
     </dialog>
   </div>

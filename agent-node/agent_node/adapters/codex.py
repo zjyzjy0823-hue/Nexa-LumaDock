@@ -3,11 +3,14 @@
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
+import json
+import os
 from pathlib import Path
 import time
 from typing import Any
 from uuid import uuid4
 
+from ..config import ensure_allowed_path
 from .base import (
     AdapterProbe,
     AgentAdapter,
@@ -22,7 +25,7 @@ from .base import (
     probe_cli_binary,
     safe_token_int,
 )
-from .jsonrpc import StdioJsonRpcProcess
+from .jsonrpc import JsonRpcError, StdioJsonRpcProcess
 
 
 @dataclass
@@ -118,6 +121,72 @@ def _quota_windows(raw: Any) -> list[dict[str, Any]]:
     return windows
 
 
+def _turn_defaults(response: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        param: response[field] for param, field in (
+            ("model", "model"), ("effort", "reasoningEffort"), ("sandboxPolicy", "sandbox"),
+            ("approvalPolicy", "approvalPolicy"),
+        ) if response and response.get(field) is not None
+    }
+
+
+def _read_rollout_messages(path: Path, session_id: str, limit: int) -> list[dict[str, Any]]:
+    """Read chat events when the app server cannot hydrate history from its thread store."""
+    try:
+        stream = path.open(encoding="utf-8")
+    except FileNotFoundError:
+        # Codex can return a rollout path before the first message materializes it.
+        return []
+    with stream:
+        first_line = stream.readline()
+        if not first_line:
+            return []
+        first = json.loads(first_line)
+        if first.get("type") != "session_meta" or first.get("payload", {}).get("id") != session_id:
+            raise ValueError("Codex 历史文件与会话 ID 不匹配")
+
+        turns: deque[list[dict[str, Any]]] = deque(maxlen=limit)
+        items: list[dict[str, Any]] = []
+        legacy: list[dict[str, Any]] = []
+
+        def finish_turn() -> None:
+            if items or legacy:
+                turns.append(list(items or legacy))
+            items.clear()
+            legacy.clear()
+
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # A live rollout can end with a partially written record.
+                continue
+            if record.get("type") != "event_msg":
+                continue
+            event = record.get("payload") or {}
+            kind = event.get("type")
+            if kind in ("task_started", "turn_started"):
+                finish_turn()
+            elif kind == "thread_rolled_back":
+                finish_turn()
+                for _ in range(min(len(turns), max(0, int(event.get("num_turns") or 0)))):
+                    turns.pop()
+            elif kind == "item_completed":
+                item = event.get("item") or {}
+                if item.get("type") == "UserMessage":
+                    text = "".join(p.get("text", "") for p in item.get("content") or [] if isinstance(p, dict))
+                    items.append({"role": "user", "text": text})
+                elif item.get("type") == "AgentMessage":
+                    text = "".join(p.get("text", "") for p in item.get("content") or [] if isinstance(p, dict))
+                    if text:
+                        items.append({"role": "assistant", "text": text})
+            elif kind in ("user_message", "agent_message") and isinstance(event.get("message"), str):
+                role = "user" if kind == "user_message" else "assistant"
+                legacy.append({"role": role, "text": event["message"]})
+        finish_turn()
+    return [message for turn in turns for message in turn][-limit:]
+
+
 class CodexAdapter(AgentAdapter):
     provider = "codex"
 
@@ -140,12 +209,17 @@ class CodexAdapter(AgentAdapter):
                     cwd=self.allowed_roots[0],
                     on_notification=self._on_notification,
                     on_request=self._on_server_request,
+                    auto_start=False,
                 )
-            await self._proc.start()
+            if await self._proc.start():
+                self._initialized = False
             if not self._initialized:
                 await self._proc.call(
                     "initialize",
-                    {"clientInfo": {"name": "studiolo-agent-node", "version": "0.7.0"}},
+                    {
+                        "clientInfo": {"name": "studiolo-agent-node", "version": "0.7.0"},
+                        "capabilities": {"experimentalApi": True},
+                    },
                 )
                 await self._proc.notify("initialized")
                 self._initialized = True
@@ -213,14 +287,12 @@ class CodexAdapter(AgentAdapter):
         )
         proc = await self._ensure_proc()
         if session_id:
-            res = await proc.call("thread/resume", {"threadId": session_id, "cwd": str(eff_cwd), "approvalPolicy": "on-request"})
+            res = await self._resume_thread(proc, session_id, eff_cwd)
         else:
             res = await proc.call("thread/start", {"cwd": str(eff_cwd), "approvalPolicy": "on-request"})
         thread = (res or {}).get("thread") or {}
         tid = str(thread.get("id") or sid_seed)
-        self._defaults[tid] = {param: res[field] for param, field in (
-            ("model", "model"), ("effort", "reasoningEffort"), ("sandboxPolicy", "sandbox"),
-            ("approvalPolicy", "approvalPolicy")) if res and res.get(field) is not None}
+        self._defaults[tid] = _turn_defaults(res)
         return {
             "sessionId": tid,
             "provider": self.provider,
@@ -229,10 +301,71 @@ class CodexAdapter(AgentAdapter):
             "title": thread.get("preview") or f"Codex ({eff_cwd.name})",
         }
 
+    async def _resume_thread(
+        self, proc: StdioJsonRpcProcess, session_id: str, cwd: Path | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "threadId": session_id, "excludeTurns": True, "approvalPolicy": "on-request",
+        }
+        if cwd is not None:
+            params["cwd"] = str(cwd)
+        else:
+            # Auto-resume must respect the working directory of the persisted session.
+            thread = await self._thread_metadata(proc, session_id)
+            params["cwd"] = str(ensure_allowed_path(thread["cwd"], self.allowed_roots))
+        return await proc.call("thread/resume", params)
+
+    async def _thread_metadata(self, proc: StdioJsonRpcProcess, session_id: str) -> dict[str, Any]:
+        result = await proc.call("thread/read", {"threadId": session_id, "includeTurns": False})
+        thread = (result or {}).get("thread") or {}
+        if thread.get("id") != session_id or not thread.get("cwd"):
+            raise RuntimeError("Codex 无法读取原会话信息")
+        return thread
+
+    async def _list_history_turns(
+        self, proc: StdioJsonRpcProcess, session_id: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        turns: list[dict[str, Any]] = []
+        params: dict[str, Any] = {"threadId": session_id, "sortDirection": "desc", "itemsView": "full"}
+        seen_cursors: set[str] = set()
+        while len(turns) < limit:
+            result = await proc.call("thread/turns/list", {**params, "limit": min(50, limit - len(turns))})
+            turns.extend(result.get("data") or [])
+            cursor = result.get("nextCursor")
+            if not cursor or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
+            params["cursor"] = cursor
+        return list(reversed(turns[:limit]))
+
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         proc = await self._ensure_proc()
-        res = await proc.call("thread/read", {"threadId": session_id, "includeTurns": True})
-        turns = ((res or {}).get("thread") or {}).get("turns") or []
+        limit = min(1000, max(1, limit))
+        try:
+            turns = await self._list_history_turns(proc, session_id, limit)
+        except JsonRpcError as err:
+            if err.code == -32600 and "is not materialized yet" in err.message:
+                return []
+            if err.code != -32601:
+                raise
+            try:
+                res = await proc.call("thread/read", {"threadId": session_id, "includeTurns": True})
+                turns = ((res or {}).get("thread") or {}).get("turns") or []
+            except JsonRpcError as legacy_err:
+                if legacy_err.code == -32600 and "is not materialized yet" in legacy_err.message:
+                    return []
+                if legacy_err.code != -32601 and "Full-history hydration is deprecated" not in legacy_err.message:
+                    raise
+                thread = await self._thread_metadata(proc, session_id)
+                ensure_allowed_path(thread["cwd"], self.allowed_roots)
+                rollout = thread.get("path")
+                if not rollout:
+                    raise legacy_err
+                codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+                path = ensure_allowed_path(rollout, (codex_home / "sessions", codex_home / "archived_sessions"))
+                if path.suffix != ".jsonl" or not path.name.endswith(f"-{session_id}.jsonl"):
+                    raise legacy_err
+                return await asyncio.to_thread(_read_rollout_messages, path, session_id, limit)
         messages: list[dict[str, Any]] = []
         for turn in turns[-limit:]:
             pending_thought: list[str] = []
@@ -305,14 +438,12 @@ class CodexAdapter(AgentAdapter):
     ) -> None:
         proc = await self._ensure_proc()
         options = options or {}
-        settings = dict(self._defaults.get(session_id, {}))
-        settings.update({k: options[k] for k in ("model", "effort") if options.get(k)})
+        overrides: dict[str, Any] = {k: options[k] for k in ("model", "effort") if options.get(k)}
         if options.get("readOnly"):
-            settings.update(sandboxPolicy={"type": "readOnly"}, approvalPolicy="never")
+            overrides.update(sandboxPolicy={"type": "readOnly"}, approvalPolicy="never")
         if session_id in self._turns:
             raise ValueError("当前会话已有任务运行中")
-        turn = ActiveTurn(request_id, str(settings.get("model") or ""), emit, request_approval,
-                          asyncio.get_running_loop().create_future())
+        turn = ActiveTurn(request_id, "", emit, request_approval, asyncio.get_running_loop().create_future())
         self._turns[session_id] = turn
         try:
             image_inputs: list[dict[str, Any]] = []
@@ -326,9 +457,23 @@ class CodexAdapter(AgentAdapter):
                     extra_attachments.append(att)
             prompt_text = merge_prompt_with_attachments(text, extra_attachments)
             input_items: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}, *image_inputs]
-            turn_res = await proc.call("turn/start", {
-                **settings, "threadId": session_id, "input": input_items,
-            })
+
+            async def start_turn() -> dict[str, Any]:
+                settings = {**self._defaults.get(session_id, {}), **overrides}
+                turn.model = str(settings.get("model") or "")
+                return await proc.call("turn/start", {
+                    **settings, "threadId": session_id, "input": input_items,
+                })
+
+            try:
+                turn_res = await start_turn()
+            except JsonRpcError as err:
+                # Retry only after Codex rejected the first request before starting a turn.
+                if err.code != -32600 or not err.message.lower().startswith(("thread not found", "thread not loaded")):
+                    raise
+                resumed = await self._resume_thread(proc, session_id)
+                self._defaults[session_id] = _turn_defaults(resumed)
+                turn_res = await start_turn()
             turn.run_id = str(((turn_res or {}).get("turn") or {}).get("id") or "")
             if not turn.run_id:
                 raise RuntimeError("Codex did not return a turn ID")

@@ -24,7 +24,8 @@ def encode_key_b64(key: bytes) -> str:
 
 
 def decode_key_b64(encoded: str) -> bytes:
-    raw = base64.urlsafe_b64decode(encoded.encode("ascii"))
+    padding = "=" * (-len(encoded) % 4)
+    raw = base64.b64decode(encoded + padding, altchars=b"-_", validate=True)
     if len(raw) != 32:
         raise ValueError("AES-256 key must be 32 bytes")
     return raw

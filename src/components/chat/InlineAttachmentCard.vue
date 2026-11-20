@@ -12,7 +12,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  previewImage: [src: string, alt: string]
+  previewImage: [src: string, alt: string, download: () => Promise<void>, handoff?: () => void]
   openFile: [path: string]
   handoff: [artifact: ArtifactRef]
   status: [message: string]
@@ -20,10 +20,14 @@ const emit = defineEmits<{
 
 const fleet = useFleetStore()
 const downloading = ref(false)
+const previewFailed = ref(false)
+const loadingPreview = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
   if (props.attachment.artifact && props.attachment.mime.startsWith('image/')) {
-    void fleet.ensureArtifactImagePreview(props.attachment.artifact)
+    loadingPreview.value = true
+    await fleet.ensureArtifactImagePreview(props.attachment.artifact)
+    loadingPreview.value = false
   }
 })
 
@@ -37,12 +41,6 @@ const effectiveUrl = computed(() => {
 
 const isImage = computed(() =>
   props.attachment.mime.startsWith('image/') || effectiveUrl.value.startsWith('data:image/'),
-)
-
-const isGif = computed(() =>
-  props.attachment.mime.toLowerCase().includes('gif') ||
-  props.attachment.fileName.toLowerCase().endsWith('.gif') ||
-  effectiveUrl.value.startsWith('data:image/gif'),
 )
 
 const isVideo = computed(() =>
@@ -69,13 +67,20 @@ const subLabel = computed(() => {
 })
 
 function handleCardClick() {
-  if (isImage.value && effectiveUrl.value) {
-    emit('previewImage', effectiveUrl.value, props.attachment.fileName)
-    return
-  }
   if (props.attachment.filePath) {
     emit('openFile', props.attachment.filePath)
   }
+}
+
+function openImage() {
+  const artifact = props.attachment.artifact
+  emit(
+    'previewImage',
+    previewFailed.value ? '' : effectiveUrl.value,
+    props.attachment.fileName,
+    handleDownload,
+    artifact && !props.compact ? () => emit('handoff', artifact) : undefined,
+  )
 }
 
 async function handleDownload() {
@@ -112,42 +117,27 @@ async function handleDownload() {
 </script>
 
 <template>
-  <!-- 1. 内联图片 / GIF 卡片（参考 hermes-mobile InlineAttachment.isImage） -->
-  <div v-if="isImage && effectiveUrl" class="inline-att-img-card">
+  <div v-if="isImage" class="inline-att-img-card">
     <button
       type="button"
       class="inline-att-img-btn"
-      :title="`点击查看大图：${attachment.fileName}`"
-      @click="emit('previewImage', effectiveUrl, attachment.fileName)"
+      :aria-label="`预览图片：${attachment.fileName}`"
+      :disabled="loadingPreview && !effectiveUrl"
+      @click="openImage"
     >
-      <img :src="effectiveUrl" :alt="attachment.fileName" loading="lazy" class="inline-att-img" />
-      <span v-if="isGif" class="inline-att-gif-badge">GIF</span>
+      <img
+        v-if="effectiveUrl && !previewFailed"
+        :src="effectiveUrl"
+        :alt="attachment.fileName"
+        loading="lazy"
+        class="inline-att-img"
+        @error="previewFailed = true"
+      />
+      <span v-else class="inline-att-img-placeholder">
+        <OpusIcon name="file" />
+        {{ loadingPreview ? '正在加载图片…' : attachment.fileName }}
+      </span>
     </button>
-    <div class="inline-att-img-bar">
-      <div class="inline-att-meta">
-        <span class="inline-att-name" :title="attachment.filePath || attachment.fileName">{{ attachment.fileName }}</span>
-        <span v-if="attachment.sizeBytes" class="inline-att-sub num">{{ formatBytes(attachment.sizeBytes) }}</span>
-      </div>
-      <div class="inline-att-actions">
-        <button
-          v-if="attachment.artifact && !compact"
-          type="button"
-          class="btn btn-subtle btn-sm"
-          title="将此产物交接给其他节点"
-          @click.stop="emit('handoff', attachment.artifact)"
-        >@Handoff</button>
-        <button
-          type="button"
-          class="btn btn-subtle btn-sm inline-att-dl-btn"
-          :disabled="downloading"
-          title="下载原图"
-          @click.stop="handleDownload"
-        >
-          <OpusIcon name="download" />
-          <span>{{ downloading ? '下载中' : '下载' }}</span>
-        </button>
-      </div>
-    </div>
   </div>
 
   <!-- 2. 内联音视频播放器（参考 hermes-mobile InlineMediaPlayer） -->
@@ -240,17 +230,14 @@ async function handleDownload() {
   height: auto;
   object-fit: contain;
 }
-.inline-att-gif-badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.72);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.3;
+.inline-att-img-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  color: var(--text-3);
 }
 .inline-att-video {
   display: block;
@@ -272,19 +259,6 @@ async function handleDownload() {
   border-top: 1px solid var(--line);
   background: var(--solid);
   color: var(--text);
-}
-.inline-att-meta {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.inline-att-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
 }
 .inline-att-file-card {
   display: flex;

@@ -59,6 +59,7 @@ import {
   buildForkContextSeed,
   buildSessionMarkdown,
   deriveOptimisticSessionTitle,
+  redactSessionTitleCredentials,
   isGenericSessionTitle,
   mergeToolCallUpdate,
   switchMessageBranch,
@@ -898,7 +899,7 @@ export const useFleetStore = defineStore('fleet', () => {
         const p = (s.provider || provider) as AdapterProvider
         const k = sessionKey(nodeId, p, s.sessionId)
         const existingTitle = next[k]?.title
-        let resolvedTitle = s.title || ''
+        let resolvedTitle = redactSessionTitleCredentials(s.title || '')
         if (isGenericSessionTitle(resolvedTitle)) {
           if (existingTitle && !isGenericSessionTitle(existingTitle)) {
             resolvedTitle = existingTitle
@@ -931,7 +932,7 @@ export const useFleetStore = defineStore('fleet', () => {
     if (etype === 'SessionOpened' && nodeId && frame.sessionId) {
       const k = sessionKey(nodeId, provider, frame.sessionId)
       const initialTitle =
-        frame.title && !isGenericSessionTitle(frame.title) ? frame.title : '新对话'
+        frame.title && !isGenericSessionTitle(frame.title) ? redactSessionTitleCredentials(frame.title) : '新对话'
       sessionsByKey.value = {
         ...sessionsByKey.value,
         [k]: {
@@ -1453,7 +1454,7 @@ export const useFleetStore = defineStore('fleet', () => {
       if (sessionsByKey.value[sKey]) {
         sessionsByKey.value = {
           ...sessionsByKey.value,
-          [sKey]: { ...sessionsByKey.value[sKey], title: frame.title },
+          [sKey]: { ...sessionsByKey.value[sKey], title: redactSessionTitleCredentials(frame.title) },
         }
       }
       return
@@ -2801,7 +2802,7 @@ export const useFleetStore = defineStore('fleet', () => {
 
   function renameSession(sKey: string, title: string) {
     const sess = sessionsByKey.value[sKey]
-    const clean = title.trim()
+    const clean = redactSessionTitleCredentials(title.trim())
     if (!sess || !clean) return false
     sessionsByKey.value = {
       ...sessionsByKey.value,

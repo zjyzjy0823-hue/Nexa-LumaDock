@@ -14,7 +14,7 @@ import pytest
 
 from agent_node.adapters.codex import CodexAdapter
 from agent_node.adapters.hermes import HermesAdapter
-from agent_node.adapters.jsonrpc import StdioJsonRpcProcess
+from agent_node.adapters.jsonrpc import JsonRpcError, StdioJsonRpcProcess
 from agent_node.adapters.opencode import OpenCodeAdapter
 from agent_node.config import PathOutsideAllowedRootsError, canonicalize_roots
 from agent_node.crypto_chunks import generate_file_key
@@ -62,6 +62,98 @@ def test_codex_routes_early_and_concurrent_events_to_their_own_turn(tmp_path):
             assert all((evt["sessionId"], evt["runId"], evt["requestId"]) == (thread, "turn-" + thread, "req-" + thread)
                        for evt in captured)
             assert captured[1]["text"] == "early-" + thread
+
+    asyncio.run(run())
+
+
+def test_codex_resumes_unloaded_thread_and_retries_prompt_once(tmp_path):
+    async def run():
+        adapter = CodexAdapter((tmp_path,))
+        calls = []
+        events = []
+
+        class Process:
+            async def call(self, method, params):
+                calls.append((method, params))
+                if method == "thread/read":
+                    assert params == {"threadId": "existing", "includeTurns": False}
+                    return {"thread": {"id": "existing", "cwd": str(tmp_path)}}
+                if method == "thread/resume":
+                    assert params == {"threadId": "existing", "cwd": str(tmp_path),
+                                      "approvalPolicy": "on-request", "excludeTurns": True}
+                    return {"thread": {"id": "existing"}, "model": "resumed-model"}
+                if len(calls) == 1:
+                    raise JsonRpcError(-32600, "thread not found: existing")
+                assert method == "turn/start" and params["model"] == "resumed-model"
+                assert params["approvalPolicy"] == "never"
+                assert params["input"] == calls[0][1]["input"]
+                await adapter._on_notification("turn/completed", {"threadId": "existing", "turn": {"id": "turn-1"}})
+                return {"turn": {"id": "turn-1"}}
+
+        async def ensure():
+            return Process()
+
+        async def emit(event):
+            events.append(event)
+
+        adapter._ensure_proc = ensure
+        await adapter.send_prompt(session_id="existing", text="QA", request_id="req", emit=emit,
+                                  request_approval=lambda *_: asyncio.sleep(0, result="deny"),
+                                  attachments=[{"mime": "image/png", "localPath": str(tmp_path / "shot.png")}],
+                                  options={"readOnly": "true"})
+        assert [method for method, _ in calls] == ["turn/start", "thread/read", "thread/resume", "turn/start"]
+        assert [event["type"] for event in events] == ["Accepted", "Completed"]
+
+    asyncio.run(run())
+
+
+def test_codex_history_pages_and_falls_back_to_local_rollout(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    path = tmp_path / "sessions" / "rollout-qa-existing.jsonl"
+    path.parent.mkdir()
+    user = {"type": "user_message", "message": "first"}
+    assistant = {"type": "agent_message", "message": "reply"}
+    path.write_text("\n".join(json.dumps(row) for row in [
+        {"type": "session_meta", "payload": {"id": "existing", "cwd": str(tmp_path)}},
+        *({"type": "event_msg", "payload": event} for event in (
+            {"type": "task_started"}, user, assistant,
+            {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"text": "first"}]}},
+            {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"text": "reply"}]}},
+        )),
+    ]), encoding="utf-8")
+
+    async def run():
+        adapter = CodexAdapter((tmp_path,))
+        path_for_metadata = path
+        page_available = True
+
+        class Process:
+            async def call(self, method, params):
+                if method == "thread/turns/list" and page_available:
+                    assert params["itemsView"] == "full" and params["sortDirection"] == "desc"
+                    older = params.get("cursor") == "next"
+                    return {
+                        "data": [{"items": [{"type": "agentMessage", "text": "older" if older else "newer"}]}],
+                        "nextCursor": None if older else "next",
+                    }
+                if method == "thread/read" and not params["includeTurns"]:
+                    return {"thread": {"id": "existing", "path": str(path_for_metadata), "cwd": str(tmp_path)}}
+                raise JsonRpcError(-32601, "list_turns is not supported yet")
+
+        async def ensure():
+            return Process()
+
+        adapter._ensure_proc = ensure
+        assert [msg["text"] for msg in await adapter.get_history(session_id="existing", limit=2)] == ["older", "newer"]
+        page_available = False
+        assert await adapter.get_history(session_id="existing") == [
+            {"role": "user", "text": "first"}, {"role": "assistant", "text": "reply"},
+        ]
+        path.unlink()
+        assert await adapter.get_history(session_id="existing") == []
+        path_for_metadata = tmp_path / path.name
+        with pytest.raises(PathOutsideAllowedRootsError):
+            await adapter.get_history(session_id="existing")
 
     asyncio.run(run())
 
@@ -254,6 +346,8 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'turn/completed', 'params': {'threadId': 'thr-1', 'turn': {'id': 'turn-1'}}}) + '\\n')
     elif m == 'thread/read':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'thread': {'id': 'thr-1', 'turns': [{'items': [{'type': 'userMessage', 'content': [{'text': 'run'}]}, {'type': 'reasoning', 'summary': ['checking files']}, {'type': 'commandExecution', 'id': 'call-1', 'command': 'pytest -q', 'status': 'completed', 'aggregatedOutput': '12 passed'}, {'type': 'agentMessage', 'text': 'approved:accept'}]}]}}}) + '\\n')
+    elif m == 'thread/turns/list':
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': 'Method not found'}}))
     elif m == 'thread/name/set':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}) + '\\n')
     elif m == 'thread/compact/start':
@@ -572,16 +666,16 @@ def test_e2e_publish_and_download_against_backend_app(tmp_path, monkeypatch):
             assert ref["keyB64"].encode("utf-8") not in (tmp_path / "core.db").read_bytes()
             assert b"Studiolo E2EE Payload" not in (tmp_path / "core.db").read_bytes()
 
-            dest_file = src_dir / "downloaded.bin"
-            out = await download_and_decrypt_artifact(
-                core_url="http://127.0.0.1:48197",
-                node_token=node_b_token,
-                artifact_ref=ref,
-                destination=dest_file,
-                allowed_roots=roots,
-                client=client,
-            )
-            assert out.read_bytes() == raw_payload
+            for key_b64 in (ref["keyB64"], ref["keyB64"].rstrip("=")):
+                out = await download_and_decrypt_artifact(
+                    core_url="http://127.0.0.1:48197",
+                    node_token=node_b_token,
+                    artifact_ref={**ref, "keyB64": key_b64},
+                    destination=src_dir / "downloaded.bin",
+                    allowed_roots=roots,
+                    client=client,
+                )
+                assert out.read_bytes() == raw_payload
 
     asyncio.run(_transfer())
 
