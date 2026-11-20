@@ -76,7 +76,7 @@ class HermesAdapter(AgentAdapter):
             return self._proc
 
     async def probe(self) -> AdapterProbe:
-        caps = ("chat", "history", "approval", "worktree", "cron", "files", "diff", "checkpoints", "todos")
+        caps = ("chat", "history", "approval", "worktree", "models", "cron", "files", "diff", "checkpoints", "todos")
         if self.mode == "gateway" and self.serve_url:
             try:
                 headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
