@@ -58,6 +58,7 @@ class HermesAdapter(AgentAdapter):
         self._picker_models: list[dict[str, Any]] | None = None
         self._current_model: str | None = None
         self._current_effort: str | None = None
+        self._effort_levels: list[str] = []
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
         async with self._init_lock:
@@ -150,9 +151,28 @@ class HermesAdapter(AgentAdapter):
         self._loaded_sessions.add(sid)
 
     def _remember_models(self, response: dict[str, Any] | None) -> None:
-        """缓存 ACP 会话响应里的 SessionModelState（availableModels / currentModelId）。"""
+        """缓存 ACP 会话响应里的 SessionModelState（availableModels / currentModelId）。
+
+        思考档位不在 ModelInfo 里：ACP 把可选项放在会话响应的 ``configOptions`` 中
+        （id=reasoning_effort，category=thought_level）。所以档位取自那里，同一组值
+        用于所有模型——和 Zed 等编辑器看到的一致。
+        """
         if not isinstance(response, dict):
             return
+        effort_levels: list[str] = []
+        for option in response.get("configOptions") or []:
+            if not isinstance(option, dict):
+                continue
+            if str(option.get("id") or "") != "reasoning_effort":
+                continue
+            for choice in option.get("options") or []:
+                if isinstance(choice, dict):
+                    value = str(choice.get("value") or "").strip().lower()
+                    if value and value != "default":
+                        effort_levels.append(value)
+        if not effort_levels:
+            effort_levels = self._effort_levels_from_meta(response.get("models") or {})
+        self._effort_levels = effort_levels
         state = response.get("models") or {}
         if not isinstance(state, dict):
             return
@@ -170,18 +190,33 @@ class HermesAdapter(AgentAdapter):
             meta = row.get("_meta") if isinstance(row.get("_meta"), dict) else {}
             hermes_meta = meta.get("hermes") if isinstance(meta.get("hermes"), dict) else {}
             raw_efforts = hermes_meta.get("efforts") if isinstance(hermes_meta.get("efforts"), list) else []
-            efforts = [str(level).strip().lower() for level in raw_efforts if str(level).strip()]
+            efforts = effort_levels or [str(level).strip().lower() for level in raw_efforts if str(level).strip()]
             models.append({
                 "id": model_id,
                 "label": str(row.get("name") or model_id),
                 "provider": model_id.split(":", 1)[0] if ":" in model_id else "",
-                # FleetModel 契约要求 efforts 必填；Hermes 在 ModelInfo._meta.hermes.efforts 里
-                # 给出该路由支持的档位（见 acp_adapter/server.py::_with_effort_meta）。
+                # FleetModel 契约要求 efforts 必填；这里给出该会话真实可选的思考档位。
                 "efforts": efforts,
                 "description": row.get("description"),
             })
         if models:
             self._picker_models = models
+
+    @staticmethod
+    def _effort_levels_from_meta(state: dict[str, Any]) -> list[str]:
+        """旧后端兼容：没有 configOptions 时退回 ModelInfo._meta.hermes.efforts。"""
+        rows = state.get("availableModels") or state.get("available_models") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            meta = row.get("_meta") if isinstance(row.get("_meta"), dict) else {}
+            hermes_meta = meta.get("hermes") if isinstance(meta.get("hermes"), dict) else {}
+            raw = hermes_meta.get("efforts") if isinstance(hermes_meta.get("efforts"), list) else []
+            levels = [str(level).strip().lower() for level in raw if str(level).strip()]
+            if levels:
+                return levels
+        return []
+
 
     async def list_models(self) -> list[dict[str, Any]]:
         """ACP 没有独立的模型清单接口：优先复用已知会话，其次最近一个会话，都没有才新开一个。"""
