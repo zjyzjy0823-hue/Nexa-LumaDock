@@ -455,8 +455,12 @@ class AgentNodeDaemon:
                 agents = await adapter.list_agents()
                 await send_back({"type": "AgentsSnapshot", "provider": provider, "agents": agents})
             elif cmd == "mcp.list":
-                servers = await adapter.list_mcp_servers()
-                await send_back({"type": "McpSnapshot", "provider": provider, "servers": servers})
+                try:
+                    servers = await adapter.list_mcp_servers()
+                except Exception:
+                    await send_back({"type": "McpSnapshot", "provider": provider, "servers": [], "message": "节点无法读取 MCP 服务状态"})
+                else:
+                    await send_back({"type": "McpSnapshot", "provider": provider, "servers": servers})
             elif cmd == "rules.list":
                 sid = str(frame.get("sessionId") or "")
                 target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))

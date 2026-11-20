@@ -99,6 +99,7 @@ const caps = computed(() => adapter.value?.capabilities ?? [])
 const target = computed(() => `${effectiveNode.value?.id}::${effectiveProvider.value}`)
 const catalog = computed(() => fleet.catalogs[target.value])
 const mcpList = computed(() => fleet.mcpByTarget[target.value] ?? [])
+const mcpError = computed(() => fleet.mcpErrorsByTarget[target.value] || '')
 const mcpConnectedCount = computed(() => mcpList.value.filter(s => s.status === 'connected' || s.status === 'ready').length)
 const rulesList = computed(
   () => (effectiveKey.value ? fleet.rulesByTarget[effectiveKey.value] : undefined) ?? fleet.rulesByTarget[target.value] ?? [],
@@ -3119,7 +3120,8 @@ async function retryTurn(msg: ChatMessage) {
                     <OpusIcon name="sync" />
                   </button>
                 </div>
-                <div v-if="!mcpList.length" class="mcp-empty faint">当前运行时暂未报告已配置的 MCP 服务。</div>
+                <p v-if="mcpError" class="mcp-empty mcp-err" role="status">{{ mcpError }}</p>
+                <div v-else-if="!mcpList.length" class="mcp-empty faint">当前运行时暂未报告已配置的 MCP 服务。</div>
                 <div v-for="srv in mcpList" :key="srv.name" class="mcp-row">
                   <div class="mcp-row-top">
                     <span class="mcp-name">{{ srv.name }}</span>
@@ -3241,7 +3243,8 @@ async function retryTurn(msg: ChatMessage) {
                   <OpusIcon name="sync" />
                 </button>
               </div>
-              <div v-if="!mcpList.length" class="mcp-empty faint">
+              <p v-if="mcpError" class="mcp-empty mcp-err" role="status">{{ mcpError }}</p>
+              <div v-else-if="!mcpList.length" class="mcp-empty faint">
                 当前运行时暂未报告已配置的 MCP 服务。
               </div>
               <div v-for="srv in mcpList" :key="srv.name" class="mcp-row">

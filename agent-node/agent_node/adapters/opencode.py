@@ -1,7 +1,8 @@
 """OpenCode 适配器：对接 `opencode serve` REST + SSE `/event` 接口。"""
 
 import asyncio
-import base64
+from contextlib import AsyncExitStack
+from collections import Counter
 from datetime import datetime
 import json
 import os
@@ -36,20 +37,20 @@ def _extract_incremental_text(
     delta: Any,
     full_text: Any,
 ) -> str:
-    """兼容增量 delta 与全量 누적 text：只提取尚未下发过的新增文本片段。"""
-    if isinstance(delta, str) and delta:
-        prev = cache.get(part_id, "")
-        cache[part_id] = str(full_text) if isinstance(full_text, str) and full_text else (prev + delta)
-        return delta
+    """兼容增量 delta 与全量 text，只提取尚未下发的片段。"""
+    prev = cache.get(part_id, "")
     full = str(full_text or "")
+    if full and (full == prev or prev.startswith(full)):
+        return ""
+    if full and prev and full.startswith(prev):
+        cache[part_id] = full
+        return full[len(prev):]
+    if isinstance(delta, str) and delta:
+        cache[part_id] = full or (prev + delta)
+        return delta
     if not full:
         return ""
-    prev = cache.get(part_id, "")
-    if full == prev:
-        return ""
     cache[part_id] = full
-    if prev and full.startswith(prev):
-        return full[len(prev):]
     return full
 
 
@@ -278,8 +279,7 @@ class OpenCodeAdapter(AgentAdapter):
                 return
             try:
                 async with self._client() as c:
-                    probe = await c.get(f"{self.serve_url}/api/session")
-                    if self._is_json_response(probe):
+                    if await self._probe_api_prefix(c) is not None:
                         return
             except Exception:
                 pass
@@ -312,9 +312,9 @@ class OpenCodeAdapter(AgentAdapter):
                     break
                 try:
                     async with self._client() as c:
-                        res = await c.get(f"{self.serve_url}/api/session")
-                        if self._is_json_response(res):
-                            self._api_prefix = "/api"
+                        prefix = await self._probe_api_prefix(c)
+                        if prefix is not None:
+                            self._api_prefix = prefix
                             return
                 except Exception:
                     continue
@@ -339,18 +339,37 @@ class OpenCodeAdapter(AgentAdapter):
         txt = res.text.lstrip()
         return txt.startswith("{") or txt.startswith("[")
 
-    async def _detect_api_prefix(self, client: httpx.AsyncClient) -> str:
-        if self._api_prefix is not None:
-            return self._api_prefix
+    @classmethod
+    def _optional_json(cls, res: httpx.Response) -> Any:
+        if res.status_code in (404, 405, 501):
+            return None
+        res.raise_for_status()
+        if not cls._is_json_response(res):
+            return None
         try:
-            r_v2 = await client.get(f"{self.serve_url}/api/session")
-            if self._is_json_response(r_v2):
-                self._api_prefix = "/api"
-                return "/api"
-        except Exception:
-            pass
-        self._api_prefix = ""
-        return ""
+            return res.json()
+        except ValueError:
+            return None
+
+    async def _detect_api_prefix(self, client: httpx.AsyncClient) -> str:
+        if self._api_prefix is None:
+            self._api_prefix = await self._probe_api_prefix(client)
+        return self._api_prefix or ""
+
+    async def _probe_api_prefix(self, client: httpx.AsyncClient) -> str | None:
+        # A v2 session catalogue does not establish that its prompt runner is usable.
+        for prefix in ("", "/api"):
+            response = await client.get(f"{self.serve_url}{prefix}/session", timeout=6)
+            if self._is_json_response(response):
+                try:
+                    payload = response.json()
+                except ValueError:
+                    continue
+                if isinstance(payload, list) or (prefix and isinstance(payload, dict) and isinstance(payload.get("data"), list)):
+                    return prefix
+            elif response.status_code in (401, 403):
+                response.raise_for_status()
+        return None
 
     async def probe(self) -> AdapterProbe:
         caps = (
@@ -372,85 +391,62 @@ class OpenCodeAdapter(AgentAdapter):
         await self._ensure_managed_serve()
         try:
             async with self._client() as c:
-                r_v2 = await c.get(f"{self.serve_url}/api/session")
-                if self._is_json_response(r_v2):
-                    self._api_prefix = "/api"
+                prefix = await self._probe_api_prefix(c)
+                if prefix == "/api":
+                    self._api_prefix = prefix
                     return AdapterProbe(provider=self.provider, version="serve-v2", status="ready", capabilities=(*caps, "subscription-quota"))
-                r_v1 = await c.get(f"{self.serve_url}/session")
-                if self._is_json_response(r_v1):
-                    self._api_prefix = ""
+                if prefix == "":
+                    self._api_prefix = prefix
                     return AdapterProbe(provider=self.provider, version="serve-http", status="ready", capabilities=key_quota_caps)
         except Exception:
             pass
         return AdapterProbe(provider=self.provider, version="", status="unavailable", capabilities=key_quota_caps)
 
     async def list_models(self) -> list[dict[str, Any]]:
-        async with self._client() as client:
-            prefix = await self._detect_api_prefix(client)
-            if prefix == "/api":
-                response = await client.get(f"{self.serve_url}/api/model")
-                response.raise_for_status()
-                raw = response.json()
-                rows = raw.get("data", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
-                enabled_rows = [
-                    m for m in rows
-                    if isinstance(m, dict) and m.get("enabled", True) and str(m.get("type") or "chat") == "chat"
-                ]
-                key_counts: dict[str, int] = {}
-                for m in enabled_rows:
-                    mid = str(m.get("modelID") or m.get("id") or "")
-                    if mid:
-                        key_counts[mid] = key_counts.get(mid, 0) + 1
-                models: list[dict[str, Any]] = []
-                for m in enabled_rows:
-                    provider_id = str(m.get("providerID") or "")
-                    model_id = str(m.get("modelID") or m.get("id") or "")
-                    if not model_id:
-                        continue
-                    full_id = f"{provider_id}/{model_id}" if provider_id else model_id
-                    name = str(m.get("name") or model_id)
-                    variants_raw = m.get("variants") or []
-                    efforts = [
-                        str(v.get("id")) if isinstance(v, dict) else str(v)
-                        for v in (variants_raw if isinstance(variants_raw, list) else list(variants_raw))
-                        if (isinstance(v, dict) and v.get("id")) or isinstance(v, str)
-                    ]
-                    ctx = (m.get("limit") or {}).get("context")
-                    if isinstance(ctx, int) and ctx > 0:
-                        self._model_context_windows[full_id] = ctx
-                        self._model_context_windows[model_id] = ctx
-                    models.append(
-                        {
-                            "id": full_id,
-                            "label": f"{provider_id} · {name}" if key_counts.get(model_id, 0) > 1 and provider_id else name,
-                            "provider": provider_id,
-                            "efforts": efforts,
-                        }
-                    )
-                return models
+        models: dict[str, dict[str, Any]] = {}
 
-            response = await client.get(f"{self.serve_url}/provider")
-            response.raise_for_status()
-            catalog = response.json()
-            connected = [p for p in catalog.get("all", []) if p["id"] in catalog.get("connected", [])]
-            key_counts = {}
-            for provider in connected:
-                for key in provider.get("models", {}):
-                    key_counts[key] = key_counts.get(key, 0) + 1
-            models = []
-            for provider in connected:
-                provider_id = str(provider["id"])
-                for key, model in provider.get("models", {}).items():
-                    name = model.get("name") or key
-                    models.append(
-                        {
-                            "id": f"{provider_id}/{key}",
-                            "label": f"{provider_id} · {name}" if key_counts.get(key, 0) > 1 else name,
-                            "provider": provider_id,
-                            "efforts": list(model.get("variants") or {}),
-                        }
-                    )
-            return models
+        def add(provider: str, model_id: str, row: dict[str, Any]) -> None:
+            if not model_id:
+                return
+            full_id = f"{provider}/{model_id}" if provider else model_id
+            variants = row.get("variants") or []
+            if isinstance(variants, dict):
+                efforts = list(variants)
+            elif isinstance(variants, list):
+                efforts = [str(v["id"]) if isinstance(v, dict) else v for v in variants
+                           if isinstance(v, str) or (isinstance(v, dict) and v.get("id"))]
+            else:
+                efforts = []
+            ctx = (row.get("limit") or {}).get("context")
+            if isinstance(ctx, int) and ctx > 0:
+                self._model_context_windows[full_id] = ctx
+                if not provider:
+                    self._model_context_windows[model_id] = ctx
+            if full_id in models:
+                models[full_id]["efforts"] = list(dict.fromkeys([*models[full_id]["efforts"], *efforts]))
+            else:
+                models[full_id] = {"id": full_id, "label": str(row.get("name") or model_id),
+                                   "provider": provider, "efforts": efforts}
+
+        async with self._client() as client:
+            catalog = self._optional_json(await client.get(f"{self.serve_url}/provider", timeout=6))
+            if isinstance(catalog, dict):
+                connected = catalog.get("connected") or []
+                for provider in catalog.get("all") or []:
+                    if isinstance(provider, dict) and provider.get("id") in connected:
+                        for key, model in (provider.get("models") or {}).items():
+                            if isinstance(model, dict):
+                                add(str(provider["id"]), key, model)
+            raw = self._optional_json(await client.get(f"{self.serve_url}/api/model", timeout=6))
+            rows = raw.get("data") if isinstance(raw, dict) else raw
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict) and row.get("enabled", True) and (row.get("type") or "chat") == "chat":
+                        add(str(row.get("providerID") or ""), str(row.get("modelID") or row.get("id") or ""), row)
+        counts = Counter(row["id"].split("/", 1)[-1] for row in models.values())
+        return [{**row, "label": f"{row['provider']} · {row['label']}"}
+                if row["provider"] and counts[row["id"].split("/", 1)[-1]] > 1 else row
+                for row in models.values()]
 
     def _allowed_session_directory(self, session: dict[str, Any]) -> Path:
         location = session.get("location")
@@ -560,9 +556,10 @@ class OpenCodeAdapter(AgentAdapter):
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
-            await self._session_directory(c, prefix, session_id)
+            directory = await self._session_directory(c, prefix, session_id)
             fetch_limit = max(limit * 3, 120) if prefix == "/api" else limit
-            res = await c.get(f"{self.serve_url}{prefix}/session/{session_id}/message", params={"limit": fetch_limit})
+            params = {"limit": fetch_limit, **({"directory": str(directory)} if not prefix else {})}
+            res = await c.get(f"{self.serve_url}{prefix}/session/{session_id}/message", params=params)
             if res.status_code != 200:
                 return []
             payload = res.json()
@@ -705,9 +702,9 @@ class OpenCodeAdapter(AgentAdapter):
         run_id = request_id
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
-            await self._session_directory(c, prefix, session_id)
-            await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
+            directory = await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
+                await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
                 await self._send_prompt_v2(
                     c,
                     session_id=session_id,
@@ -741,122 +738,294 @@ class OpenCodeAdapter(AgentAdapter):
                 payload["model"] = {"providerID": provider, "modelID": model}
                 if options.get("effort"):
                     payload["variant"] = options["effort"]
-            res = await c.post(f"{self.serve_url}/session/{session_id}/prompt_async", json=payload)
-            res.raise_for_status()
-            role_by_msg_id: dict[str, str] = {}
-            seen_part_text: dict[str, str] = {}
-            seen_part_reasoning: dict[str, str] = {}
-            seen_tool_sig: dict[str, str] = {}
-            async with c.stream("GET", f"{self.serve_url}/event") as stream:
-                async for line in stream.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        evt = json.loads(line[5:].strip())
-                    except json.JSONDecodeError:
-                        continue
-                    etype = evt.get("type")
-                    props = evt.get("properties") or {}
-                    if etype == "message.part.updated":
-                        part = props.get("part") or {}
-                        if part.get("sessionID") != session_id or part.get("synthetic"):
-                            continue
-                        msg_id = str(part.get("messageID") or "")
-                        msg_role = role_by_msg_id.get(msg_id)
-                        if msg_role == "user":
-                            continue
-                        ptype = str(part.get("type") or "text")
-                        part_id = str(part.get("id") or f"{msg_id}:{ptype}")
-                        # 若用户消息回显早于 message.updated 到达且原文完全一致，提前识别为 user 跳过
-                        if msg_role is None and ptype == "text" and not props.get("delta"):
-                            raw_txt = str(part.get("text") or "").strip()
-                            if raw_txt and raw_txt in (prompt_text.strip(), text.strip()):
-                                if msg_id:
-                                    role_by_msg_id[msg_id] = "user"
-                                continue
-                        if ptype == "text":
-                            chunk = _extract_incremental_text(seen_part_text, part_id, props.get("delta"), part.get("text"))
-                            if chunk:
-                                await emit({"type": "TextDelta", "sessionId": session_id, "runId": run_id, "text": chunk})
-                        elif ptype == "reasoning":
-                            if msg_id:
-                                role_by_msg_id[msg_id] = "assistant"
-                            chunk = _extract_incremental_text(seen_part_reasoning, part_id, props.get("delta"), part.get("text"))
-                            if chunk:
-                                await emit({"type": "ThoughtDelta", "sessionId": session_id, "runId": run_id, "text": chunk})
-                        elif ptype == "tool":
-                            if msg_id:
-                                role_by_msg_id[msg_id] = "assistant"
-                            tp = _extract_opencode_tool_payload(part)
-                            sig = f"{tp['status']}:{len(tp.get('output') or '')}:{bool(tp.get('error'))}:{len(tp.get('media') or [])}"
-                            if seen_tool_sig.get(part_id) != sig:
-                                seen_tool_sig[part_id] = sig
-                                await emit(
-                                    build_tool_call_update(
-                                        session_id=session_id,
-                                        run_id=run_id,
-                                        request_id=request_id,
-                                        call_id=tp["callId"],
-                                        name=tp["name"],
-                                        status=tp["status"],
-                                        title=tp["title"],
-                                        tool_input=tp["input"],
-                                        output=tp["output"],
-                                        error=tp["error"],
-                                        duration_ms=tp["durationMs"],
-                                        media=tp.get("media"),
-                                    )
-                                )
-                            t_input = tp.get("input")
-                            if tp["name"].lower() in ("todowrite", "todo_write", "todo") and isinstance(t_input, dict) and isinstance(t_input.get("todos"), list):
-                                await emit(build_todo_updated_event(session_id=session_id, run_id=run_id, request_id=request_id, items=t_input["todos"]))
-                    elif etype == "message.updated":
-                        info = props.get("info") if isinstance(props.get("info"), dict) else props
-                        if isinstance(info, dict) and info.get("sessionID") == session_id:
-                            if info.get("id") and info.get("role"):
-                                role_by_msg_id[str(info["id"])] = str(info["role"])
-                            if info.get("error"):
-                                message, code = _failure_from_error(info.get("error"))
-                                await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id,
-                                            "runId": run_id, "requestId": request_id, "code": code, "message": message})
-                                return
-                            if info.get("role", "assistant") == "assistant" and isinstance(info.get("tokens"), dict):
-                                counts = extract_usage_counts(info["tokens"])
-                                if sum(counts.values()) > 0:
-                                    await emit(
-                                        build_token_usage_event(
-                                            session_id=session_id,
-                                            run_id=run_id,
-                                            request_id=request_id,
-                                            message_id=str(info.get("id") or "") or None,
-                                            scope="turn",
-                                            input_tokens=counts["inputTokens"],
-                                            cached_input_tokens=counts["cachedInputTokens"],
-                                            output_tokens=counts["outputTokens"],
-                                            reasoning_tokens=counts["reasoningTokens"],
-                                            total_tokens=counts["totalTokens"],
-                                            model=str(info.get("modelID") or (options or {}).get("model") or "") or None,
-                                            source="exact",
-                                        )
-                                    )
-                    elif etype == "permission.asked" and props.get("sessionID") == session_id:
-                        perm_id = str(props.get("id") or "")
-                        dec = await request_approval(session_id, perm_id, str(props.get("title") or props.get("type") or "tool"), "medium")
-                        resp = "once" if dec == "allow_once" else "always" if dec == "allow_session" else "reject"
-                        await c.post(f"{self.serve_url}/session/{session_id}/permissions/{perm_id}", json={"response": resp})
-                    elif etype == "session.error" and props.get("sessionID") == session_id:
-                        # opencode 把模型/额度/上游错误只发在这里（例如 402 Insufficient balance）。
-                        # 不转成 Failed 的话，节点会一直等 session.idle，前端就是永远空白的气泡。
-                        message, code = _failure_from_error(props.get("error"))
+            await self._send_prompt_v1(
+                c, session_id=session_id, request_id=request_id, directory=directory,
+                original_text=text, payload=payload, options=options, emit=emit, request_approval=request_approval,
+            )
+
+    async def _send_prompt_v1(
+        self, c: httpx.AsyncClient, *, session_id: str, request_id: str, directory: Path,
+        original_text: str, payload: dict[str, Any], options: dict[str, str] | None,
+        emit: EventEmitter, request_approval: ApprovalCallback,
+    ) -> None:
+        run_id = request_id
+        prompt_text = payload["parts"][0]["text"]
+        text = original_text
+        location = {"directory": str(directory)}
+        history_url = f"{self.serve_url}/session/{session_id}/message"
+        scoped = {"sessionId": session_id, "runId": run_id, "requestId": request_id}
+        role_by_msg_id: dict[str, str] = {}
+        text_part_types: dict[str, str] = {}
+        seen_part_text: dict[str, str] = {}
+        seen_part_reasoning: dict[str, str] = {}
+        seen_tool_sig: dict[str, str] = {}
+        seen_usage: dict[str, dict[str, int]] = {}
+        seen_permissions: set[str] = set()
+
+        async def history() -> list[dict[str, Any]] | None:
+            raw = self._optional_json(await c.get(history_url, params={**location, "limit": 24}, timeout=6))
+            return [row for row in raw if isinstance(row, dict) and isinstance(row.get("info"), dict)] if isinstance(raw, list) else None
+
+        try:
+            before = await history()
+        except httpx.TransportError:
+            before = None
+        baseline = {str(row["info"]["id"]) for row in before or [] if row["info"].get("id")}
+
+        async def consume(evt: dict[str, Any]) -> bool:
+            etype = evt.get("type")
+            props = evt.get("properties") or {}
+            if etype == "message.part.updated":
+                part = props.get("part") or {}
+                if part.get("sessionID") != session_id or part.get("synthetic"):
+                    return False
+                msg_id = str(part.get("messageID") or "")
+                if msg_id and msg_id in baseline:
+                    return False
+                msg_role = role_by_msg_id.get(msg_id)
+                if msg_role == "user":
+                    return False
+                ptype = str(part.get("type") or "text")
+                part_id = str(part.get("id") or f"{msg_id}:{ptype}")
+                # 若用户消息回显早于 message.updated 到达且原文完全一致，提前识别为 user 跳过
+                if msg_role is None and ptype == "text" and not props.get("delta"):
+                    raw_txt = str(part.get("text") or "").strip()
+                    if raw_txt and raw_txt in (prompt_text.strip(), text.strip()):
+                        if msg_id:
+                            role_by_msg_id[msg_id] = "user"
+                        return False
+                if part.get("id") and ptype in ("text", "reasoning"):
+                    text_part_types[part_id] = ptype
+                if ptype == "text":
+                    chunk = _extract_incremental_text(seen_part_text, part_id, props.get("delta"), part.get("text"))
+                    if chunk:
+                        await emit({"type": "TextDelta", "text": chunk, **scoped})
+                elif ptype == "reasoning":
+                    if msg_id:
+                        role_by_msg_id[msg_id] = "assistant"
+                    chunk = _extract_incremental_text(seen_part_reasoning, part_id, props.get("delta"), part.get("text"))
+                    if chunk:
+                        await emit({"type": "ThoughtDelta", "text": chunk, **scoped})
+                elif ptype == "tool":
+                    if msg_id:
+                        role_by_msg_id[msg_id] = "assistant"
+                    tp = _extract_opencode_tool_payload(part)
+                    sig = f"{tp['status']}:{len(tp.get('output') or '')}:{bool(tp.get('error'))}:{len(tp.get('media') or [])}"
+                    if seen_tool_sig.get(part_id) != sig:
+                        seen_tool_sig[part_id] = sig
+                        await emit(
+                            build_tool_call_update(
+                                session_id=session_id,
+                                run_id=run_id,
+                                request_id=request_id,
+                                call_id=tp["callId"],
+                                name=tp["name"],
+                                status=tp["status"],
+                                title=tp["title"],
+                                tool_input=tp["input"],
+                                output=tp["output"],
+                                error=tp["error"],
+                                duration_ms=tp["durationMs"],
+                                media=tp.get("media"),
+                            )
+                        )
+                    t_input = tp.get("input")
+                    if tp["name"].lower() in ("todowrite", "todo_write", "todo") and isinstance(t_input, dict) and isinstance(t_input.get("todos"), list):
+                        await emit(build_todo_updated_event(session_id=session_id, run_id=run_id, request_id=request_id, items=t_input["todos"]))
+            elif etype == "message.part.delta":
+                if props.get("sessionID") != session_id or props.get("field") != "text":
+                    return False
+                part_id = str(props.get("partID") or "")
+                part_type = text_part_types.get(part_id)
+                if not part_type or role_by_msg_id.get(str(props.get("messageID") or "")) == "user":
+                    return False
+                cache = seen_part_text if part_type == "text" else seen_part_reasoning
+                chunk = _extract_incremental_text(cache, part_id, props.get("delta"), None)
+                if chunk:
+                    event_type = "TextDelta" if part_type == "text" else "ThoughtDelta"
+                    await emit({"type": event_type, "text": chunk, **scoped})
+            elif etype == "message.updated":
+                info = props.get("info") if isinstance(props.get("info"), dict) else props
+                if isinstance(info, dict) and info.get("sessionID") == session_id:
+                    if str(info.get("id") or "") in baseline:
+                        return False
+                    if info.get("id") and info.get("role"):
+                        role_by_msg_id[str(info["id"])] = str(info["role"])
+                    if info.get("error"):
+                        message, code = _failure_from_error(info.get("error"))
                         await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id,
                                     "runId": run_id, "requestId": request_id, "code": code, "message": message})
-                        return
-                    elif etype == "session.idle" and props.get("sessionID") == session_id:
-                        await emit({"type": "Completed", "sessionId": session_id, "runId": run_id, "requestId": request_id})
-                        return
-            await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id, "runId": run_id,
-                        "requestId": request_id, "code": "stream_closed",
-                        "message": "opencode 事件流已关闭但未收到完成信号"})
+                        return True
+                    if info.get("role", "assistant") == "assistant" and isinstance(info.get("tokens"), dict):
+                        counts = extract_usage_counts(info["tokens"])
+                        usage_id = str(info.get("id") or "")
+                        if sum(counts.values()) > 0 and seen_usage.get(usage_id) != counts:
+                            seen_usage[usage_id] = counts
+                            await emit(
+                                build_token_usage_event(
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    request_id=request_id,
+                                    message_id=str(info.get("id") or "") or None,
+                                    scope="turn",
+                                    input_tokens=counts["inputTokens"],
+                                    cached_input_tokens=counts["cachedInputTokens"],
+                                    output_tokens=counts["outputTokens"],
+                                    reasoning_tokens=counts["reasoningTokens"],
+                                    total_tokens=counts["totalTokens"],
+                                    model=str(info.get("modelID") or (options or {}).get("model") or "") or None,
+                                    source="exact",
+                                )
+                            )
+            elif etype == "permission.asked" and props.get("sessionID") == session_id:
+                perm_id = str(props.get("id") or "")
+                if not perm_id or perm_id in seen_permissions:
+                    return False
+                seen_permissions.add(perm_id)
+                dec = await request_approval(session_id, perm_id, str(props.get("title") or props.get("type") or "tool"), "medium")
+                resp = "once" if dec == "allow_once" else "always" if dec == "allow_session" else "reject"
+                response = await c.post(f"{self.serve_url}/session/{session_id}/permissions/{perm_id}", params=location, json={"response": resp})
+                response.raise_for_status()
+            elif etype == "session.error" and props.get("sessionID") == session_id:
+                # opencode 把模型/额度/上游错误只发在这里（例如 402 Insufficient balance）。
+                # 不转成 Failed 的话，节点会一直等 session.idle，前端就是永远空白的气泡。
+                message, code = _failure_from_error(props.get("error"))
+                await emit({"type": "Failed", "provider": self.provider, "sessionId": session_id,
+                            "runId": run_id, "requestId": request_id, "code": code, "message": message})
+                return True
+            return False
+
+        async def recover(*, live_stream: bool, idle: bool = False) -> tuple[bool, str]:
+            if before is None:
+                return False, ""
+            rows = await history()
+            if rows is None:
+                return False, ""
+            user_ids: set[str] = set()
+            for row in rows:
+                info = row["info"]
+                parts = [part for part in row.get("parts", []) if isinstance(part, dict)]
+                if info.get("role") != "user" or not info.get("id") or str(info["id"]) in baseline:
+                    continue
+                sent_text = "".join(str(part.get("text") or "") for part in parts if part.get("type") == "text")
+                if sent_text.strip() == prompt_text.strip():
+                    user_ids.add(str(info["id"]))
+            if len(user_ids) != 1:
+                return False, ""
+            replies = [row for row in rows if row["info"].get("role") == "assistant"
+                       and str(row["info"].get("parentID") or "") in user_ids]
+            if not replies:
+                return False, ""
+            replies.sort(key=lambda row: (row["info"].get("time") or {}).get("created", 0))
+            last = replies[-1]["info"]
+            finish = last.get("finish")
+            completed = bool(idle or last.get("error") or ((last.get("time") or {}).get("completed") and
+                              finish not in ("tool-calls", "tool_calls", "unknown")))
+            if not completed and finish not in ("tool-calls", "tool_calls", "unknown"):
+                states = self._optional_json(await c.get(f"{self.serve_url}/session/status", params=location, timeout=6))
+                state = states.get(session_id) if isinstance(states, dict) else None
+                completed = isinstance(state, dict) and state.get("type") == "idle"
+            # Do not repeat incremental SSE deltas while the stream can still deliver them.
+            if completed or not live_stream:
+                for row in replies:
+                    info = {"sessionID": session_id, **row["info"]}
+                    if await consume({"type": "message.updated", "properties": {"info": info}}):
+                        return True, ""
+                    for part in row.get("parts", []):
+                        if isinstance(part, dict):
+                            await consume({"type": "message.part.updated", "properties": {"part": {
+                                "sessionID": session_id, "messageID": info.get("id"), **part,
+                            }}})
+            if completed:
+                await emit({"type": "Completed", **scoped})
+                return True, ""
+            return False, json.dumps(replies, ensure_ascii=False, sort_keys=True)
+
+        async with AsyncExitStack() as stack:
+            try:
+                response = await stack.enter_async_context(c.stream("GET", f"{self.serve_url}/event", params=location))
+            except httpx.TransportError:
+                response = None
+            if response is not None and response.status_code in (401, 403):
+                response.raise_for_status()
+            lines = (
+                response.aiter_lines()
+                if response is not None and response.is_success
+                and "text/event-stream" in response.headers.get("content-type", "")
+                else None
+            )
+            # Connect the event stream before sending. History is read-only recovery for this one POST.
+            response = await c.post(f"{self.serve_url}/session/{session_id}/prompt_async", params=location, json=payload)
+            response.raise_for_status()
+            await emit({"type": "Accepted", "provider": self.provider, **scoped})
+
+            last_progress = time.monotonic()
+            next_poll = last_progress + (2.0 if lines else 0.0)
+            last_history = ""
+            pending = asyncio.create_task(anext(lines)) if lines else None
+            try:
+                while time.monotonic() - last_progress < 120.0:
+                    delay = max(0.0, next_poll - time.monotonic())
+                    if pending:
+                        finished, _ = await asyncio.wait((pending,), timeout=delay)
+                        if finished:
+                            try:
+                                line = pending.result()
+                            except (StopAsyncIteration, httpx.TransportError):
+                                pending = None
+                                next_poll = time.monotonic()
+                            else:
+                                pending = asyncio.create_task(anext(lines))
+                                if line.startswith("data:"):
+                                    try:
+                                        event = json.loads(line[5:].strip())
+                                    except ValueError:
+                                        event = None
+                                    if isinstance(event, dict):
+                                        properties = event.get("properties") or {}
+                                        if isinstance(properties, dict):
+                                            data = properties.get("part") or properties.get("info") or properties
+                                            if isinstance(data, dict) and data.get("sessionID") == session_id:
+                                                last_progress = time.monotonic()
+                                            if event.get("type") == "session.idle" and properties.get("sessionID") == session_id:
+                                                try:
+                                                    terminal, _ = await recover(live_stream=False, idle=True)
+                                                except httpx.TransportError:
+                                                    terminal = False
+                                                if terminal:
+                                                    return
+                                                if seen_part_text or seen_tool_sig or seen_usage:
+                                                    await emit({"type": "Completed", **scoped})
+                                                    return
+                                            if await consume(event):
+                                                return
+                    elif delay:
+                        await asyncio.sleep(delay)
+
+                    if time.monotonic() >= next_poll:
+                        try:
+                            terminal, signature = await recover(live_stream=pending is not None)
+                            if terminal:
+                                return
+                            if signature and signature != last_history:
+                                last_history = signature
+                                last_progress = time.monotonic()
+                            if pending is None or time.monotonic() - last_progress >= 2.0:
+                                permissions = self._optional_json(await c.get(f"{self.serve_url}/permission", params=location, timeout=6))
+                                if isinstance(permissions, list):
+                                    for permission in permissions:
+                                        if isinstance(permission, dict) and permission.get("sessionID") == session_id and permission.get("id") not in seen_permissions:
+                                            await consume({"type": "permission.asked", "properties": permission})
+                                            last_progress = time.monotonic()
+                        except (httpx.TransportError, httpx.HTTPStatusError) as error:
+                            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code < 500:
+                                raise
+                        next_poll = time.monotonic() + 2.0
+            finally:
+                if pending is not None:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+        await emit({"type": "Failed", "code": "timeout", "message": "未收到当前 OpenCode 回合的结束状态", **scoped})
 
     async def _send_prompt_v2(
         self,
@@ -896,13 +1065,10 @@ class OpenCodeAdapter(AgentAdapter):
         extra_attachments: list[dict[str, Any]] = []
         for att in attachments or []:
             lp = att.get("localPath") if isinstance(att, dict) else None
-            if lp and Path(str(lp)).is_file() and Path(str(lp)).stat().st_size <= 6 * 1024 * 1024:
-                raw_bytes = Path(str(lp)).read_bytes()
+            if lp and Path(str(lp)).is_file():
                 v2_files.append(
                     {
-                        "data": base64.b64encode(raw_bytes).decode("ascii"),
-                        "mime": str(att.get("mime") or "application/octet-stream"),
-                        "source": {"type": "uri", "uri": Path(str(lp)).as_uri()},
+                        "uri": Path(str(lp)).as_uri(),
                         "name": str(att.get("fileName") or Path(str(lp)).name),
                     }
                 )
@@ -910,14 +1076,14 @@ class OpenCodeAdapter(AgentAdapter):
                 extra_attachments.append(att)
 
         prompt_text = merge_prompt_with_attachments(text, extra_attachments)
-        body: dict[str, Any] = {"text": prompt_text}
+        prompt: dict[str, Any] = {"text": prompt_text}
         if v2_files:
-            body["files"] = v2_files
+            prompt["files"] = v2_files
         tool_meta: dict[str, dict[str, Any]] = {}
         has_text_emitted = False
 
         async with c.stream("GET", f"{self.serve_url}/api/event") as stream:
-            p_res = await c.post(f"{self.serve_url}/api/session/{session_id}/prompt", json=body)
+            p_res = await c.post(f"{self.serve_url}/api/session/{session_id}/prompt", json={"prompt": prompt})
             p_res.raise_for_status()
             async for line in stream.aiter_lines():
                 if not line.startswith("data:"):
@@ -1132,7 +1298,6 @@ class OpenCodeAdapter(AgentAdapter):
                 res = await c.get(f"{self.serve_url}/api/agent")
                 if not self._is_json_response(res):
                     return []
-                self._api_prefix = "/api"
             else:
                 res = await c.get(f"{self.serve_url}/api/agent")
             if res.status_code != 200:
@@ -1158,16 +1323,18 @@ class OpenCodeAdapter(AgentAdapter):
 
     async def list_mcp_servers(self) -> list[dict[str, Any]]:
         async with self._client() as c:
-            prefix = await self._detect_api_prefix(c)
-            if prefix != "/api":
-                return []
-            res = await c.get(f"{self.serve_url}/api/mcp")
-            if res.status_code != 200:
-                return []
-            data = (res.json() or {}).get("data") or []
-            if isinstance(data, dict):
-                return [{"name": k, **(v if isinstance(v, dict) else {"status": str(v)})} for k, v in data.items()]
-            return [item for item in data if isinstance(item, dict)]
+            for path in ("/api/mcp", "/mcp"):
+                res = await c.get(f"{self.serve_url}{path}", timeout=6)
+                data = self._optional_json(res)
+                if data is None:
+                    continue
+                if isinstance(data, dict) and path == "/api/mcp":
+                    data = data.get("data")
+                if isinstance(data, dict):
+                    return [{"name": k, **(v if isinstance(v, dict) else {"status": str(v)})} for k, v in data.items()]
+                if isinstance(data, list):
+                    return [item for item in data if isinstance(item, dict)]
+            return []
 
     async def reply_form(
         self,
@@ -1195,11 +1362,11 @@ class OpenCodeAdapter(AgentAdapter):
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
-            await self._session_directory(c, prefix, session_id)
+            directory = await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
                 await c.post(f"{self.serve_url}/api/session/{session_id}/interrupt")
             else:
-                await c.post(f"{self.serve_url}/session/{session_id}/abort")
+                await c.post(f"{self.serve_url}/session/{session_id}/abort", params={"directory": str(directory)})
 
     async def rename_session(self, *, session_id: str, title: str) -> dict[str, Any]:
         async with self._client() as c:

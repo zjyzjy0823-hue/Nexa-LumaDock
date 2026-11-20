@@ -20,6 +20,130 @@ from agent_node.crypto_chunks import generate_file_key
 from agent_node.transfer import download_and_decrypt_artifact, publish_file_artifact
 
 
+def test_codex_routes_early_and_concurrent_events_to_their_own_turn(tmp_path):
+    async def run():
+        adapter = CodexAdapter((tmp_path,))
+        events = {"a": [], "b": []}
+        accepted = {thread: asyncio.Event() for thread in events}
+
+        class Process:
+            async def call(self, method, params):
+                assert method == "turn/start"
+                thread = params["threadId"]
+                await adapter._on_notification("item/agentMessage/delta", {
+                    "threadId": thread, "turnId": "turn-" + thread, "delta": "early-" + thread,
+                })
+                return {"turn": {"id": "turn-" + thread}}
+
+        async def ensure():
+            return Process()
+
+        async def send(thread):
+            async def emit(event):
+                events[thread].append(event)
+                if event["type"] == "Accepted":
+                    accepted[thread].set()
+            await adapter.send_prompt(session_id=thread, text="Hello", request_id="req-" + thread,
+                                      emit=emit, request_approval=lambda *_: asyncio.sleep(0, result="deny"))
+
+        adapter._ensure_proc = ensure
+        a = asyncio.create_task(send("a"))
+        b = asyncio.create_task(send("b"))
+        await asyncio.wait_for(asyncio.gather(*(signal.wait() for signal in accepted.values())), 2)
+        for thread in ("b", "a"):
+            await adapter._on_notification("turn/completed", {"threadId": thread, "turn": {"id": "old-turn"}})
+            await adapter._on_notification("item/started", {"threadId": thread, "turnId": "turn-" + thread,
+                                           "item": {"type": "commandExecution", "id": "same-call", "command": thread}})
+            await adapter._on_notification("turn/completed", {"threadId": thread, "turn": {"id": "turn-" + thread}})
+        await asyncio.wait_for(asyncio.gather(a, b), 2)
+        for thread, captured in events.items():
+            assert [evt["type"] for evt in captured] == ["Accepted", "TextDelta", "ToolCallUpdate", "Completed"]
+            assert all((evt["sessionId"], evt["runId"], evt["requestId"]) == (thread, "turn-" + thread, "req-" + thread)
+                       for evt in captured)
+            assert captured[1]["text"] == "early-" + thread
+
+    asyncio.run(run())
+
+
+def test_opencode_v1_recovers_short_reply_once_and_ignores_old_history(tmp_path):
+    async def run():
+        calls = []
+        events = []
+        old = {"info": {"id": "old", "role": "assistant", "parentID": "old-user", "time": {"completed": 1}},
+               "parts": [{"type": "text", "text": "OLD"}]}
+
+        def respond(request):
+            path = request.url.path
+            calls.append(path)
+            if path == "/session":
+                return httpx.Response(200, json=[])
+            if path == "/session/session-1":
+                return httpx.Response(200, json={"id": "session-1", "directory": str(tmp_path)})
+            if path == "/event":
+                events = [
+                    {"type": "message.part.updated", "properties": {"part": {
+                        "id": "p1", "messageID": "new", "sessionID": "session-1", "type": "text", "text": "",
+                    }}},
+                    {"type": "message.part.delta", "properties": {
+                        "partID": "p1", "messageID": "new", "sessionID": "session-1", "field": "text", "delta": "Hel",
+                    }},
+                ]
+                return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                      text="".join("data: " + json.dumps(event) + "\n\n" for event in events))
+            if path == "/session/session-1/prompt_async":
+                assert request.url.params["directory"] == str(tmp_path)
+                assert "/event" in calls
+                return httpx.Response(204)
+            if path == "/session/session-1/message":
+                if "/session/session-1/prompt_async" not in calls:
+                    return httpx.Response(200, json=[old])
+                return httpx.Response(200, json=[old,
+                    {"info": {"id": "user", "role": "user"}, "parts": [{"type": "text", "text": "Go"}]},
+                    {"info": {"id": "new", "role": "assistant", "parentID": "user", "time": {"completed": 2}, "finish": "stop"},
+                     "parts": [{"id": "p1", "type": "text", "text": "Hello"}]},
+                ])
+            raise AssertionError(path)
+
+        adapter = OpenCodeAdapter((tmp_path,))
+        adapter._client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        await asyncio.wait_for(adapter.send_prompt(
+            session_id="session-1", text="Go", request_id="req", emit=lambda event: events.append(event) or asyncio.sleep(0),
+            request_approval=lambda *_: asyncio.sleep(0, result="deny"),
+        ), 3)
+        assert calls.count("/session/session-1/prompt_async") == 1
+        assert [e["type"] for e in events] == ["Accepted", "TextDelta", "TextDelta", "Completed"]
+        assert "".join(e.get("text", "") for e in events) == "Hello"
+
+    asyncio.run(run())
+
+
+def test_opencode_merges_go_models_and_falls_back_from_html_mcp(tmp_path):
+    async def run():
+        def respond(request):
+            path = request.url.path
+            if path == "/api/mcp":
+                return httpx.Response(200, headers={"content-type": "text/html"}, text="<html></html>")
+            if path == "/mcp":
+                return httpx.Response(200, json={"local": {"status": "connected"}})
+            if path == "/provider":
+                return httpx.Response(200, json={"connected": ["opencode-go"], "all": [{
+                    "id": "opencode-go", "models": {"chat": {"name": "Go Chat"}},
+                }]})
+            if path == "/api/model":
+                return httpx.Response(200, json={"data": [{"providerID": "opencode", "modelID": "chat"},
+                                                        {"providerID": "opencode-go", "modelID": "chat"}]})
+            raise AssertionError(path)
+
+        adapter = OpenCodeAdapter((tmp_path,))
+        adapter._client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        assert await adapter.list_mcp_servers() == [{"name": "local", "status": "connected"}]
+        models = await adapter.list_models()
+        assert [model["id"] for model in models] == ["opencode-go/chat", "opencode/chat"]
+        assert models[0]["label"] == "opencode-go · Go Chat"
+
+    asyncio.run(run())
+
+
 def test_codex_quota_queries_the_official_rpc_once_and_filters_response(tmp_path, monkeypatch):
     calls = []
 
@@ -600,7 +724,7 @@ def test_opencode_v2_protocol_adapter(tmp_path):
         @fake_v2.post("/api/session/{sid}/prompt")
         async def _v2_prompt(sid: str, request: Request):
             body = await request.json()
-            assert "text" in body
+            assert set(body) == {"prompt"} and isinstance(body["prompt"].get("text"), str)
             return {"data": {"id": "msg-u1", "sessionID": sid, "type": "user"}}
 
         @fake_v2.post("/api/session/{sid}/permission/{rid}/reply")
@@ -713,8 +837,8 @@ def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
         @fake_v2.post("/api/session/{sid}/prompt")
         async def _v2_prompt(sid: str, request: Request):
             body = await request.json()
-            if isinstance(body.get("files"), list):
-                uploaded_files.extend(body["files"])
+            assert set(body) == {"prompt"}
+            uploaded_files.extend(body["prompt"].get("files", []))
             return {"data": {"id": "u1"}}
 
         @fake_v2.post("/api/session/{sid}/form/{fid}/reply")
@@ -753,7 +877,7 @@ def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
             request_approval=lambda *_: asyncio.sleep(0, result="allow_once"),
         )
         assert selected_agents == ["plan"]
-        assert uploaded_files and uploaded_files[0]["name"] == "note.txt" and uploaded_files[0]["mime"] == "text/plain"
+        assert uploaded_files == [{"name": "note.txt", "uri": att_file.as_uri()}]
         form_evt = next(e for e in events if e["type"] == "FormRequest")
         assert form_evt["formId"] == "frm-1" and form_evt["title"] == "Choose target"
         sub_evt = next(e for e in events if e["type"] == "ToolCallUpdate" and e["callId"] == "call-sub")

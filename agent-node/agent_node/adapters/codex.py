@@ -1,6 +1,8 @@
 """OpenAI Codex CLI 适配器：通过 `codex app-server` 双向 JSON-RPC 驱动，强制人工审批。"""
 
 import asyncio
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from typing import Any
@@ -21,6 +23,20 @@ from .base import (
     safe_token_int,
 )
 from .jsonrpc import StdioJsonRpcProcess
+
+
+@dataclass
+class ActiveTurn:
+    request_id: str
+    model: str
+    emit: EventEmitter
+    approve: ApprovalCallback
+    done: asyncio.Future[None]
+    run_id: str = ""
+    ready: bool = False
+    usage_seen: bool = False
+    early: deque[tuple[str, dict[str, Any]]] = field(default_factory=deque)
+    tools: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _map_plan_status(raw: Any) -> str:
@@ -109,13 +125,8 @@ class CodexAdapter(AgentAdapter):
         self.allowed_roots = allowed_roots
         self.command = command
         self._proc: StdioJsonRpcProcess | None = None
-        self._emit: EventEmitter | None = None
-        self._approvals: dict[str, ApprovalCallback] = {}
         self._defaults: dict[str, dict[str, Any]] = {}
-        self._turn_done: dict[str, asyncio.Future[None]] = {}
-        self._active_meta: dict[str, dict[str, str]] = {}
-        self._tool_meta: dict[str, dict[str, Any]] = {}
-        self._turn_usage_seen: set[str] = set()
+        self._turns: dict[str, ActiveTurn] = {}
         self._initialized = False
         self._init_lock = asyncio.Lock()
         self._quota_lock = asyncio.Lock()
@@ -290,22 +301,17 @@ class CodexAdapter(AgentAdapter):
         attachments: list[dict[str, Any]] | None = None,
         options: dict[str, str] | None = None,
     ) -> None:
-        self._emit = emit
         proc = await self._ensure_proc()
         options = options or {}
         settings = dict(self._defaults.get(session_id, {}))
         settings.update({k: options[k] for k in ("model", "effort") if options.get(k)})
         if options.get("readOnly"):
             settings.update(sandboxPolicy={"type": "readOnly"}, approvalPolicy="never")
-        if session_id in self._turn_done:
+        if session_id in self._turns:
             raise ValueError("当前会话已有任务运行中")
-        done = asyncio.get_running_loop().create_future()
-        self._turn_done[session_id] = done
-        self._approvals[session_id] = request_approval
-        self._active_meta[session_id] = {
-            "requestId": request_id,
-            "model": str(settings.get("model") or ""),
-        }
+        turn = ActiveTurn(request_id, str(settings.get("model") or ""), emit, request_approval,
+                          asyncio.get_running_loop().create_future())
+        self._turns[session_id] = turn
         try:
             image_inputs: list[dict[str, Any]] = []
             extra_attachments: list[dict[str, Any]] = []
@@ -321,14 +327,17 @@ class CodexAdapter(AgentAdapter):
             turn_res = await proc.call("turn/start", {
                 **settings, "threadId": session_id, "input": input_items,
             })
-            run_id = str(((turn_res or {}).get("turn") or {}).get("id") or request_id)
-            self._active_meta[session_id]["runId"] = run_id
-            await emit({"type": "Accepted", "sessionId": session_id, "runId": run_id, "requestId": request_id, "provider": self.provider})
-            await asyncio.wait_for(done, timeout=300.0)
+            turn.run_id = str(((turn_res or {}).get("turn") or {}).get("id") or "")
+            if not turn.run_id:
+                raise RuntimeError("Codex did not return a turn ID")
+            await emit({"type": "Accepted", "sessionId": session_id, "runId": turn.run_id, "requestId": request_id, "provider": self.provider})
+            while turn.early and not turn.done.done():
+                method, params = turn.early.popleft()
+                await self._dispatch_notification(session_id, turn, method, params)
+            turn.ready = True
+            await asyncio.wait_for(turn.done, timeout=300.0)
         finally:
-            self._turn_done.pop(session_id, None)
-            self._approvals.pop(session_id, None)
-            self._active_meta.pop(session_id, None)
+            self._turns.pop(session_id, None)
 
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         if self._proc is None:
@@ -361,13 +370,28 @@ class CodexAdapter(AgentAdapter):
     async def _on_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "account/updated":
             self._quota_cache = None
-        emit = self._emit
-        if emit is None:
             return
         thread_id = str(params.get("threadId") or "")
-        meta = self._active_meta.get(thread_id, {})
-        run_id_active = meta.get("runId") or None
-        req_id_active = meta.get("requestId") or None
+        turn = self._turns.get(thread_id)
+        if not turn or turn.done.done():
+            return
+        if not turn.ready:
+            # The JSON-RPC reader must keep reading so turn/start can return.
+            turn.early.append((method, params))
+            return
+        await self._dispatch_notification(thread_id, turn, method, params)
+
+    async def _dispatch_notification(self, thread_id: str, active: ActiveTurn, method: str, params: dict[str, Any]) -> None:
+        run_id_active = active.run_id
+        req_id_active = active.request_id
+        notified_turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        event_turn_id = params.get("turnId") or params.get("turn_id") or notified_turn.get("id")
+        if event_turn_id and str(event_turn_id) != run_id_active:
+            return
+
+        async def emit(event: dict[str, Any]) -> None:
+            await active.emit({**event, "sessionId": thread_id, "runId": run_id_active, "requestId": req_id_active})
+
         if method == "item/agentMessage/delta":
             await emit({"type": "TextDelta", "sessionId": thread_id, "text": str(params.get("delta") or "")})
         elif method == "item/reasoning/summaryTextDelta":
@@ -379,7 +403,7 @@ class CodexAdapter(AgentAdapter):
                 call_id = str(item.get("id") or uuid4().hex[:8])
                 name = str(item.get("tool") or itype)
                 title = str(item.get("command") or item.get("tool") or item.get("server") or itype)
-                self._tool_meta[call_id] = {"name": name, "title": title, "started": time.monotonic()}
+                active.tools[call_id] = {"name": name, "title": title, "started": time.monotonic()}
                 tool_input = item.get("command") or item.get("arguments") or item.get("changes")
                 await emit(
                     build_tool_call_update(
@@ -397,7 +421,7 @@ class CodexAdapter(AgentAdapter):
             call_id = str(params.get("itemId") or params.get("callId") or "")
             delta = str(params.get("delta") or "")
             if call_id and delta:
-                tmeta = self._tool_meta.get(call_id, {})
+                tmeta = active.tools.get(call_id, {})
                 await emit(
                     build_tool_call_update(
                         session_id=thread_id,
@@ -415,7 +439,7 @@ class CodexAdapter(AgentAdapter):
             itype = str(item.get("type") or "")
             if itype in ("commandExecution", "fileChange", "mcpToolCall"):
                 call_id = str(item.get("id") or uuid4().hex[:8])
-                tmeta = self._tool_meta.pop(call_id, {})
+                tmeta = active.tools.pop(call_id, {})
                 started = tmeta.get("started")
                 duration_ms = int((time.monotonic() - started) * 1000) if isinstance(started, (int, float)) else None
                 raw_status = str(item.get("status") or "").lower()
@@ -471,20 +495,20 @@ class CodexAdapter(AgentAdapter):
             usage_root = params.get("tokenUsage") or params.get("token_usage") or {}
             if not isinstance(usage_root, dict):
                 return
-            meta = self._active_meta.get(thread_id, {})
-            turn_id = str(params.get("turnId") or params.get("turn_id") or usage_root.get("turnId") or meta.get("runId") or "")
+            if usage_root.get("turnId") and str(usage_root["turnId"]) != run_id_active:
+                return
             total_raw = usage_root.get("total") or usage_root.get("total_token_usage") or usage_root
             last_raw = usage_root.get("last") or usage_root.get("last_token_usage") or {}
             total_c = extract_usage_counts(total_raw if isinstance(total_raw, dict) else {})
             last_c = extract_usage_counts(last_raw) if isinstance(last_raw, dict) and last_raw else {}
             ctx_win = safe_token_int(usage_root.get("modelContextWindow") or usage_root.get("model_context_window")) or None
             if sum(total_c.values()) > 0 or sum(last_c.values()) > 0:
-                self._turn_usage_seen.add(turn_id or thread_id)
+                active.usage_seen = True
                 await emit(
                     build_token_usage_event(
                         session_id=thread_id,
-                        run_id=turn_id or None,
-                        request_id=meta.get("requestId") or None,
+                        run_id=run_id_active,
+                        request_id=req_id_active,
                         scope="cumulative",
                         input_tokens=total_c["inputTokens"],
                         cached_input_tokens=total_c["cachedInputTokens"],
@@ -497,25 +521,22 @@ class CodexAdapter(AgentAdapter):
                         last_reasoning_tokens=last_c["reasoningTokens"] if last_c else None,
                         last_total_tokens=last_c["totalTokens"] if last_c else None,
                         context_window=ctx_win,
-                        model=meta.get("model") or None,
+                        model=active.model or None,
                         source="exact",
                     )
                 )
         elif method == "turn/completed":
-            turn = params.get("turn") or {}
-            meta = self._active_meta.get(thread_id, {})
-            run_id = str(turn.get("id") or meta.get("runId") or "")
+            turn = notified_turn
             usage_raw = turn.get("usage") or params.get("usage")
-            seen_key = run_id or thread_id
-            if isinstance(usage_raw, dict) and seen_key not in self._turn_usage_seen:
+            if isinstance(usage_raw, dict) and not active.usage_seen:
                 c = extract_usage_counts(usage_raw)
                 ctx_win = safe_token_int(usage_raw.get("modelContextWindow") or params.get("modelContextWindow")) or None
                 if sum(c.values()) > 0:
                     await emit(
                         build_token_usage_event(
                             session_id=thread_id,
-                            run_id=run_id or None,
-                            request_id=meta.get("requestId") or None,
+                            run_id=run_id_active,
+                            request_id=req_id_active,
                             scope="turn",
                             input_tokens=c["inputTokens"],
                             cached_input_tokens=c["cachedInputTokens"],
@@ -523,24 +544,29 @@ class CodexAdapter(AgentAdapter):
                             reasoning_tokens=c["reasoningTokens"],
                             total_tokens=c["totalTokens"],
                             context_window=ctx_win,
-                            model=meta.get("model") or None,
+                            model=active.model or None,
                             source="exact",
                         )
                     )
-            self._turn_usage_seen.discard(run_id)
-            self._turn_usage_seen.discard(thread_id)
-            await emit({"type": "Completed", "sessionId": thread_id, "runId": run_id})
-            fut = self._turn_done.get(thread_id)
-            if fut and not fut.done():
-                fut.set_result(None)
+            status = str(turn.get("status") or "completed")
+            if status == "failed":
+                error = turn.get("error")
+                message = error.get("message") if isinstance(error, dict) else error
+                await emit({"type": "Failed", "code": "codex_turn_failed", "message": str(message or "Codex 执行失败")})
+            elif status == "interrupted":
+                await emit({"type": "Failed", "code": "cancelled", "message": "已中断当前 Codex 任务"})
+            else:
+                await emit({"type": "Completed"})
+            if not active.done.done():
+                active.done.set_result(None)
 
     async def _on_server_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         sid = str(params.get("threadId") or "")
-        approve = self._approvals.get(sid)
-        if "requestApproval" in method and approve:
+        active = self._turns.get(sid)
+        if "requestApproval" in method and active and not active.done.done():
             call_id = str(params.get("itemId") or uuid4().hex)
             cmd = str(params.get("command") or params.get("reason") or method)
-            decision = await approve(sid, call_id, cmd, "high")
+            decision = await active.approve(sid, call_id, cmd, "high")
             mapped = "accept" if decision == "allow_once" else "acceptForSession" if decision == "allow_session" else "decline"
             return {"decision": mapped}
         return {"decision": "decline"}

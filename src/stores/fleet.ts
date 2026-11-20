@@ -301,6 +301,8 @@ export const useFleetStore = defineStore('fleet', () => {
   const queuedPromptsBySession = ref<Record<string, QueuedPromptItem[]>>({})
   const imagePreviewByArtifactId = ref<Record<string, string>>({})
   const pendingRunPrompts = new Map<string, { text: string; model?: string; startedAt?: number }>()
+  const pendingMcpRequests = new Map<string, string>()
+  const mcpErrorsByTarget = ref<Record<string, string>>({})
   const autoPulledNodes = new Set<string>()
   const sentRequestIds = new Set<string>()
   const steerSessionKeys = new Set<string>()
@@ -436,6 +438,8 @@ export const useFleetStore = defineStore('fleet', () => {
     }
     imagePreviewByArtifactId.value = {}
     pendingRunPrompts.clear()
+    pendingMcpRequests.clear()
+    mcpErrorsByTarget.value = {}
     autoPulledNodes.clear()
     pendingOpenQueue.length = 0
   }
@@ -625,12 +629,12 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   }
 
-  function sendWsCommand(frame: Record<string, unknown>): boolean {
+  function sendWsCommand(frame: Record<string, unknown>, reportError = true): boolean {
     const route = fleetRoute.value
     if (!route) return false
     if (!socket || activeConnectRoute !== route || socket.readyState !== WebSocket.OPEN) {
       connectSocket()
-      lastError.value = '正在建立到 Core Relay 的连接，请稍候重试'
+      if (reportError) lastError.value = '正在建立到 Core Relay 的连接，请稍候重试'
       return false
     }
     socket.send(JSON.stringify(frame))
@@ -771,6 +775,12 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (frame.requestId && ['Failed', 'NodeUnavailable', 'Error'].includes(etype)) {
+      const mcpTarget = pendingMcpRequests.get(frame.requestId)
+      if (mcpTarget) {
+        pendingMcpRequests.delete(frame.requestId)
+        mcpErrorsByTarget.value = { ...mcpErrorsByTarget.value, [mcpTarget]: frame.message || '无法读取 MCP 服务状态' }
+        return
+      }
       const index = pendingOpenQueue.findIndex(p => p.requestId === frame.requestId)
       if (index >= 0) {
         pendingOpenQueue.splice(index, 1)
@@ -798,7 +808,10 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'McpSnapshot' && nodeId && Array.isArray(frame.servers)) {
-      mcpByTarget.value = { ...mcpByTarget.value, [`${nodeId}::${provider}`]: frame.servers }
+      if (frame.requestId) pendingMcpRequests.delete(frame.requestId)
+      const key = `${nodeId}::${provider}`
+      mcpErrorsByTarget.value = { ...mcpErrorsByTarget.value, [key]: frame.message || '' }
+      if (!frame.message) mcpByTarget.value = { ...mcpByTarget.value, [key]: frame.servers }
       return
     }
 
@@ -1510,6 +1523,9 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'Completed') {
+      const active = runningBySession.value[sKey]
+      const knownRequest = frame.requestId && pendingRunPrompts.has(`${sKey}::${frame.requestId}`)
+      if (active && frame.runId && active !== frame.runId && !knownRequest) return
       const promptMeta =
         (frame.runId ? pendingRunPrompts.get(`${sKey}::${frame.runId}`) : undefined) ??
         (frame.requestId ? pendingRunPrompts.get(`${sKey}::${frame.requestId}`) : undefined)
@@ -1602,8 +1618,8 @@ export const useFleetStore = defineStore('fleet', () => {
         return
       }
       const isActiveRunError = Boolean(
-        frame.runId ||
-        runningBySession.value[sKey] ||
+        (frame.runId && frame.runId === runningBySession.value[sKey]) ||
+        (frame.runId && pendingRunPrompts.has(`${sKey}::${frame.runId}`)) ||
         (frame.requestId && pendingRunPrompts.has(`${sKey}::${frame.requestId}`)),
       )
       if (!isActiveRunError) {
@@ -2367,7 +2383,19 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   function requestMcpServers(nodeId: string, provider: AdapterProvider) {
-    return sendWsCommand({ type: 'mcp.list', nodeId, provider, requestId: createRequestId() })
+    const requestId = createRequestId()
+    const target = `${nodeId}::${provider}`
+    pendingMcpRequests.set(requestId, target)
+    if (pendingMcpRequests.size > 100) {
+      const oldest = pendingMcpRequests.keys().next().value
+      if (oldest) pendingMcpRequests.delete(oldest)
+    }
+    const sent = sendWsCommand({ type: 'mcp.list', nodeId, provider, requestId }, false)
+    if (!sent) {
+      pendingMcpRequests.delete(requestId)
+      mcpErrorsByTarget.value = { ...mcpErrorsByTarget.value, [target]: '节点连接尚未就绪' }
+    }
+    return sent
   }
 
   function requestRules(sKey?: string) {
@@ -3186,6 +3214,7 @@ export const useFleetStore = defineStore('fleet', () => {
     },
     requestAgents,
     requestMcpServers,
+    mcpErrorsByTarget,
     requestRules,
     requestSkills,
     requestFileContent,
