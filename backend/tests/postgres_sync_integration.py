@@ -25,6 +25,11 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 
+# 版本号只在一处维护（package.json）：这个测试跑子进程服务器，不方便 import app.main，
+# 就按仓库里的版本号断言，省得每次发版都改测试。
+APP_VERSION = json.loads((Path(__file__).resolve().parents[2] / "package.json").read_text(encoding="utf-8"))["version"]
+
+
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 CORE_ENV = {**os.environ, "STUDIOLO_MODE": "core", "ALLOW_REGISTRATION": "true"}
@@ -77,7 +82,7 @@ def core_server(directory, port=None):
                     try:
                         health = client.get("/api/health")
                         if health.status_code == 200:
-                            assert health.json() == {"status": "ok", "service": "studiolo", "version": "0.7.0"}
+                            assert health.json() == {"status": "ok", "service": "studiolo", "version": APP_VERSION}
                             break
                     except httpx.RequestError:
                         pass

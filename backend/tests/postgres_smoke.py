@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 
 from app.database import Base, SessionLocal, engine
-from app.main import app
+from app.main import app, APP_VERSION
 from app import models  # noqa: F401
 from app.sync.service import apply_mutation
 
@@ -63,7 +63,7 @@ username = f"core_smoke_{uuid4().hex[:12]}"
 with TestClient(app) as client:
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json() == {"status": "ok", "service": "studiolo", "version": "0.7.0"}
+    assert health.json() == {"status": "ok", "service": "studiolo", "version": APP_VERSION}
     registered = client.post("/api/v1/auth/register", json={
         "username": username, "password": "smoke-test-password",
     })

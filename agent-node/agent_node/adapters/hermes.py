@@ -78,7 +78,7 @@ class HermesAdapter(AgentAdapter):
                 self._initialized = False
                 self._loaded_sessions.clear()
             if not self._initialized:
-                await self._proc.call("initialize", {"protocolVersion": 1, "clientInfo": {"name": "studiolo", "version": "0.7.0"}})
+                await self._proc.call("initialize", {"protocolVersion": 1, "clientInfo": {"name": "studiolo", "version": "0.8.0"}})
                 self._initialized = True
             return self._proc
 
