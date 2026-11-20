@@ -169,6 +169,11 @@ export function fetchSpaces(route: SpaceRouteConfig): Promise<SpaceItem[]> {
   return apiRequest<SpaceItem[]>('/api/v1/spaces', {}, route.token, route.origin)
 }
 
+/** 单个空间的最新摘要（entryCount / usedBytes），用于条目增删后刷新列表卡片。 */
+export function fetchSpace(route: SpaceRouteConfig, spaceId: string): Promise<SpaceItem> {
+  return apiRequest<SpaceItem>(`/api/v1/spaces/${encodeURIComponent(spaceId)}`, {}, route.token, route.origin)
+}
+
 export function createSpaceApi(
   route: SpaceRouteConfig,
   payload: {

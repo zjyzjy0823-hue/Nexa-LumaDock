@@ -23,6 +23,7 @@ import {
   deleteSpaceEntryApi,
   downloadEntryBlob,
   downloadSpaceBlobChunk,
+  fetchSpace,
   fetchSpaceAuditLogs,
   fetchSpaceCapabilities,
   fetchSpaceEntries,
@@ -378,6 +379,16 @@ export const useSpaceStore = defineStore('space', () => {
     await refreshCurrentSpace()
   }
 
+  /** 条目增删后把空间卡片上的 entryCount / usedBytes 拉回最新，避免卡片长期显示 0 条。 */
+  async function syncSpaceSummary(spaceId: string) {
+    try {
+      const fresh = await fetchSpace(requireRoute(), spaceId)
+      spaces.value = spaces.value.map(item => (item.id === fresh.id ? fresh : item))
+    } catch {
+      // 计数刷新失败不影响条目读写本身，卡片保持旧值即可。
+    }
+  }
+
   async function refreshCurrentSpace(search?: string, entryType?: string) {
     const target = route.value
     const space = selectedSpace.value
@@ -435,6 +446,7 @@ export const useSpaceStore = defineStore('space', () => {
         selectedEntryId.value = ''
         selectedEntryDetail.value = null
       }
+      await syncSpaceSummary(selectedSpaceId.value)
     } catch (cause) {
       if (request === entriesRequest && selectedSpaceId.value === space.id) error.value = cause instanceof Error ? cause.message : '加载条目失败'
     } finally {
