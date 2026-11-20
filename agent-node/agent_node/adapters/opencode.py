@@ -519,6 +519,7 @@ class OpenCodeAdapter(AgentAdapter):
                         "provider": self.provider,
                         "title": raw_title or sid,
                         "cwd": str(cwd),
+                        "updatedAt": (s.get("time") or {}).get("updated") or s.get("updatedAt"),
                     }
                 )
                 if len(out) >= limit:

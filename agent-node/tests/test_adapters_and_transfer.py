@@ -10,12 +10,13 @@ import sys
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 import httpx
+import pytest
 
 from agent_node.adapters.codex import CodexAdapter
 from agent_node.adapters.hermes import HermesAdapter
 from agent_node.adapters.jsonrpc import StdioJsonRpcProcess
 from agent_node.adapters.opencode import OpenCodeAdapter
-from agent_node.config import canonicalize_roots
+from agent_node.config import PathOutsideAllowedRootsError, canonicalize_roots
 from agent_node.crypto_chunks import generate_file_key
 from agent_node.transfer import download_and_decrypt_artifact, publish_file_artifact
 
@@ -264,7 +265,7 @@ for line in sys.stdin:
 
 
 HERMES_ACP_SCRIPT = """
-import sys, json
+import sys, json, os
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -275,6 +276,22 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'protocolVersion': 1}}) + '\\n')
     elif m == 'session/new':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'sessionId': 'herm-1'}}) + '\\n')
+    elif m == 'session/list':
+        cursor = msg['params'].get('cursor')
+        sid = 'herm-older' if cursor == 'herm-1' else 'herm-1'
+        result = {'sessions': [{'sessionId': sid, 'cwd': os.getcwd(), 'title': 'Hermes private notes',
+                                'updatedAt': '2026-11-19T16:00:00Z'}]}
+        if not cursor:
+            result['nextCursor'] = sid
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': result}))
+    elif m == 'session/load':
+        sid = msg['params']['sessionId']
+        assert msg['params']['cwd'] == os.getcwd()
+        for kind, text in [('user_message_chunk', 'Older question'), ('agent_message_chunk', 'Older answer')]:
+            print(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {
+                'sessionId': sid, 'update': {'sessionUpdate': kind, 'content': {'type': 'text', 'text': text}},
+            }}))
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}))
     elif m == 'session/prompt':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'agent_thought_chunk', 'content': {'text': 'plan step'}}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'tool_call', 'title': 'read_file'}}}) + '\\n')
@@ -360,6 +377,18 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
         )
         h_opened = await hermes.open_session(cwd=str(tmp_path))
         assert h_opened["sessionId"] == "herm-1"
+        listed = await hermes.list_sessions(limit=2)
+        assert [entry["sessionId"] for entry in listed] == ["herm-1", "herm-older"]
+        assert listed[1]["provider"] == "hermes" and listed[1]["cwd"] == str(tmp_path)
+        assert listed[1]["updatedAt"] == "2026-11-19T16:00:00Z"
+        assert await hermes.get_history(session_id="herm-older") == [
+            {"role": "user", "text": "Older question"},
+            {"role": "assistant", "text": "Older answer"},
+        ]
+        outside = hermes._session_summaries([{"sessionId": "outside", "title": "Personal chat", "cwd": str(tmp_path.parent)}])
+        assert outside[0]["title"] == "Personal chat" and outside[0]["cwd"] == ""
+        with pytest.raises(PathOutsideAllowedRootsError):
+            await hermes.get_history(session_id="outside")
         h_events: list[dict] = []
 
         async def h_emit(ev: dict) -> None:
@@ -892,7 +921,7 @@ def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
         assert ag_probe.provider == "antigravity" and ag_probe.status == "unavailable"
         hermes = HermesAdapter(roots)
         h_evts: list[dict] = []
-        hermes._emit = lambda ev: h_evts.append(ev) or asyncio.sleep(0)
+        hermes._turns["h1"] = ("h1-run", lambda ev: h_evts.append(ev) or asyncio.sleep(0))
         await hermes._on_acp_update(
             "session/update",
             {
@@ -904,5 +933,6 @@ def test_opencode_v2_agents_mcp_forms_files_and_hermes_acp_parity(tmp_path):
             },
         )
         assert h_evts[0]["type"] == "TodoUpdated" and h_evts[0]["items"][0]["content"] == "Inspect diff"
+        assert h_evts[0]["runId"] == "h1-run"
 
     asyncio.run(_run())

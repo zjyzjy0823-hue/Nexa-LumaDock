@@ -1,5 +1,7 @@
 """Hermes Agent 适配器：本机优先走 `hermes acp` 标准 ACP 协议，亦支持远端授权 `hermes serve` Gateway。"""
 
+import asyncio
+from collections import deque
 from pathlib import Path
 import time
 from typing import Any
@@ -7,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 
+from ..config import PathOutsideAllowedRootsError, ensure_allowed_path
 from .base import (
     AdapterProbe,
     AgentAdapter,
@@ -42,23 +45,31 @@ class HermesAdapter(AgentAdapter):
         self.api_key = api_key
         self._proc: StdioJsonRpcProcess | None = None
         self._initialized = False
-        self._emit: EventEmitter | None = None
+        self._init_lock = asyncio.Lock()
+        self._history_lock = asyncio.Lock()
+        self._session_cwds: dict[str, Path | None] = {}
+        self._loaded_sessions: set[str] = set()
+        self._history_replays: dict[str, deque[dict[str, Any]]] = {}
+        self._turns: dict[str, tuple[str, EventEmitter]] = {}
         self._approvals: dict[str, ApprovalCallback] = {}
-        self._tool_starts: dict[str, float] = {}
+        self._tool_starts: dict[tuple[str, str], float] = {}
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
-        if self._proc is None:
-            self._proc = StdioJsonRpcProcess(
-                [self.command, "acp"],
-                cwd=self.allowed_roots[0],
-                on_notification=self._on_acp_update,
-                on_request=self._on_acp_request,
-            )
-        await self._proc.start()
-        if not self._initialized:
-            await self._proc.call("initialize", {"protocolVersion": 1, "clientInfo": {"name": "studiolo", "version": "0.7.0"}})
-            self._initialized = True
-        return self._proc
+        async with self._init_lock:
+            if self._proc is None:
+                self._proc = StdioJsonRpcProcess(
+                    [self.command, "acp"],
+                    cwd=self.allowed_roots[0],
+                    on_notification=self._on_acp_update,
+                    on_request=self._on_acp_request,
+                )
+            if await self._proc.start():
+                self._initialized = False
+                self._loaded_sessions.clear()
+            if not self._initialized:
+                await self._proc.call("initialize", {"protocolVersion": 1, "clientInfo": {"name": "studiolo", "version": "0.7.0"}})
+                self._initialized = True
+            return self._proc
 
     async def probe(self) -> AdapterProbe:
         caps = ("chat", "history", "approval", "worktree", "cron", "files", "diff", "checkpoints", "todos")
@@ -74,17 +85,64 @@ class HermesAdapter(AgentAdapter):
         return probe_cli_binary(self.provider, self.command, caps)
 
     async def list_sessions(self, *, page: int = 1, limit: int = 30) -> list[dict[str, Any]]:
+        limit = min(100, max(1, limit))
+        offset = (min(100, max(1, page)) - 1) * limit
         if self.mode == "gateway" and self.serve_url:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
             async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(f"{self.serve_url}/api/sessions", headers=headers)
+                res = await client.get(f"{self.serve_url}/api/sessions", params={"offset": offset, "limit": limit},
+                                       headers=self._gateway_headers())
                 res.raise_for_status()
-                items = res.json() if isinstance(res.json(), list) else res.json().get("sessions", [])
-                return [{"sessionId": s.get("id"), "provider": self.provider, "title": s.get("title") or s.get("id")} for s in items[:limit]]
+                data = res.json()
+            items = data if isinstance(data, list) else data.get("sessions", [])
+            return self._session_summaries(items[:limit])
+
         proc = await self._ensure_acp()
-        res = await proc.call("session/list", {"limit": limit})
-        sessions = (res or {}).get("sessions") or []
-        return [{"sessionId": s.get("sessionId"), "provider": self.provider, "title": s.get("title") or s.get("sessionId")} for s in sessions]
+        cursor = None
+        seen_cursors = set()
+        sessions = []
+        while len(sessions) < offset + limit:
+            response = await proc.call("session/list", {"cursor": cursor} if cursor else {})
+            sessions.extend(self._session_summaries((response or {}).get("sessions") or []))
+            cursor = (response or {}).get("nextCursor")
+            if not cursor or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
+        return sessions[offset:offset + limit]
+
+    def _session_summaries(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sessions = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = row.get("sessionId") or row.get("id")
+            if not isinstance(sid, str) or not sid:
+                continue
+            cwd = row.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                try:
+                    self._session_cwds[sid] = ensure_allowed_path(cwd, self.allowed_roots)
+                except PathOutsideAllowedRootsError:
+                    self._session_cwds[sid] = None
+            session_cwd = self._session_cwds.get(sid)
+            sessions.append({
+                "sessionId": sid, "provider": self.provider, "title": row.get("title") or sid,
+                "cwd": str(session_cwd) if session_cwd is not None else "",
+                "model": row.get("model"),
+                "updatedAt": row.get("updatedAt") or row.get("last_active") or row.get("updated_at"),
+            })
+        return sessions
+
+    async def _load_acp_session(self, proc: StdioJsonRpcProcess, sid: str) -> None:
+        if sid not in self._session_cwds:
+            await self.list_sessions(limit=100)
+        if sid not in self._session_cwds:
+            raise ValueError("Hermes 会话不在节点的对话列表中")
+        cwd = self._session_cwds[sid]
+        if cwd is None:
+            raise PathOutsideAllowedRootsError("Hermes 会话目录不在节点允许范围内")
+        cwd = ensure_allowed_path(cwd, self.allowed_roots)
+        await proc.call("session/load", {"sessionId": sid, "cwd": str(cwd), "mcpServers": []})
+        self._loaded_sessions.add(sid)
 
     async def open_session(
         self,
@@ -99,11 +157,15 @@ class HermesAdapter(AgentAdapter):
             return {"sessionId": sid_seed, "provider": self.provider, "cwd": str(eff_cwd), "worktreePath": wt_path, "title": f"Hermes ({eff_cwd.name})"}
         proc = await self._ensure_acp()
         if session_id:
-            await proc.call("session/load", {"sessionId": session_id, "cwd": str(eff_cwd), "mcpServers": []})
             sid = session_id
+            self._session_cwds[sid] = eff_cwd
+            async with self._history_lock:
+                await self._load_acp_session(proc, sid)
         else:
             res = await proc.call("session/new", {"cwd": str(eff_cwd), "mcpServers": []})
             sid = str((res or {}).get("sessionId") or sid_seed)
+            self._session_cwds[sid] = eff_cwd
+            self._loaded_sessions.add(sid)
         return {"sessionId": sid, "provider": self.provider, "cwd": str(eff_cwd), "worktreePath": wt_path, "title": f"Hermes ({eff_cwd.name})"}
 
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -115,7 +177,18 @@ class HermesAdapter(AgentAdapter):
                     data = res.json()
                     items = data if isinstance(data, list) else data.get("messages", [])
                     return [{"role": m.get("role", "assistant"), "text": m.get("content", "")} for m in items[-limit:]]
-        return []
+            return []
+        proc = await self._ensure_acp()
+        async with self._history_lock:
+            if session_id in self._turns:
+                return []
+            messages: deque[dict[str, Any]] = deque(maxlen=max(1, min(limit, 500)))
+            self._history_replays[session_id] = messages
+            try:
+                await self._load_acp_session(proc, session_id)
+                return list(messages)
+            finally:
+                self._history_replays.pop(session_id, None)
 
     async def send_prompt(
         self,
@@ -128,11 +201,14 @@ class HermesAdapter(AgentAdapter):
         attachments: list[dict[str, Any]] | None = None,
         options: dict[str, Any] | None = None,
     ) -> None:
-        self._emit = emit
         proc = await self._ensure_acp()
-        if session_id in self._approvals:
-            raise ValueError("当前会话已有任务运行中")
-        self._approvals[session_id] = request_approval
+        async with self._history_lock:
+            if session_id in self._turns:
+                raise ValueError("当前会话已有任务运行中")
+            if session_id not in self._loaded_sessions and self.mode != "gateway":
+                await self._load_acp_session(proc, session_id)
+            self._turns[session_id] = (request_id, emit)
+            self._approvals[session_id] = request_approval
         try:
             prompt_text = merge_prompt_with_attachments(text, attachments)
             await emit({"type": "Accepted", "sessionId": session_id, "runId": request_id, "requestId": request_id, "provider": self.provider})
@@ -156,28 +232,49 @@ class HermesAdapter(AgentAdapter):
                     )
             await emit({"type": "Completed", "sessionId": session_id, "runId": request_id, "requestId": request_id})
         finally:
+            self._turns.pop(session_id, None)
             self._approvals.pop(session_id, None)
+            for key in [key for key in self._tool_starts if key[0] == session_id]:
+                self._tool_starts.pop(key, None)
 
     async def cancel(self, *, session_id: str, run_id: str | None = None) -> None:
         if self._proc is not None:
             await self._proc.notify("session/cancel", {"sessionId": session_id})
 
     async def _on_acp_update(self, method: str, params: dict[str, Any]) -> None:
-        if method != "session/update" or self._emit is None:
+        if method != "session/update":
             return
         sid = str(params.get("sessionId") or "")
         upd = params.get("update") or {}
         kind = upd.get("sessionUpdate")
+        replay = self._history_replays.get(sid)
+        if replay is not None:
+            role = {"user_message_chunk": "user", "agent_message_chunk": "assistant"}.get(kind)
+            text = (upd.get("content") or {}).get("text")
+            if role and isinstance(text, str) and text:
+                if replay and replay[-1]["role"] == role:
+                    replay[-1]["text"] += text
+                else:
+                    replay.append({"role": role, "text": text})
+            return
+        turn = self._turns.get(sid)
+        if not turn:
+            return
+        request_id, send = turn
+
+        async def emit(event: dict[str, Any]) -> None:
+            await send({**event, "runId": request_id, "requestId": request_id})
+
         if kind == "agent_thought_chunk":
-            await self._emit({"type": "ThoughtDelta", "sessionId": sid, "text": str((upd.get("content") or {}).get("text") or "")})
+            await emit({"type": "ThoughtDelta", "sessionId": sid, "text": str((upd.get("content") or {}).get("text") or "")})
         elif kind == "agent_message_chunk":
-            await self._emit({"type": "TextDelta", "sessionId": sid, "text": str((upd.get("content") or {}).get("text") or "")})
+            await emit({"type": "TextDelta", "sessionId": sid, "text": str((upd.get("content") or {}).get("text") or "")})
         elif kind == "tool_call":
             call_id = str(upd.get("toolCallId") or uuid4().hex[:8])
             title = str(upd.get("title") or "tool")
-            self._tool_starts[call_id] = time.monotonic()
-            await self._emit({"type": "ToolCall", "sessionId": sid, "callId": call_id, "name": title})
-            await self._emit(
+            self._tool_starts[sid, call_id] = time.monotonic()
+            await emit({"type": "ToolCall", "sessionId": sid, "callId": call_id, "name": title})
+            await emit(
                 build_tool_call_update(
                     session_id=sid,
                     call_id=call_id,
@@ -191,7 +288,7 @@ class HermesAdapter(AgentAdapter):
             call_id = str(upd.get("toolCallId") or "")
             raw_status = str(upd.get("status") or "").lower()
             st = "error" if raw_status in ("failed", "error") else "completed" if raw_status == "completed" else "running"
-            started = self._tool_starts.pop(call_id, None) if st != "running" else None
+            started = self._tool_starts.pop((sid, call_id), None) if st != "running" else None
             dur = int((time.monotonic() - started) * 1000) if isinstance(started, (int, float)) else None
             out_content = upd.get("content")
             out_text = (
@@ -199,7 +296,7 @@ class HermesAdapter(AgentAdapter):
                 if isinstance(out_content, list)
                 else str(out_content) if out_content else None
             )
-            await self._emit(
+            await emit(
                 build_tool_call_update(
                     session_id=sid,
                     call_id=call_id or uuid4().hex[:8],
@@ -210,7 +307,7 @@ class HermesAdapter(AgentAdapter):
                 )
             )
         elif kind == "plan" and isinstance(upd.get("entries"), list):
-            await self._emit(build_todo_updated_event(session_id=sid, items=upd["entries"]))
+            await emit(build_todo_updated_event(session_id=sid, items=upd["entries"]))
 
     async def _on_acp_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         sid = str(params.get("sessionId") or "")

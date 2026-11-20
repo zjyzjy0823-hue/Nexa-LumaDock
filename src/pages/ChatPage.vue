@@ -4,6 +4,7 @@ import AgentChatThread from '../components/chat/AgentChatThread.vue'
 import CommandPaletteModal from '../components/chat/CommandPaletteModal.vue'
 import DiffReviewDrawer from '../components/chat/DiffReviewDrawer.vue'
 import FileViewerDrawer from '../components/chat/FileViewerDrawer.vue'
+import NodeSessionRow from '../components/chat/NodeSessionRow.vue'
 import SideChatDrawer from '../components/chat/SideChatDrawer.vue'
 import TerminalDrawer from '../components/chat/TerminalDrawer.vue'
 import WorkspaceTreeDrawer from '../components/chat/WorkspaceTreeDrawer.vue'
@@ -41,10 +42,11 @@ function cycleBubbleStyle() {
   emit('action', `对话气泡样式已切换为「${next.title}」`)
 }
 
-const TREE_DEFAULT_W = 244
+const TREE_DEFAULT_W = 326
 const TREE_MIN_W = 128
 const TREE_MAX_W = 440
 const TREE_SNAP_CLOSE = 84
+const TREE_SESSION_LIMIT = 5
 const workspace = ref<HTMLElement>()
 const primaryThreadRef = ref<InstanceType<typeof AgentChatThread> | null>(null)
 const treeOpen = ref(true)
@@ -66,6 +68,11 @@ const showCommandPalette = ref(false)
 const splitPercent = ref(readStoredWidth('studiolo:chat-split-percent', 50, 5, 95))
 const isResizing = ref(false)
 const treeQuery = ref('')
+const treeToolbar = ref<HTMLElement>()
+const treeSearchInput = ref<HTMLInputElement>()
+const treeSearchButton = ref<HTMLButtonElement>()
+const treeFilterButton = ref<HTMLButtonElement>()
+const treePanel = ref<'search' | 'filter' | null>(null)
 const actionsMenu = ref<HTMLDetailsElement>()
 const renamingSessionKey = ref<string | null>(null)
 const renameDraft = ref('')
@@ -83,6 +90,46 @@ const openTabKeys = ref<string[]>([])
 const pinnedTabKeys = ref<string[]>([])
 const tabContextMenu = ref<{ key: string; x: number; y: number } | null>(null)
 const treeFilterMode = ref<'all' | 'running' | 'approval' | 'diff'>('all')
+const treeFilters = [
+  { id: 'all', label: '全部' },
+  { id: 'running', label: '运行中' },
+  { id: 'approval', label: '待审批' },
+  { id: 'diff', label: '有改动' },
+] as const
+const treeIsNarrowed = computed(() => Boolean(treeQuery.value.trim()) || treeFilterMode.value !== 'all')
+const collapsedTreeSections = ref(new Set<string>())
+const collapsedFilteredSections = ref(new Set<string>())
+const expandedTreeLists = ref(new Set<string>())
+const treeCollapsed = computed(() => treeIsNarrowed.value ? collapsedFilteredSections.value : collapsedTreeSections.value)
+watch([treeQuery, treeFilterMode], () => collapsedFilteredSections.value.clear())
+
+function toggleTreePanel(panel: 'search' | 'filter') {
+  treePanel.value = treePanel.value === panel ? null : panel
+  if (treePanel.value === 'search') void nextTick(() => treeSearchInput.value?.focus())
+}
+
+function closeTreePanel() {
+  const trigger = treePanel.value === 'search' ? treeSearchButton : treeFilterButton
+  if (treePanel.value) trigger.value?.focus()
+  treePanel.value = null
+}
+
+function onTreeToolbarFocusOut(event: FocusEvent) {
+  if (!(event.relatedTarget instanceof Node && treeToolbar.value?.contains(event.relatedTarget))) treePanel.value = null
+}
+
+function selectTreeFilter(filter: typeof treeFilterMode.value) {
+  treeFilterMode.value = filter
+  closeTreePanel()
+}
+
+function toggleTreeSection(id: string) {
+  if (!treeCollapsed.value.delete(id)) treeCollapsed.value.add(id)
+}
+
+function toggleTreeList(id: string) {
+  if (!expandedTreeLists.value.delete(id)) expandedTreeLists.value.add(id)
+}
 const secondaryTabKey = ref<string>('')
 watch(secondaryTabKey, key => { if (key) fleet.loadSessionHistory(key) })
 const createInSplit = ref(false)
@@ -376,7 +423,10 @@ function readyAt(nodeId: string) {
 function changeCreateNode() {
   const node = fleet.nodes.find(n => n.id === newSessionNodeId.value)
   newSessionCwd.value = node?.allowedRoots[0] ?? ''
-  newSessionProvider.value = readyAt(newSessionNodeId.value)[0]?.provider ?? 'codex'
+  const adapters = readyAt(newSessionNodeId.value)
+  if (!adapters.some(adapter => adapter.provider === newSessionProvider.value)) {
+    newSessionProvider.value = adapters[0]?.provider ?? 'codex'
+  }
 }
 
 function leafPathName(fullPath: string): string {
@@ -385,14 +435,15 @@ function leafPathName(fullPath: string): string {
 }
 
 function normPath(pathStr: string): string {
-  return pathStr.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const path = pathStr.replace(/\\/g, '/').toLowerCase()
+  return path.replace(/\/+$/, '') || (path.startsWith('/') ? '/' : '')
 }
 
 function sessionBelongsToRoot(sess: ChatSession, root: string): boolean {
   const sc = normPath(sess.cwd || '')
   const rc = normPath(root)
   if (!sc || !rc) return false
-  return sc === rc || sc.startsWith(`${rc}/`)
+  return sc === rc || sc.startsWith(rc.endsWith('/') ? rc : `${rc}/`)
 }
 
 const searchHits = computed(() => {
@@ -414,7 +465,7 @@ function sessionMatchesStateFilter(sess: ChatSession): boolean {
   const k = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
   if (treeFilterMode.value === 'running') return Boolean(fleet.runningBySession[k])
   if (treeFilterMode.value === 'approval') {
-    return fleet.pendingApprovalsList.some(c => c.nodeId === sess.nodeId && c.sessionId === sess.sessionId)
+    return fleet.pendingApprovalsList.some(c => sessionKey(c.nodeId, c.provider, c.sessionId) === k)
   }
   if (treeFilterMode.value === 'diff') {
     return Boolean(sess.hasDiff || fleet.diffBySession[k]?.files?.length)
@@ -422,31 +473,11 @@ function sessionMatchesStateFilter(sess: ChatSession): boolean {
   return true
 }
 
-function sessionsForNodeRoot(nodeId: string, root: string): ChatSession[] {
-  const term = treeQuery.value.trim()
-  return fleet.allSessions.filter(s => {
-    if (s.nodeId !== nodeId || !sessionBelongsToRoot(s, root)) return false
-    if (!sessionMatchesStateFilter(s)) return false
-    if (!term) return true
-    return searchHits.value.has(sessionKey(s.nodeId, s.provider, s.sessionId))
-  })
-}
-
-function orphanSessionsForNode(node: AgentNode): ChatSession[] {
-  const term = treeQuery.value.trim()
-  return fleet.allSessions.filter(s => {
-    if (s.nodeId !== node.id) return false
-    if (node.allowedRoots.some(r => sessionBelongsToRoot(s, r))) return false
-    if (!sessionMatchesStateFilter(s)) return false
-    if (!term) return true
-    return searchHits.value.has(sessionKey(s.nodeId, s.provider, s.sessionId))
-  })
-}
-
 function matchesTreeFilter(node: AgentNode): boolean {
   const term = treeQuery.value.trim().toLowerCase()
   if (!term) return true
-  if (node.name.toLowerCase().includes(term)) return true
+  if (`${node.name} ${node.hostname ?? ''}`.toLowerCase().includes(term)) return true
+  if ('hermes'.includes(term) && node.adapters.some(a => a.provider === 'hermes' && a.status === 'ready')) return true
   if (node.allowedRoots.some(r => r.toLowerCase().includes(term))) return true
   return fleet.allSessions.some(
     s => s.nodeId === node.id && searchHits.value.has(sessionKey(s.nodeId, s.provider, s.sessionId)),
@@ -454,6 +485,90 @@ function matchesTreeFilter(node: AgentNode): boolean {
 }
 
 const visibleNodes = computed(() => sortedNodes.value.filter(matchesTreeFilter))
+
+function activityAt(sess: ChatSession, key: string): number {
+  const lastMessage = fleet.messagesBySession[key]?.at(-1)
+  const lastLocalActivity = lastMessage?.requestId || lastMessage?.runId ? lastMessage.createdAt : 0
+  const raw = sess.updatedAt
+  const numeric = typeof raw === 'number' ? raw : Number(raw)
+  const updated = Number.isFinite(numeric)
+    ? numeric < 1e12 ? numeric * 1000 : numeric
+    : typeof raw === 'string' ? Date.parse(raw) : 0
+  return Math.max(lastLocalActivity, updated || 0)
+}
+
+function sessionDisplayBranch(sess: ChatSession, key: string): string | undefined {
+  return fleet.diffBySession[key]?.branch || sess.branch
+}
+
+type TreeSession = { session: ChatSession; key: string; branch?: string; activity: number }
+type TreeWorkspace = { path?: string; rows: TreeSession[]; active: boolean }
+type TreeSection = {
+  key: string; name: string; icon: 'folder' | 'hermes' | 'chat'; root?: string; workspaces: TreeWorkspace[]
+}
+
+const nodeTree = computed(() => visibleNodes.value.map(node => {
+  const sections: TreeSection[] = node.allowedRoots.map(root => ({
+    key: root, name: leafPathName(root), icon: 'folder', root, workspaces: [],
+  }))
+  const loose: TreeSection = { key: 'loose', name: '其他会话', icon: 'chat', workspaces: [] }
+  const hermes: TreeSection = { key: 'hermes', name: 'Hermes', icon: 'hermes', workspaces: [] }
+  const hasHermes = node.adapters.some(adapter => adapter.provider === 'hermes' && adapter.status === 'ready')
+  const term = treeQuery.value.trim().toLowerCase()
+  const matchingNode = `${node.name} ${node.hostname ?? ''}`.toLowerCase().includes(term)
+  const all = fleet.allSessions.filter(session => session.nodeId === node.id)
+  const projectsBySpecificity = [...sections].sort((a, b) => b.root!.length - a.root!.length)
+  for (const session of all) {
+    if (!sessionMatchesStateFilter(session)) continue
+    const key = sessionKey(node.id, session.provider, session.sessionId)
+    const section = session.provider === 'hermes'
+      ? hermes
+      : projectsBySpecificity.find(project => sessionBelongsToRoot(session, project.root!)) ?? loose
+    if (term && !matchingNode && !section.key.toLowerCase().includes(term) && !searchHits.value.has(key)) continue
+    const path = session.provider === 'hermes'
+      ? undefined
+      : session.worktreePath || session.cwd.replace(/\\/g, '/').match(/^(.*\/\.studiolo-worktrees\/[^/]+)/)?.[1]
+    let workspace = section.workspaces.find(item => item.path === path)
+    if (!workspace) {
+      workspace = { path, rows: [], active: false }
+      section.workspaces.push(workspace)
+    }
+    workspace.rows.push({ session, key, branch: sessionDisplayBranch(session, key), activity: activityAt(session, key) })
+    if (key === fleet.activeSessionKey) workspace.active = true
+  }
+  const showSection = (section: TreeSection) =>
+    section.workspaces.length || (!term && treeFilterMode.value === 'all') || (term && section.key.toLowerCase().includes(term))
+  const visible = sections.filter(showSection)
+  if (loose.workspaces.length) visible.push(loose)
+  if (hermes.workspaces.length || (hasHermes && showSection(hermes))) visible.push(hermes)
+  const displayedSections = visible.map(section => {
+    for (const workspace of section.workspaces) workspace.rows.sort((a, b) => b.activity - a.activity)
+    section.workspaces.sort((a, b) => (b.rows[0]?.activity ?? 0) - (a.rows[0]?.activity ?? 0))
+    const id = `tree-section-${encodeURIComponent(node.id)}:${encodeURIComponent(section.key)}`
+    const rows = section.workspaces.flatMap(workspace => workspace.rows)
+    const showAll = treeIsNarrowed.value || expandedTreeLists.value.has(id)
+    let workspaces = section.workspaces
+    if (!showAll && rows.length > TREE_SESSION_LIMIT) {
+      rows.sort((a, b) => b.activity - a.activity)
+      const latest = new Set(rows.slice(0, TREE_SESSION_LIMIT).map(row => row.key))
+      workspaces = workspaces.map(workspace => {
+        const rows = workspace.rows.filter(row => latest.has(row.key))
+        return { ...workspace, rows, active: rows.some(row => row.key === fleet.activeSessionKey) }
+      }).filter(workspace => workspace.rows.length)
+    }
+    return {
+      ...section, id, workspaces, showAll,
+      collapsed: treeCollapsed.value.has(id),
+      canShowMore: !treeIsNarrowed.value && rows.length > TREE_SESSION_LIMIT,
+    }
+  })
+  const historyAdapters = node.adapters.filter(adapter => adapter.status === 'ready' && adapter.capabilities.includes('history'))
+  return { node, sections: displayedSections, count: all.length, hasHermes, historyAdapters }
+}))
+
+function refreshNodeSessions(nodeId: string, adapters: AgentNode['adapters']) {
+  for (const adapter of adapters) fleet.requestSessionsList(nodeId, adapter.provider)
+}
 
 function nodeIndicatorStatus(nodeId: string, rawStatus: string) {
   if (fleet.nodesWithApprovalPending.has(nodeId)) return 'reconnecting'
@@ -467,11 +582,11 @@ function nodeStatusText(nodeId: string, rawStatus: string) {
 
 function sessionDotClass(sess: ChatSession): string {
   const sKey = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
-  if (fleet.runningBySession[sKey]) return 'is-running'
   const hasPending = fleet.pendingApprovalsList.some(
-    c => c.nodeId === sess.nodeId && c.sessionId === sess.sessionId,
+    c => sessionKey(c.nodeId, c.provider, c.sessionId) === sKey,
   )
   if (hasPending) return 'is-approval'
+  if (fleet.runningBySession[sKey]) return 'is-running'
   return 'is-ready'
 }
 
@@ -880,11 +995,14 @@ function openCreateSession(node?: AgentNode, presetCwd?: string, presetProvider?
   } else {
     // 优先继承当前活跃会话/当前选中的可用引擎，而非总是回退到节点首个引擎
     const preferredProv = fleet.currentSession?.provider ?? fleet.selectedProvider
-    const preferredReady = targetNode?.adapters.find(a => a.provider === preferredProv && a.status === 'ready')
-    const firstReady = targetNode?.adapters.find(a => a.status === 'ready')
+    const candidates = targetNode?.adapters.filter(a => a.status === 'ready' && (!presetCwd || a.provider !== 'hermes'))
+    const preferredReady = candidates?.find(a => a.provider === preferredProv)
+    const firstReady = candidates?.[0]
     newSessionProvider.value = preferredReady?.provider ?? firstReady?.provider ?? preferredProv
   }
-  const sameNodeCwd = fleet.currentSession?.nodeId === targetNode?.id ? fleet.currentSession?.cwd : undefined
+  const sameNodeCwd = newSessionProvider.value !== 'hermes' && fleet.currentSession?.nodeId === targetNode?.id
+    ? fleet.currentSession?.cwd
+    : undefined
   newSessionCwd.value = presetCwd ?? resolveAllowedSessionCwd(targetNode, sameNodeCwd)
   showNewSession.value = true
 }
@@ -905,7 +1023,7 @@ function submitNewSession() {
     nodeId: targetId,
     provider: newSessionProvider.value,
     cwd: resolvedCwd,
-    useWorktree: newSessionWorktree.value,
+    useWorktree: newSessionProvider.value !== 'hermes' && newSessionWorktree.value,
     inheritFromKey: sourceSessionKey,
     onOpened: createInSplit.value
       ? key => { secondaryTabKey.value = key }
@@ -965,10 +1083,9 @@ const mobileInboxSessions = computed(() => {
       const unread = fleet.unreadCountBySession[key] ?? 0
       const diff = fleet.diffBySession[key]
       const diffCount = diff?.summary?.filesChanged ?? (sess.hasDiff ? 1 : 0)
-      const branchName = diff?.branch || (sess.worktreePath ? leafPathName(sess.worktreePath) : '')
-      const dirLabel = sess.cwd ? leafPathName(sess.cwd) : ''
-      const msgs = fleet.messagesBySession[key] ?? []
-      const lastAt = msgs.length ? msgs[msgs.length - 1].createdAt : 0
+      const branchName = sess.provider !== 'hermes' ? sessionDisplayBranch(sess, key) || (sess.worktreePath ? leafPathName(sess.worktreePath) : '') : ''
+      const dirLabel = sess.provider !== 'hermes' && sess.cwd ? leafPathName(sess.cwd) : ''
+      const lastAt = activityAt(sess, key)
       return { key, session: sess, nodeName, hasApproval, isRunning, unread, diffCount, branchName, dirLabel, lastAt }
     })
 
@@ -981,12 +1098,17 @@ const mobileInboxSessions = computed(() => {
   return rows
 })
 
-function formatShortTime(ts?: number): string {
+const mobileSessionGroups = computed(() => [
+  { key: 'workspace', rows: mobileInboxSessions.value.filter(item => item.session.provider !== 'hermes') },
+  { key: 'hermes', rows: mobileInboxSessions.value.filter(item => item.session.provider === 'hermes') },
+].filter(group => group.rows.length))
+
+function formatShortTime(ts?: number, compact = false): string {
   if (!ts) return ''
   const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
   if (diffSec < 60) return '刚刚'
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} ${compact ? '分' : '分钟前'}`
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} ${compact ? '小时' : '小时前'}`
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
@@ -1382,48 +1504,53 @@ function handleClearMemory() {
       </section>
 
       <!-- 会话列表卡片（去头像绿点、去右箭头、精简副标题、角落带动画状态徽章） -->
-      <div v-if="mobileInboxSessions.length" class="mlist mat-solid m-inbox-list">
-        <button
-          v-for="item in mobileInboxSessions"
-          :key="item.key"
-          type="button"
-          class="mrow m-inbox-row"
-          @click="mobileOpenSession(item.key)"
-        >
-          <span
-            class="m-sess-avatar"
-            :class="[
-              getProviderMeta(item.session.provider).accentClass,
-              { 'is-running': item.isRunning, 'is-approval': item.hasApproval },
-            ]"
-          >
-            <OpusIcon :name="getProviderMeta(item.session.provider).icon" />
-          </span>
-          <span class="grow">
-            <span class="m-sess-top">
-              <span class="title">{{ item.session.title }}</span>
-              <span v-if="item.lastAt" class="m-sess-time num">{{ formatShortTime(item.lastAt) }}</span>
-            </span>
-            <span class="m-sess-bottom">
-              <span class="m-sess-sub-mini">
-                <span>{{ item.nodeName }}</span>
-                <template v-if="item.branchName || item.dirLabel"> · {{ item.branchName || item.dirLabel }}</template>
-                <span v-if="item.diffCount > 0" class="m-sess-diff-num num"> · {{ item.diffCount }} 改动</span>
-              </span>
+      <template v-if="mobileSessionGroups.length">
+        <section v-for="group in mobileSessionGroups" :key="group.key" :aria-label="group.key === 'hermes' ? 'Hermes' : '工作区会话'">
+          <div v-if="group.key === 'hermes'" class="sec-t m-hermes-title"><OpusIcon name="hermes" />Hermes</div>
+          <div class="mlist mat-solid m-inbox-list">
+            <button
+              v-for="item in group.rows"
+              :key="item.key"
+              type="button"
+              class="mrow m-inbox-row"
+              @click="mobileOpenSession(item.key)"
+            >
               <span
-                v-if="item.hasApproval || item.isRunning || item.unread > 0"
-                class="m-sess-state-pill"
-                :class="item.hasApproval ? 'is-approval' : item.isRunning ? 'is-running' : 'is-unread'"
+                class="m-sess-avatar"
+                :class="[
+                  getProviderMeta(item.session.provider).accentClass,
+                  { 'is-running': item.isRunning, 'is-approval': item.hasApproval },
+                ]"
               >
-                <span v-if="item.isRunning" class="m-state-spinner" aria-hidden="true" />
-                <OpusIcon v-else-if="item.hasApproval" name="shield" class="m-state-ic is-pulse" />
-                <OpusIcon v-else name="check" class="m-state-ic is-pop" />
-                <span>{{ item.hasApproval ? '待审批' : item.isRunning ? '运行中' : '已完成' }}</span>
+                <OpusIcon :name="getProviderMeta(item.session.provider).icon" />
               </span>
-            </span>
-          </span>
-        </button>
-      </div>
+              <span class="grow">
+                <span class="m-sess-top">
+                  <span class="title">{{ item.session.title }}</span>
+                  <span v-if="item.lastAt" class="m-sess-time num">{{ formatShortTime(item.lastAt) }}</span>
+                </span>
+                <span class="m-sess-bottom">
+                  <span class="m-sess-sub-mini">
+                    <span>{{ item.nodeName }}</span>
+                    <template v-if="item.branchName || item.dirLabel"> · {{ item.branchName || item.dirLabel }}</template>
+                    <span v-if="item.diffCount > 0" class="m-sess-diff-num num"> · {{ item.diffCount }} 改动</span>
+                  </span>
+                  <span
+                    v-if="item.hasApproval || item.isRunning || item.unread > 0"
+                    class="m-sess-state-pill"
+                    :class="item.hasApproval ? 'is-approval' : item.isRunning ? 'is-running' : 'is-unread'"
+                  >
+                    <span v-if="item.isRunning" class="m-state-spinner" aria-hidden="true" />
+                    <OpusIcon v-else-if="item.hasApproval" name="shield" class="m-state-ic is-pulse" />
+                    <OpusIcon v-else name="check" class="m-state-ic is-pop" />
+                    <span>{{ item.hasApproval ? '待审批' : item.isRunning ? '运行中' : '已完成' }}</span>
+                  </span>
+                </span>
+              </span>
+            </button>
+          </div>
+        </section>
+      </template>
 
       <!-- 空状态引导卡片 -->
       <div v-else class="mcard mat-solid m-inbox-empty">
@@ -1748,201 +1875,170 @@ function handleClearMemory() {
 
   <!-- 桌面端：四层节点树（可自由拖拽） + 多标签主对话区 + 可选右分屏/沙箱抽屉（可自由拖拽） -->
   <div v-else ref="workspace" class="fleet-workspace" :class="{ 'is-resizing': isResizing, 'both-panes': treeOpen && rightMode !== 'none' }">
-    <!-- 左栏：Orca 式 四层树（节点 -> allowedRoots 目录 -> Git Worktree -> 会话） -->
+    <!-- 节点、项目、Worktree 和独立 Hermes 会话 -->
     <template v-if="treeOpen">
       <aside class="fleet-tree-pane pane-side" :style="{ width: `${treeWidth}px` }">
-        <div class="tree-top">
+        <div ref="treeToolbar" class="tree-top" @focusout="onTreeToolbarFocusOut" @keydown.esc.stop.prevent="closeTreePanel">
           <div class="tree-top-actions">
-            <strong>节点与会话</strong>
-            <button type="button" class="icon-btn" title="刷新在线状态" @click="fleet.loadNodes(); fleet.connectSocket()">
-              <OpusIcon name="sync" />
-            </button>
-            <button type="button" class="icon-btn" title="拉取选中节点历史会话" @click="fleet.requestSessionsList()">
-              <OpusIcon name="history" />
-            </button>
-            <button type="button" class="icon-btn" title="管理控制节点与已添加智能体" @click="emit('navigate', 'Agents')">
-              <OpusIcon name="settings" />
-            </button>
-            <button type="button" class="icon-btn" title="新建隔离会话" @click="openCreateSession()">
-              <OpusIcon name="plus" />
-            </button>
-          </div>
-          <div class="tree-search">
-            <OpusIcon name="search" />
-            <input v-model="treeQuery" type="search" placeholder="筛选节点、会话或消息正文…" aria-label="筛选节点、会话或消息正文" />
-          </div>
-          <div class="tree-filter-pills" role="group" aria-label="按状态筛选会话">
+            <strong>会话</strong>
             <button
-              v-for="f in [
-                { id: 'all', label: '全部' },
-                { id: 'running', label: '运行中' },
-                { id: 'approval', label: '待审批' },
-                { id: 'diff', label: '有改动' },
-              ] as const"
+              ref="treeSearchButton"
+              type="button"
+              class="icon-btn"
+              :class="{ 'is-active': treePanel === 'search' || treeQuery.trim() }"
+              title="搜索会话"
+              aria-label="搜索会话"
+              aria-controls="tree-session-search"
+              :aria-expanded="treePanel === 'search'"
+              @click="toggleTreePanel('search')"
+            ><OpusIcon name="search" /></button>
+            <button
+              ref="treeFilterButton"
+              type="button"
+              class="icon-btn"
+              :class="{ 'is-active': treePanel === 'filter' || treeFilterMode !== 'all' }"
+              title="筛选会话"
+              aria-label="筛选会话"
+              aria-controls="tree-session-filters"
+              :aria-expanded="treePanel === 'filter'"
+              @click="toggleTreePanel('filter')"
+            >
+              <OpusIcon name="filter" />
+            </button>
+          </div>
+          <div v-show="treePanel === 'search'" id="tree-session-search" class="tree-search">
+            <OpusIcon name="search" />
+            <input ref="treeSearchInput" v-model="treeQuery" type="search" placeholder="搜索节点、会话或消息…" aria-label="搜索节点、会话或消息" />
+            <button v-if="treeQuery" type="button" class="tree-mini-btn tree-search-clear" aria-label="清空搜索" title="清空搜索"
+              @click="treeQuery = ''; treeSearchInput?.focus()"><OpusIcon name="x" /></button>
+          </div>
+          <div v-show="treePanel === 'filter'" id="tree-session-filters" class="tree-filter-pills" role="group" aria-label="按状态筛选会话">
+            <button
+              v-for="f in treeFilters"
               :key="f.id"
               type="button"
               class="tree-filter-pill"
-              :class="{ 'is-active': treeFilterMode === f.id }"
-              @click="treeFilterMode = f.id"
+              :aria-pressed="treeFilterMode === f.id"
+              @click="selectTreeFilter(f.id)"
             >{{ f.label }}</button>
           </div>
         </div>
 
         <div class="tree-body">
-          <div v-for="node in visibleNodes" :key="node.id" class="tree-node-group">
-            <!-- Level 1: 主机节点 -->
-            <div
-              class="tree-node-hdr"
-              :class="{ 'is-selected': fleet.selectedNode?.id === node.id }"
-              @click="fleet.selectNode(node.id)"
-            >
-              <OpusIcon :name="getPlatformIcon(node.platform)" />
-              <span class="tree-node-name">{{ node.name }}</span>
-              <span class="conn" :class="nodeIndicatorStatus(node.id, node.status)">
-                {{ nodeStatusText(node.id, node.status) }}
-              </span>
+          <section v-for="{ node, sections, count, hasHermes, historyAdapters } in nodeTree" :key="node.id" class="tree-node-group">
+            <div class="tree-node-hdr" :class="{ 'is-selected': fleet.selectedNode?.id === node.id }">
+              <button type="button" class="tree-node-select" :title="node.hostname || node.name" @click="fleet.selectNode(node.id)">
+                <OpusIcon :name="node.platform === 'android' || node.platform === 'ios' ? 'phone' : 'server'" />
+                <span class="tree-node-name">{{ node.name }}</span>
+                <span v-if="node.hostname && node.hostname !== node.name" class="tree-hostname">{{ node.hostname }}</span>
+                <span class="tree-count" :title="`${count} 个会话`">{{ count }}</span>
+              </button>
+              <span class="conn" :class="nodeIndicatorStatus(node.id, node.status)" :aria-label="nodeStatusText(node.id, node.status)" :title="nodeStatusText(node.id, node.status)" />
+              <button
+                v-if="node.status === 'online' && historyAdapters.length"
+                type="button"
+                class="tree-mini-btn"
+                title="刷新此节点会话"
+                aria-label="刷新此节点会话"
+                @click="refreshNodeSessions(node.id, historyAdapters)"
+              ><OpusIcon name="sync" /></button>
               <button
                 type="button"
                 class="tree-mini-btn"
                 title="在此节点新建会话"
-                @click.stop="openCreateSession(node)"
-              >+</button>
+                aria-label="在此节点新建会话"
+                @click="openCreateSession(node)"
+              ><OpusIcon name="plus" /></button>
             </div>
 
-            <!-- Level 2: allowedRoots 目录 -->
-            <div v-if="node.allowedRoots.length" class="tree-roots">
-              <div v-for="root in node.allowedRoots" :key="root" class="tree-root-block">
-                <div class="tree-root-hdr" :title="root">
-                  <OpusIcon name="file" />
-                  <span class="tree-root-name">{{ leafPathName(root) }}</span>
-                  <button
-                    type="button"
-                    class="tree-mini-btn"
-                    title="在此目录打开会话"
-                    @click.stop="openCreateSession(node, root)"
-                  >+</button>
-                </div>
-
-                <!-- Level 3 & 4: Worktree 分支与并行会话 -->
-                <div class="tree-branch-list">
-                  <div
-                    v-for="sess in sessionsForNodeRoot(node.id, root)"
-                    :key="sess.sessionId"
-                    class="tree-sess-row"
-                    :class="{ 'is-active': fleet.activeSessionKey === sessionKey(sess.nodeId, sess.provider, sess.sessionId) }"
-                    @click="openSessionTab(sess)"
-                  >
-                    <span class="tree-dot" :class="sessionDotClass(sess)" />
-                    <div class="tree-sess-meta">
-                      <input
-                        v-if="renamingSessionKey === sessionKey(sess.nodeId, sess.provider, sess.sessionId)"
-                        v-model="renameDraft"
-                        type="text"
-                        class="input tree-rename-input"
-                        aria-label="输入新会话名称"
-                        @click.stop
-                        @keydown.enter.prevent="commitRenameSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                        @keydown.esc.prevent="cancelRenameSession"
-                        @blur="commitRenameSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                      />
-                      <template v-else>
-                        <div class="tree-sess-title">{{ sess.title }}</div>
-                        <div v-if="searchSnippetFor(sess)" class="tree-sess-hit">{{ searchSnippetFor(sess) }}</div>
-                      </template>
-                      <div v-if="sess.worktreePath" class="tree-sess-wt">
-                        <OpusIcon name="branch" />
-                        <span>{{ leafPathName(sess.worktreePath) }}</span>
-                      </div>
-                    </div>
-                    <span class="tree-eng" :title="getProviderMeta(sess.provider).label">
-                      <OpusIcon :name="getProviderMeta(sess.provider).icon" class="tree-eng-ic" />
-                    </span>
-                    <button
-                      type="button"
-                      class="tree-mini-btn tree-split-trigger"
-                      title="重命名会话"
-                      aria-label="重命名会话"
-                      @click.stop="startRenameSession(sess)"
-                    ><OpusIcon name="pencil" /></button>
-                    <button
-                      type="button"
-                      class="tree-mini-btn tree-split-trigger"
-                      title="在右侧分屏并行查看"
-                      @click.stop="openSessionInSplit(sess)"
-                    >⊞</button>
-                    <button
-                      type="button"
-                      class="tree-mini-btn tree-split-trigger"
-                      title="关闭并删除会话"
-                      aria-label="删除会话"
-                      @click.stop="handleDeleteSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                    >×</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-else class="tree-empty-roots">节点离线或未上报 allowedRoots</div>
-
-            <!-- 未命中白名单前自动建立的通用会话 -->
-            <div v-if="orphanSessionsForNode(node).length" class="tree-roots">
-              <div class="tree-branch-list">
-                <div
-                  v-for="sess in orphanSessionsForNode(node)"
-                  :key="sess.sessionId"
-                  class="tree-sess-row"
-                  :class="{ 'is-active': fleet.activeSessionKey === sessionKey(sess.nodeId, sess.provider, sess.sessionId) }"
-                  @click="openSessionTab(sess)"
+            <section
+              v-for="section in sections"
+              :key="section.key"
+              class="tree-project"
+              :class="{ 'tree-hermes': section.icon === 'hermes' }"
+              :aria-label="section.name"
+            >
+              <header class="tree-project-hdr" :title="section.root">
+                <button
+                  type="button"
+                  class="tree-project-toggle"
+                  :aria-expanded="!section.collapsed"
+                  :aria-controls="section.id"
+                  @click="toggleTreeSection(section.id)"
                 >
-                  <span class="tree-dot" :class="sessionDotClass(sess)" />
-                  <div class="tree-sess-meta">
-                    <input
-                      v-if="renamingSessionKey === sessionKey(sess.nodeId, sess.provider, sess.sessionId)"
-                      v-model="renameDraft"
-                      type="text"
-                      class="input tree-rename-input"
-                      aria-label="输入新会话名称"
-                      @click.stop
-                      @keydown.enter.prevent="commitRenameSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                      @keydown.esc.prevent="cancelRenameSession"
-                      @blur="commitRenameSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                    />
-                    <template v-else>
-                      <div class="tree-sess-title">{{ sess.title }}</div>
-                      <div v-if="searchSnippetFor(sess)" class="tree-sess-hit">{{ searchSnippetFor(sess) }}</div>
-                    </template>
-                  </div>
-                  <span class="tree-eng" :title="getProviderMeta(sess.provider).label">
-                    <OpusIcon :name="getProviderMeta(sess.provider).icon" class="tree-eng-ic" />
-                  </span>
-                  <button
-                    type="button"
-                    class="tree-mini-btn tree-split-trigger"
-                    title="重命名会话"
-                    aria-label="重命名会话"
-                    @click.stop="startRenameSession(sess)"
-                  ><OpusIcon name="pencil" /></button>
-                  <button
-                    type="button"
-                    class="tree-mini-btn tree-split-trigger"
-                    title="在右侧分屏并行查看"
-                    @click.stop="openSessionInSplit(sess)"
-                  >⊞</button>
-                  <button
-                    type="button"
-                    class="tree-mini-btn tree-split-trigger"
-                    title="关闭并删除会话"
-                    aria-label="删除会话"
-                    @click.stop="handleDeleteSession(sessionKey(sess.nodeId, sess.provider, sess.sessionId))"
-                  >×</button>
-                </div>
-              </div>
-            </div>
-          </div>
+                  <OpusIcon name="chevR" class="tree-project-chevron" />
+                  <OpusIcon :name="section.icon" class="tree-project-icon" />
+                  <span class="tree-project-name">{{ section.name }}</span>
+                </button>
+                <template v-if="section.icon === 'hermes' && hasHermes && node.status === 'online'">
+                  <button type="button" class="tree-mini-btn" title="刷新 Hermes 对话" aria-label="刷新 Hermes 对话"
+                    :disabled="fleet.sessionListStates[`${node.id}::hermes`]?.loading"
+                    @click="fleet.requestSessionsList(node.id, 'hermes')"><OpusIcon name="sync" /></button>
+                  <button type="button" class="tree-mini-btn" title="新建 Hermes 对话" aria-label="新建 Hermes 对话"
+                    @click="openCreateSession(node, undefined, 'hermes')"><OpusIcon name="plus" /></button>
+                </template>
+                <button v-else-if="section.root" type="button" class="tree-mini-btn" title="在此目录打开会话"
+                  aria-label="在此目录打开会话" @click="openCreateSession(node, section.root)"><OpusIcon name="plus" /></button>
+              </header>
+              <div v-show="!section.collapsed" :id="section.id" class="tree-section-body">
+                <p v-if="section.icon === 'hermes' && fleet.sessionListStates[`${node.id}::hermes`]?.error" class="tree-section-note">
+                  {{ fleet.sessionListStates[`${node.id}::hermes`].error }}
+                </p>
+                <p v-else-if="section.icon === 'hermes' && !section.workspaces.length" class="tree-section-note">
+                  {{ node.status !== 'online' ? '节点离线' : fleet.sessionListStates[`${node.id}::hermes`]?.loading ? '正在读取对话…' : '暂无对话' }}
+                </p>
 
+                <div
+                  v-for="space in section.workspaces"
+                  :key="space.path ?? 'sessions'"
+                  class="tree-workspace"
+                  :class="{ 'is-worktree': space.path, 'is-active': space.active }"
+                >
+                  <header v-if="space.path" class="tree-worktree-hdr" :title="space.path">
+                    <OpusIcon name="branch" />
+                    <span>
+                      <strong>{{ leafPathName(space.path) }}</strong>
+                      <small v-if="space.rows[0]?.branch">{{ space.rows[0].branch }}</small>
+                    </span>
+                  </header>
+                  <NodeSessionRow
+                    v-for="row in space.rows"
+                    :key="row.key"
+                    v-model:draft="renameDraft"
+                    :session="row.session"
+                    :status="sessionDotClass(row.session)"
+                    :active="fleet.activeSessionKey === row.key"
+                    :renaming="renamingSessionKey === row.key"
+                    :snippet="searchSnippetFor(row.session)"
+                    :branch="!space.path && section.icon !== 'hermes' ? row.branch : undefined"
+                    :time="formatShortTime(row.activity, true)"
+                    @open="openSessionTab(row.session)"
+                    @rename="startRenameSession(row.session)"
+                    @save="commitRenameSession(row.key)"
+                    @cancel="cancelRenameSession"
+                    @split="openSessionInSplit(row.session)"
+                    @remove="handleDeleteSession(row.key)"
+                  />
+                </div>
+                <button
+                  v-if="section.canShowMore"
+                  type="button"
+                  class="tree-more-btn"
+                  :class="{ 'is-expanded': section.showAll }"
+                  :aria-expanded="section.showAll"
+                  @click="toggleTreeList(section.id)"
+                >
+                  <OpusIcon name="chevD" />
+                  {{ section.showAll ? '显示更少' : '显示更多' }}
+                </button>
+              </div>
+            </section>
+          </section>
           <div v-if="!fleet.nodes.length" class="tree-empty-state">
             <p class="faint">尚未注册任何控制节点。</p>
             <button type="button" class="btn btn-primary btn-sm" @click="emit('navigate', 'Agents')">签发 sn_live_ 凭证</button>
           </div>
+          <p v-else-if="treeIsNarrowed && !nodeTree.some(item => item.sections.length)" class="tree-section-note">没有匹配的会话</p>
         </div>
 
       </aside>
@@ -2416,7 +2512,7 @@ function handleClearMemory() {
   <!-- 新建会话弹窗 -->
   <div v-if="showNewSession" class="modal-scrim" @click.self="showNewSession = false">
       <div class="modal-card card">
-        <h3>新建工作会话</h3>
+        <h3>{{ newSessionProvider === 'hermes' ? '新建 Hermes 对话' : '新建工作会话' }}</h3>
         <div class="field">
           <label>目标机器节点</label>
           <select v-model="newSessionNodeId" @change="changeCreateNode" class="input">
@@ -2431,7 +2527,7 @@ function handleClearMemory() {
           <p v-else class="faint" style="margin:0;font-size:12.5px">当前节点暂无就绪的代理引擎，请确认本地 CLI / 服务运行且鉴权正常。</p>
         </div>
         <div class="field">
-          <label>工作目录（须在节点 allowedRoots 内）</label>
+          <label>{{ newSessionProvider === 'hermes' ? '运行目录' : '工作目录（须在节点 allowedRoots 内）' }}</label>
           <input v-model="newSessionCwd" class="input" placeholder="例如 /Users/you/Projects/Studiolo" />
           <div v-if="fleet.nodes.find(n => n.id === newSessionNodeId)?.allowedRoots.length" class="mchat-chips">
             <button
@@ -2445,13 +2541,13 @@ function handleClearMemory() {
             </button>
           </div>
         </div>
-        <label class="toggle-row">
+        <label v-if="newSessionProvider !== 'hermes'" class="toggle-row">
           <input v-model="newSessionWorktree" type="checkbox" />
           <span>自动创建隔离 Git Worktree（`.studiolo-worktrees/`）防止并发冲突</span>
         </label>
         <div class="modal-foot">
           <button type="button" class="btn btn-ghost" @click="showNewSession = false">取消</button>
-          <button type="button" class="btn btn-primary" :disabled="!readyAt(newSessionNodeId).some(a => a.provider === newSessionProvider)" @click="submitNewSession">启动会话</button>
+          <button type="button" class="btn btn-primary" :disabled="!readyAt(newSessionNodeId).some(a => a.provider === newSessionProvider)" @click="submitNewSession">{{ newSessionProvider === 'hermes' ? '开始对话' : '启动会话' }}</button>
         </div>
       </div>
     </div>
@@ -2524,14 +2620,12 @@ function handleClearMemory() {
 .fleet-workspace > .fleet-right-pane { flex-basis: 0; min-width: 120px; overflow: hidden; container-type: inline-size; }
 .fleet-workspace:has(.fleet-right-pane) .fleet-main { min-width: 120px; }
 .fleet-workspace { overflow: hidden; }
-.fleet-tree-pane { overflow-x: clip; }
+.fleet-tree-pane { overflow-x: clip; container: node-sidebar / inline-size; }
 @starting-style {
   .fleet-workspace > .fleet-tree-pane, .fleet-workspace > .fleet-right-pane { width: 0 !important; }
 }
 .fleet-tree-pane, .fleet-right-pane { transition: width 180ms ease-out; }
 .is-resizing .fleet-tree-pane, .is-resizing .fleet-right-pane { transition: none; }
-.tree-top-actions .icon-btn { width: 23px; flex: none; }
-.tree-top-actions strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: auto; font-size: 13px; }
 .session-actions { position: relative; }
 .session-actions summary { list-style: none; cursor: pointer; }
 .session-actions summary::-webkit-details-marker { display: none; }
@@ -2545,7 +2639,7 @@ function handleClearMemory() {
 .action-list button:last-child { border-top: 1px solid var(--line); }
 
 
-/* 左侧四层节点项目树 */
+/* 节点与会话侧栏 */
 .fleet-tree-pane {
   flex: none;
   display: flex;
@@ -2556,15 +2650,23 @@ function handleClearMemory() {
 .tree-top {
   display: grid;
   gap: 8px;
-  padding: 10px 10px 8px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--line);
 }
+.tree-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.tree-top-actions strong { margin-right: auto; font-size: 13px; }
+.tree-top-actions .icon-btn { width: 26px; height: 26px; flex: none; }
+.tree-top-actions .icon-btn.is-active { background: var(--surface-3); color: var(--text); }
 .tree-search {
   position: relative;
   display: flex;
   align-items: center;
 }
-.tree-search .i {
+.tree-search > .i {
   position: absolute;
   left: 9px;
   width: 14px;
@@ -2576,7 +2678,7 @@ function handleClearMemory() {
   min-width: 0;
   width: 100%;
   height: 30px;
-  padding: 0 10px 0 28px;
+  padding: 0 30px 0 28px;
   border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--solid);
@@ -2584,12 +2686,8 @@ function handleClearMemory() {
   outline: 0;
 }
 .tree-search input:focus { border-color: var(--accent-line); }
-.tree-top-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-}
+.tree-search input::-webkit-search-cancel-button { display: none; }
+.tree-search-clear { position: absolute; right: 4px; }
 
 .tree-body {
   grid-template-columns: minmax(0, 1fr);
@@ -2597,143 +2695,162 @@ function handleClearMemory() {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: thin;
   padding: 10px 8px;
   display: grid;
   gap: 12px;
   align-content: start;
 }
-.tree-node-group, .tree-root-block, .tree-branch-list, .tree-top { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .tree-node-group {
+  min-width: 0;
   display: grid;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
 }
 .tree-node-hdr {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+  gap: 4px;
+  min-height: 38px;
+  padding: 2px 4px 2px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
 }
 .tree-node-hdr.is-selected {
-  background: var(--solid);
-  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--surface-3);
+  border-color: var(--line-strong);
 }
-.tree-node-hdr .i { width: 14px; height: 14px; color: var(--text-2); flex: none; }
-.tree-node-name {
+.tree-node-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 7px 0 9px;
+  border-radius: 8px;
+}
+.tree-node-select .i { width: 16px; height: 16px; color: var(--text-2); flex: none; }
+.tree-node-name, .tree-hostname, .tree-project-name, .tree-worktree-hdr strong, .tree-worktree-hdr small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tree-node-name { font-size: 13px; font-weight: 650; }
+.tree-hostname { color: var(--text-3); font-size: 11px; }
+.tree-count {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 17px;
 }
 .tree-mini-btn {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--r-xs);
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
   color: var(--text-3);
-  font-size: 13px;
   flex: none;
 }
+.tree-mini-btn > .i { width: 13px; height: 13px; }
 .tree-mini-btn:hover { background: var(--surface-3); color: var(--text); }
+.tree-mini-btn:disabled { opacity: .45; }
 
-.tree-roots {
-  padding-left: 6px;
+.tree-project, .tree-section-body, .tree-workspace {
+  display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr);
-  display: grid;
-  gap: 8px;
+  gap: 2px;
 }
-.tree-root-block {
-  display: grid;
-  gap: 4px;
-}
-.tree-root-hdr {
+.tree-project { gap: 4px; }
+.tree-project-hdr {
   display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 30px;
+  padding: 0 5px 0 0;
+  color: var(--text);
+}
+.tree-project-toggle {
+  display: flex;
+  flex: 1;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px;
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--text-2);
-}
-.tree-root-hdr .i { width: 13px; height: 13px; color: var(--text-3); flex: none; }
-.tree-root-name {
-  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 30px;
+  padding: 0 5px;
+  color: inherit;
+  text-align: left;
+  border-radius: 6px;
 }
-.tree-empty-roots {
-  padding: 2px 12px;
-  font-size: 11px;
+.tree-project-toggle:hover { background: var(--surface-3); }
+.tree-project-chevron {
+  width: 11px;
+  height: 11px;
   color: var(--text-3);
+  flex: none;
+  transition: transform 120ms ease;
 }
-.tree-branch-list {
-  margin-left: 11px;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
-  display: grid;
-  gap: 3px;
-}
-.tree-sess-row {
+.tree-project-toggle[aria-expanded="true"] .tree-project-chevron { transform: rotate(90deg); }
+:global([data-motion="reduced"]) .tree-project-chevron { transition: none; }
+.tree-project-icon { width: 17px; height: 17px; color: var(--warn); flex: none; }
+.tree-project-name { flex: 1; font-size: 13px; font-weight: 650; }
+.tree-section-body { gap: 4px; }
+.tree-more-btn {
   display: flex;
+  justify-self: start;
   align-items: center;
-  gap: 7px;
-  padding: 6px 7px;
-  border-radius: var(--r-sm);
-  font-size: 12px;
-  color: var(--text-2);
-  cursor: pointer;
+  gap: 5px;
+  margin-left: 22px;
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--text-3);
+  font-size: 11px;
 }
-.tree-sess-row:hover {
-  background: var(--surface-3);
-  color: var(--text);
+.tree-more-btn:hover { background: var(--surface-3); color: var(--text); }
+.tree-more-btn .i { width: 12px; height: 12px; }
+.tree-more-btn.is-expanded .i { transform: rotate(180deg); }
+.tree-workspace { margin-left: 9px; }
+.tree-workspace.is-worktree {
+  margin: 0 0 2px 12px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
 }
-.tree-sess-row.is-active {
-  background: var(--solid);
-  color: var(--text);
-  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-1);
-}
-.tree-split-trigger { opacity: 0; transition: opacity 120ms; }
-.tree-sess-row:hover .tree-split-trigger { opacity: 1; }
-.tree-sess-meta {
-  flex: 1;
+.tree-workspace.is-worktree.is-active { background: var(--surface-3); border-color: var(--line-strong); }
+.tree-worktree-hdr {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   min-width: 0;
+  padding: 6px 6px 2px;
 }
-.tree-sess-title {
-  font-weight: 550;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tree-worktree-hdr > .i { width: 14px; height: 14px; margin-top: 2px; color: var(--text-2); flex: none; }
+.tree-worktree-hdr span { display: grid; min-width: 0; gap: 2px; }
+.tree-worktree-hdr strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.tree-worktree-hdr small { color: var(--text-3); font-size: 11px; }
+.tree-workspace.is-worktree :deep(.node-session-row) { margin-left: 10px; }
+.tree-hermes {
+  margin-top: 3px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
 }
-.tree-sess-wt {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  color: var(--warn);
+.tree-section-note { margin: 0 10px 4px 34px; color: var(--text-3); font-size: 11px; overflow-wrap: anywhere; }
+@container node-sidebar (max-width: 230px) {
+  .tree-hostname { display: none; }
 }
-.tree-sess-wt .i { width: 11px; height: 11px; }
-.tree-sess-hit {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tree-rename-input {
-  width: 100%;
-  height: 24px;
-  padding: 2px 6px;
-  font-size: 12px;
+@container node-sidebar (max-width: 170px) {
+  .tree-count { display: none; }
+  .tree-workspace, .tree-workspace.is-worktree { margin-left: 2px; }
+  .tree-workspace.is-worktree :deep(.node-session-row) { margin-left: 2px; }
 }
 .diff-count-dot {
   padding: 0 5px;
@@ -2742,16 +2859,6 @@ function handleClearMemory() {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.tree-eng {
-  font-size: 10px;
-  font-weight: 650;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--surface-3);
-  color: var(--text-3);
-  flex: none;
-}
-
 .tree-dot {
   width: 7px;
   height: 7px;
@@ -3184,12 +3291,14 @@ function handleClearMemory() {
   opacity: 1;
 }
 .tree-filter-pills {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
-  padding-top: 2px;
+}
+@container node-sidebar (max-width: 190px) {
+  .tree-filter-pills { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .tree-filter-pill {
-  flex: 1;
   padding: 2px 4px;
   border: 1px solid transparent;
   border-radius: var(--r-xs);
@@ -3203,7 +3312,7 @@ function handleClearMemory() {
   background: var(--surface-3);
   color: var(--text-2);
 }
-.tree-filter-pill.is-active {
+.tree-filter-pill[aria-pressed="true"] {
   background: var(--solid);
   border-color: var(--line);
   color: var(--text);
@@ -3246,7 +3355,6 @@ function handleClearMemory() {
   height: 12px;
   color: var(--text-3);
 }
-.tree-eng,
 .chat-tab-eng {
   display: inline-flex;
   align-items: center;
@@ -3625,6 +3733,8 @@ function handleClearMemory() {
 }
 .m-fanout-link:active { background: var(--surface-3); }
 
+.m-hermes-title { display: flex; align-items: center; gap: 7px; }
+.m-hermes-title .i { width: 16px; height: 16px; }
 .m-inbox-list {
   margin-bottom: 14px;
 }

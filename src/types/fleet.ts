@@ -268,6 +268,9 @@ export interface ChatSession {
   title: string
   cwd: string
   worktreePath?: string | null
+  branch?: string
+  model?: string
+  updatedAt?: string | number
   hasDiff?: boolean
   todoCount?: number
 }
@@ -515,7 +518,7 @@ export interface FleetWsEvent {
   data?: string
   exitCode?: number
   nodes?: AgentNode[]
-  sessions?: Array<{ sessionId: string; provider: AdapterProvider; title?: string; cwd?: string }>
+  sessions?: Array<Pick<ChatSession, 'sessionId' | 'provider' | 'worktreePath' | 'branch' | 'model' | 'updatedAt'> & { title?: string; cwd?: string }>
   messages?: Array<{
     role: string
     text: string

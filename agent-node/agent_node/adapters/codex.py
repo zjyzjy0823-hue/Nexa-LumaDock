@@ -191,8 +191,10 @@ class CodexAdapter(AgentAdapter):
             {
                 "sessionId": t.get("id"),
                 "provider": self.provider,
-                "title": t.get("preview") or t.get("id"),
+                "title": t.get("name") or t.get("preview") or t.get("id"),
                 "cwd": t.get("cwd", ""),
+                "branch": (t.get("gitInfo") or {}).get("branch"),
+                "updatedAt": t.get("updatedAt"),
             }
             for t in threads
             if isinstance(t, dict) and t.get("id")

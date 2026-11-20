@@ -303,7 +303,9 @@ export const useFleetStore = defineStore('fleet', () => {
   const pendingRunPrompts = new Map<string, { text: string; model?: string; startedAt?: number }>()
   const pendingMcpRequests = new Map<string, string>()
   const mcpErrorsByTarget = ref<Record<string, string>>({})
-  const autoPulledNodes = new Set<string>()
+  const autoPulledProviders = new Map<string, Set<AdapterProvider>>()
+  const pendingSessionLists = new Map<string, string>()
+  const sessionListStates = ref<Record<string, { loading?: boolean; error?: string }>>({})
   const sentRequestIds = new Set<string>()
   const steerSessionKeys = new Set<string>()
   const pendingOpenQueue: Array<{
@@ -440,7 +442,9 @@ export const useFleetStore = defineStore('fleet', () => {
     pendingRunPrompts.clear()
     pendingMcpRequests.clear()
     mcpErrorsByTarget.value = {}
-    autoPulledNodes.clear()
+    autoPulledProviders.clear()
+    pendingSessionLists.clear()
+    sessionListStates.value = {}
     pendingOpenQueue.length = 0
   }
 
@@ -505,6 +509,7 @@ export const useFleetStore = defineStore('fleet', () => {
           syncProviderForNode(firstOnline)
         }
       }
+      if (wsState.value === 'online') fetched.forEach(autoPullSessionsForNode)
     } catch (err) {
       if (fleetRoute.value !== route) return
       if (linkedCore.value && err instanceof ApiError && err.status === 401) coreSession.value = null
@@ -606,6 +611,9 @@ export const useFleetStore = defineStore('fleet', () => {
     ws.onclose = ev => {
       if (socket !== ws || fleetRoute.value !== route) return
       socket = null
+      autoPulledProviders.clear()
+      for (const target of pendingSessionLists.values()) sessionListStates.value[target] = {}
+      pendingSessionLists.clear()
       if (intentionalClose || ev.code === 4401) {
         wsState.value = 'disconnected'
         if (ev.code === 4401) {
@@ -712,16 +720,13 @@ export const useFleetStore = defineStore('fleet', () => {
   }
 
   function autoPullSessionsForNode(node: AgentNode) {
-    if (node.status !== 'online' || autoPulledNodes.has(node.id)) return
-    const hasSessions = Object.values(sessionsByKey.value).some(s => s.nodeId === node.id)
-    if (hasSessions) {
-      autoPulledNodes.add(node.id)
-      return
+    if (node.status !== 'online') return
+    const pulled = autoPulledProviders.get(node.id) ?? new Set<AdapterProvider>()
+    for (const adapter of node.adapters) {
+      if (adapter.status !== 'ready' || !adapter.capabilities.includes('history') || pulled.has(adapter.provider)) continue
+      if (requestSessionsList(node.id, adapter.provider)) pulled.add(adapter.provider)
     }
-    const readyAdapter = node.adapters.find(a => a.status === 'ready') ?? node.adapters[0]
-    if (!readyAdapter || !readyAdapter.capabilities.includes('history')) return
-    autoPulledNodes.add(node.id)
-    requestSessionsList(node.id, readyAdapter.provider)
+    autoPulledProviders.set(node.id, pulled)
   }
 
   // ---------------- 事件归并（WS 增量 & 控制帧） ----------------
@@ -736,7 +741,7 @@ export const useFleetStore = defineStore('fleet', () => {
       nodes.value = nodes.value.map(existing => {
         const live = onlineMap.get(existing.id)
         if (!live) {
-          autoPulledNodes.delete(existing.id)
+          autoPulledProviders.delete(existing.id)
           return existing.status === 'revoked' ? existing : { ...existing, status: 'offline' }
         }
         return {
@@ -758,7 +763,14 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'NodePresence' && frame.nodeId) {
       const liveStatus = (frame as unknown as { status?: string }).status ?? 'offline'
-      if (liveStatus !== 'online') autoPulledNodes.delete(frame.nodeId)
+      if (liveStatus !== 'online') {
+        autoPulledProviders.delete(frame.nodeId)
+        for (const [requestId, target] of pendingSessionLists) {
+          if (!target.startsWith(`${frame.nodeId}::`)) continue
+          pendingSessionLists.delete(requestId)
+          sessionListStates.value[target] = {}
+        }
+      }
       nodes.value = nodes.value.map(n => {
         if (n.id !== frame.nodeId) return n
         return {
@@ -775,6 +787,12 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (frame.requestId && ['Failed', 'NodeUnavailable', 'Error'].includes(etype)) {
+      const listTarget = pendingSessionLists.get(frame.requestId)
+      if (listTarget) {
+        pendingSessionLists.delete(frame.requestId)
+        sessionListStates.value[listTarget] = { error: frame.message || '无法读取会话列表' }
+        return
+      }
       const mcpTarget = pendingMcpRequests.get(frame.requestId)
       if (mcpTarget) {
         pendingMcpRequests.delete(frame.requestId)
@@ -870,6 +888,9 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'SessionsSnapshot' && nodeId && Array.isArray(frame.sessions)) {
+      const target = frame.requestId ? pendingSessionLists.get(frame.requestId) : undefined
+      if (frame.requestId) pendingSessionLists.delete(frame.requestId)
+      sessionListStates.value[target || `${nodeId}::${provider}`] = {}
       const next = { ...sessionsByKey.value }
       const added: Array<{ k: string; p: AdapterProvider }> = []
       for (const s of frame.sessions) {
@@ -892,7 +913,11 @@ export const useFleetStore = defineStore('fleet', () => {
           nodeId,
           provider: p,
           title: resolvedTitle,
-          cwd: s.cwd || '',
+          cwd: s.cwd || next[k]?.cwd || '',
+          worktreePath: s.worktreePath || next[k]?.worktreePath,
+          branch: s.branch || next[k]?.branch,
+          model: s.model || next[k]?.model,
+          updatedAt: s.updatedAt ?? next[k]?.updatedAt,
         }
         added.push({ k, p })
       }
@@ -1735,13 +1760,23 @@ export const useFleetStore = defineStore('fleet', () => {
   function requestSessionsList(nodeId?: string, provider?: AdapterProvider) {
     const nid = nodeId ?? selectedNode.value?.id
     const prov = provider ?? selectedProvider.value
-    if (!nid) return
-    sendWsCommand({
+    if (!nid) return false
+    const target = `${nid}::${prov}`
+    if (sessionListStates.value[target]?.loading) return true
+    const requestId = createRequestId()
+    const sent = sendWsCommand({
       type: 'sessions.list',
       nodeId: nid,
       provider: prov,
-      requestId: createRequestId(),
-    })
+      requestId,
+      ...(prov === 'hermes' ? { limit: 100 } : {}),
+    }, false)
+    if (sent) pendingSessionLists.set(requestId, target)
+    sessionListStates.value[target] = sent ? { loading: true } : { error: '节点连接尚未就绪' }
+    if (sent) setTimeout(() => {
+      if (pendingSessionLists.delete(requestId)) sessionListStates.value[target] = { error: '读取会话列表超时' }
+    }, 65_000)
+    return sent
   }
 
   /**
@@ -3150,6 +3185,7 @@ export const useFleetStore = defineStore('fleet', () => {
     sessionsByKey,
     allSessions,
     sessionsForCurrentNode,
+    sessionListStates,
     currentSession,
     messagesBySession,
     currentMessages,

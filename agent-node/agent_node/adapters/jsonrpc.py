@@ -39,9 +39,9 @@ class StdioJsonRpcProcess:
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._write_lock = asyncio.Lock()
 
-    async def start(self) -> None:
+    async def start(self) -> bool:
         if self._proc is not None and self._proc.returncode is None:
-            return
+            return False
         self._proc = await asyncio.create_subprocess_exec(
             *self.command,
             cwd=str(self.cwd),
@@ -50,6 +50,7 @@ class StdioJsonRpcProcess:
             stderr=asyncio.subprocess.PIPE,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
+        return True
 
     async def stop(self) -> None:
         if self._reader_task is not None:
