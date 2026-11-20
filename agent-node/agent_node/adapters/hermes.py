@@ -53,6 +53,10 @@ class HermesAdapter(AgentAdapter):
         self._turns: dict[str, tuple[str, EventEmitter]] = {}
         self._approvals: dict[str, ApprovalCallback] = {}
         self._tool_starts: dict[tuple[str, str], float] = {}
+        # ACP 只在会话响应里给出模型清单（SessionModelState），所以把最近一次读到的缓存下来，
+        # 供“模型选择器”（models.list）使用；current 与 ACP 的真实当前模型保持一致。
+        self._picker_models: list[dict[str, Any]] | None = None
+        self._current_model: str | None = None
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
         async with self._init_lock:
@@ -141,8 +145,74 @@ class HermesAdapter(AgentAdapter):
         if cwd is None:
             raise PathOutsideAllowedRootsError("Hermes 会话目录不在节点允许范围内")
         cwd = ensure_allowed_path(cwd, self.allowed_roots)
-        await proc.call("session/load", {"sessionId": sid, "cwd": str(cwd), "mcpServers": []})
+        self._remember_models(await proc.call("session/load", {"sessionId": sid, "cwd": str(cwd), "mcpServers": []}))
         self._loaded_sessions.add(sid)
+
+    def _remember_models(self, response: dict[str, Any] | None) -> None:
+        """缓存 ACP 会话响应里的 SessionModelState（availableModels / currentModelId）。"""
+        if not isinstance(response, dict):
+            return
+        state = response.get("models") or {}
+        if not isinstance(state, dict):
+            return
+        current = state.get("currentModelId") or state.get("current_model_id")
+        if current:
+            self._current_model = str(current)
+        rows = state.get("availableModels") or state.get("available_models") or []
+        models: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            model_id = str(row.get("modelId") or row.get("model_id") or "")
+            if not model_id:
+                continue
+            models.append({
+                "id": model_id,
+                "label": str(row.get("name") or model_id),
+                "provider": model_id.split(":", 1)[0] if ":" in model_id else "",
+                "description": row.get("description"),
+            })
+        if models:
+            self._picker_models = models
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        """ACP 没有独立的模型清单接口：优先复用已知会话，其次最近一个会话，都没有才新开一个。"""
+        if self._picker_models is not None:
+            return self._picker_models
+        if self.mode == "gateway" and self.serve_url:
+            return []
+        proc = await self._ensure_acp()
+        sid = next(iter(self._session_cwds), None)
+        cwd = self._session_cwds.get(sid) if sid else None
+        if sid and cwd is not None:
+            try:
+                self._remember_models(
+                    await proc.call("session/load", {"sessionId": sid, "cwd": str(cwd), "mcpServers": []})
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                rows = await self.list_sessions(limit=1)
+            except Exception:
+                rows = []
+            candidate = rows[0] if rows else None
+            if candidate and candidate.get("cwd"):
+                try:
+                    self._remember_models(await proc.call("session/load", {
+                        "sessionId": candidate["sessionId"], "cwd": candidate["cwd"], "mcpServers": [],
+                    }))
+                    self._session_cwds.setdefault(candidate["sessionId"], Path(candidate["cwd"]))
+                except Exception:
+                    pass
+        if self._picker_models is None:
+            res = await proc.call("session/new", {"cwd": str(self.allowed_roots[0]), "mcpServers": []})
+            self._remember_models(res)
+            new_sid = str((res or {}).get("sessionId") or "")
+            if new_sid:
+                self._session_cwds.setdefault(new_sid, self.allowed_roots[0])
+                self._loaded_sessions.add(new_sid)
+        return self._picker_models or []
 
     async def open_session(
         self,
@@ -166,6 +236,7 @@ class HermesAdapter(AgentAdapter):
             sid = str((res or {}).get("sessionId") or sid_seed)
             self._session_cwds[sid] = eff_cwd
             self._loaded_sessions.add(sid)
+            self._remember_models(res)
         return {"sessionId": sid, "provider": self.provider, "cwd": str(eff_cwd), "worktreePath": wt_path, "title": f"Hermes ({eff_cwd.name})"}
 
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -211,6 +282,11 @@ class HermesAdapter(AgentAdapter):
             self._approvals[session_id] = request_approval
         try:
             prompt_text = merge_prompt_with_attachments(text, attachments)
+            requested_model = str((options or {}).get("model") or "")
+            if requested_model and requested_model != self._current_model and self.mode != "gateway":
+                # ACP 的模型切换是会话级的（session/set_model），必须在空闲且发送 prompt 之前完成。
+                await proc.call("session/set_model", {"sessionId": session_id, "modelId": requested_model})
+                self._current_model = requested_model
             await emit({"type": "Accepted", "sessionId": session_id, "runId": request_id, "requestId": request_id, "provider": self.provider})
             prompt_res = await proc.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": prompt_text}]})
             if isinstance(prompt_res, dict) and isinstance(prompt_res.get("usage"), dict):
