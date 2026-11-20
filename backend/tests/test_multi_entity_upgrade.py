@@ -1,5 +1,6 @@
 """Upgrade an already seeded v0.5.3 database without reseeding Ledger."""
 from datetime import datetime, timezone
+from helpers import migration_head
 import os
 from pathlib import Path
 import subprocess
@@ -45,7 +46,7 @@ def verify_upgrade(database_url, backend, mode):
     upgrade("head")
     engine = create_engine(database_url)
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
         assert conn.scalar(text("SELECT queue_seed_version FROM local_sync_state")) == 1
         assert conn.scalar(text("SELECT bootstrap_version FROM sync_workspace_state")) == 1
         for name in ("website_categories", "websites", "data_collections", "data_records"):
