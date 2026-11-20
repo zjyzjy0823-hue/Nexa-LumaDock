@@ -811,7 +811,11 @@ export const useFleetStore = defineStore('fleet', () => {
     const provider = (frame.provider ?? selectedProvider.value) as AdapterProvider
 
     if (etype === 'ModelsSnapshot' && nodeId && Array.isArray(frame.models)) {
-      catalogs.value[`${nodeId}::${provider}`] = { models: frame.models, message: frame.message }
+      // 适配器可能漏字段（例如没有思考档位的 ACP 后端）；efforts 必填是 FleetModel 契约，
+      // 缺了会让模型选择器渲染时 entry.efforts.length 抛错并连带整块会话视图白屏。
+      const models = (frame.models as FleetModel[]).map(model => ({ ...model, efforts: model.efforts ?? [] }))
+      catalogs.value[`${nodeId}::${provider}`] = { models, message: frame.message }
+
       applyDefaultModelPref(`${nodeId}::${provider}`, nodeId, provider)
       for (const [k, s] of Object.entries(sessionsByKey.value)) {
         if (s.nodeId === nodeId && s.provider === provider) {

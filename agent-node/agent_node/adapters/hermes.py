@@ -170,6 +170,9 @@ class HermesAdapter(AgentAdapter):
                 "id": model_id,
                 "label": str(row.get("name") or model_id),
                 "provider": model_id.split(":", 1)[0] if ":" in model_id else "",
+                # FleetModel 契约要求 efforts 必填；ACP 的 ModelInfo 没有思考档位，
+                # 漏掉这个字段会让前端在选择器渲染时 entry.efforts.length 抛错。
+                "efforts": [],
                 "description": row.get("description"),
             })
         if models:
