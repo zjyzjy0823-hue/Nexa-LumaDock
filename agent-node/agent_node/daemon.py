@@ -1062,7 +1062,11 @@ class AgentNodeDaemon:
                 }
             )
         except Exception as err:
-            await send_back({"type": "Failed", "code": "node_execution_error", "provider": provider, "sessionId": frame.get("sessionId"), "message": str(err)})
+            # 空的 str(err) 会让 app 只显示一个没有原因的 node_execution_error，
+            # 所以把完整堆栈写进节点日志，排查时不用再猜。
+            log.exception("command %s failed (provider=%s)", frame.get("type"), provider)
+            detail = str(err) or type(err).__name__
+            await send_back({"type": "Failed", "code": "node_execution_error", "provider": provider, "sessionId": frame.get("sessionId"), "message": detail})
 
     async def run_once(self) -> None:
         hello = await self.build_hello()

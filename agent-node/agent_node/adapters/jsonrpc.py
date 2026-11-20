@@ -42,6 +42,26 @@ class StdioJsonRpcProcess:
         self._write_lock = asyncio.Lock()
         self._start_lock = asyncio.Lock()
 
+    @property
+    def started(self) -> bool:
+        """是否已经拉起过子进程。
+
+        未启动的实例（调用方先塞进来再交给适配器启动）内部还没有子进程，此时不能
+        把它当成"死进程"丢掉。
+        """
+        return self._proc is not None
+
+    def is_alive(self) -> bool:
+        """子进程还在跑且 stdin 管道可用。
+
+        ``returncode is None`` 只说明"没被回收"，进程死了但没人 wait 时也可能为 None，
+        所以还要看管道是否已关闭——否则会拿着一个死句柄一直报空错误。
+        """
+        proc = self._proc
+        if proc is None or proc.returncode is not None:
+            return False
+        return proc.stdin is not None and not proc.stdin.is_closing()
+
     async def start(self) -> bool:
         async with self._start_lock:
             if self._proc is not None and self._proc.returncode is None:

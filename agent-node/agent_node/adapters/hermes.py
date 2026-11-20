@@ -62,6 +62,11 @@ class HermesAdapter(AgentAdapter):
 
     async def _ensure_acp(self) -> StdioJsonRpcProcess:
         async with self._init_lock:
+            if self._proc is not None and self._proc.started and not self._proc.is_alive():
+                # 子进程死了/管道断了就换一个：否则会拿着死句柄一直抛空错误的
+                # node_execution_error，app 上直接显示"发不出去"。
+                await self._proc.stop()
+                self._proc = None
             if self._proc is None:
                 self._proc = StdioJsonRpcProcess(
                     [self.command, "acp"],
