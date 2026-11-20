@@ -600,7 +600,7 @@ onUnmounted(() => {
           @action="emit('action', $event)"
         >
           <span class="bm-fav" :class="{ 'bm-fav--img': showBookmarkIcon(site) }">
-            <img v-if="showBookmarkIcon(site)" class="opus-favicon" :src="site.icon ?? undefined" alt="" @error="failedBookmarkIcons[site.id] = site.icon" />
+            <img v-if="showBookmarkIcon(site)" class="opus-favicon" :src="site.icon ?? undefined" alt="" @error="failedBookmarkIcons[site.id] = site.icon ?? null" />
             <template v-else>{{ site.name[0]?.toUpperCase() }}</template>
           </span>
           <span v-if="bookmarkStyle === 'pill'" class="bm-name">{{ site.name }}</span>
