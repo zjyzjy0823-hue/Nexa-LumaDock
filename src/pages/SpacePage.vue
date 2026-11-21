@@ -6,7 +6,7 @@ import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import SpacePasswordGate from '../components/space/SpacePasswordGate.vue'
 import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { useSpaceStore } from '../stores/space'
-import { fetchSpaceDeviceGrants, setSpaceDeviceGrant, type SpaceDeviceGrant, type SpaceTier, type SpaceTokenScope, type StandardSpaceConflict } from '../services/spaceApi'
+import { fetchSpaceDeviceGrants, inferSpaceTextTitle, setSpaceDeviceGrant, type SpaceDeviceGrant, type SpaceTier, type SpaceTokenScope, type StandardSpaceConflict } from '../services/spaceApi'
 import type { SpaceEntryType } from '../services/spaceCrypto'
 
 const props = defineProps<{ mobile: boolean }>()
@@ -252,15 +252,6 @@ function parseTags(raw: string): string[] {
     .filter(Boolean)
 }
 
-function inferTitleFromText(text: string): string {
-  const firstLine = text
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(Boolean)
-  if (!firstLine) return '未命名文本'
-  return firstLine.length > 42 ? `${firstLine.slice(0, 42)}…` : firstLine
-}
-
 // ---------------------------------------------------------------------------
 // 视图与画布切换
 // ---------------------------------------------------------------------------
@@ -464,7 +455,7 @@ async function handleArchiveCurrentSpace() {
 
 async function submitComposeText(password?: string) {
   const rawText = composeText.value
-  const finalTitle = composeTitle.value.trim() || inferTitleFromText(rawText)
+  const finalTitle = composeTitle.value.trim() || inferSpaceTextTitle(rawText)
   composeBusy.value = true
   try {
     await spaceStore.createEntry({
@@ -744,7 +735,7 @@ async function saveEditStandard() {
   try {
     await spaceStore.updateStandardEntry(
       currentDetail.value,
-      editTitle.value.trim() || inferTitleFromText(editText.value),
+      editTitle.value.trim() || inferSpaceTextTitle(editText.value),
       editText.value,
       parseTags(editTags.value),
     )
@@ -985,6 +976,11 @@ onUnmounted(() => {
   window.removeEventListener('paste', handleGlobalPaste)
   clearUploadQueue()
   spaceStore.clearSensitiveMemory()
+})
+
+defineExpose({
+  openSpace: handleSelectSpace,
+  openSpaceList: () => { mobilePanel.value = 'spaces' },
 })
 </script>
 

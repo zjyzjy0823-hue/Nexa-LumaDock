@@ -79,6 +79,7 @@ watch(currentPage, page => {
   if (page !== 'Chat') hideMobileTabbar.value = false
 })
 const shellRef = ref<InstanceType<typeof OpusShell> | null>(null)
+const spacePageRef = ref<InstanceType<typeof SpacePage> | null>(null)
 const storedPreviewMode = localStorage.getItem('studiolo:preview-mode')
 const previewMode = ref<'light' | 'dark' | null>(
   storedPreviewMode === 'light' || storedPreviewMode === 'dark' ? storedPreviewMode : null
@@ -215,6 +216,11 @@ async function navigate(page: string, section?: 'sync', back = false) {
     await transition.updateCallbackDone
   } else await update()
 }
+async function openQuickSpace(spaceId?: string) {
+  await navigate('Space')
+  if (spaceId) await spacePageRef.value?.openSpace(spaceId)
+  else spacePageRef.value?.openSpaceList()
+}
 function onLocationChange() {
   const target = pageFromLocation()
   const toSync = new URLSearchParams(window.location.search).get('section') === 'sync'
@@ -323,11 +329,11 @@ onUnmounted(() => {
     </div>
   </template>
   <OpusShell v-else ref="shellRef" :page="currentPage" :mobile="mobile" :hide-mobile-tabbar="hideMobileTabbar" :toast="toast" :toast-key="toastKey" :theme="theme" :mode="mode" :reduced-motion="motionReduced"
-    @navigate="navigate" @create="create" @action="showToast" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
+    @navigate="navigate" @create="create" @action="showToast" @open-space="openQuickSpace" @sync-settings="openSyncSettings" @back="back" @toggle-mode="toggleColorMode" @toggle-theme="toggleWorkbenchTheme" @set-theme="setThemeWithToast" @toggle-reduced-motion="setReducedMotionWithToast(!motionReduced)">
     <template #default="{ syncStatus, syncLabel, syncKind, openSync, inLibrary }">
       <TodayPage v-if="currentPage === 'Home'" :mobile="mobile" :sync-status="syncStatus" :sync-label="syncLabel" :sync-kind="syncKind" @navigate="navigate" @action="showToast" @create="create" @sync="openSync" @ask-agent="shellRef?.openDock()" />
       <ChatPage v-else-if="currentPage === 'Chat'" :mobile="mobile" @navigate="navigate" @action="showToast" @mobile-fullscreen="hideMobileTabbar = $event" />
-      <SpacePage v-else-if="currentPage === 'Space'" :mobile="mobile" @action="showToast" @back="back" />
+      <SpacePage v-else-if="currentPage === 'Space'" ref="spacePageRef" :mobile="mobile" @action="showToast" @back="back" />
       <div v-else-if="inLibrary" :class="libraryDetailOpen ? 'opus-subpage-host' : 'mpage'">
         <template v-if="!libraryDetailOpen">
           <div class="mhead"><h1>资料</h1><span class="spacer"></span><button class="mpill" type="button" @click="openSync"><OpusSyncBadge :kind="syncKind" :label="syncLabel" /></button></div>

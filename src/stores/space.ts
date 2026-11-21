@@ -671,6 +671,7 @@ export const useSpaceStore = defineStore('space', () => {
 
   /** 创建条目（自动适配 standard / protected / e2ee 三档）。 */
   async function createEntry(input: {
+    spaceId?: string
     entryType: SpaceEntryType
     title: string
     fileName?: string
@@ -681,8 +682,22 @@ export const useSpaceStore = defineStore('space', () => {
     password?: string
   }): Promise<SpaceEntryDetail> {
     requireUserSpaceAccess()
-    const space = selectedSpace.value
+    const explicitSpace = input.spaceId !== undefined
+    const space = explicitSpace ? spaces.value.find(item => item.id === input.spaceId) : selectedSpace.value
     if (!space) throw new Error('请先选择一个共享空间')
+
+    async function finishCreate(target: SpaceRouteConfig, created: SpaceEntryDetail) {
+      const expectedSelection = explicitSpace ? undefined : created.spaceId
+      checkRoute(target, expectedSelection)
+      if (selectedSpaceId.value === created.spaceId) await refreshCurrentSpace()
+      else await syncSpaceSummary(created.spaceId, entriesRequest)
+      checkRoute(target, expectedSelection)
+      if (!explicitSpace) {
+        selectedEntryId.value = created.id
+        selectedEntryDetail.value = created
+      }
+      return created
+    }
 
     const mime = input.file?.type || input.mime || (input.entryType === 'file' ? 'application/octet-stream' : 'text/plain')
     const fileName = input.file?.name || input.fileName
@@ -702,7 +717,7 @@ export const useSpaceStore = defineStore('space', () => {
         locked: false, contentBase64: null, contentSha256: '', conflictRevisions: [], wrappedDek: null,
         encryptedManifestB64: null, blobId: null, chunkCount: 0, chunkSize: DEFAULT_CHUNK_SIZE,
       }
-      await saveStandardIntent(local, { ...newIntent(draft), operation: 'create', draft, file: input.file })
+      await saveStandardIntent(local, { ...newIntent(draft), operation: 'create', draft, file: input.file }, !explicitSpace)
       return draft
     }
 
@@ -791,12 +806,7 @@ export const useSpaceStore = defineStore('space', () => {
           plaintextSize: rawBytes.byteLength,
           contentSha256: encryptedChunks[0]?.sha256 ?? '',
         })
-        checkRoute(route, space.id)
-        await refreshCurrentSpace()
-        checkRoute(route, space.id)
-        selectedEntryId.value = created.id
-        selectedEntryDetail.value = created
-        return created
+        return await finishCreate(route, created)
       } finally {
         zeroizeBytes(spaceKey, dek)
       }
@@ -824,12 +834,7 @@ export const useSpaceStore = defineStore('space', () => {
       payload.password = input.password
     }
     const created = await createSpaceEntryApi(route, space.id, payload)
-    checkRoute(route, space.id)
-    await refreshCurrentSpace()
-    checkRoute(route, space.id)
-    selectedEntryId.value = created.id
-    selectedEntryDetail.value = created
-    return created
+    return finishCreate(route, created)
   }
 
   /** 按次输入密码解密 E2EE 当前目录（仅驻留内存，离页即清）。 */
@@ -1144,21 +1149,26 @@ export const useSpaceStore = defineStore('space', () => {
     }
   }
 
-  async function saveStandardIntent(local: SpaceReplica, mutation: SpaceMutation) {
+  async function saveStandardIntent(local: SpaceReplica, mutation: SpaceMutation, selectDraft = true) {
     // Vue wraps displayed records in proxies, while IndexedDB needs cloneable values.
     const record = mutation.operation === 'delete' ? mutation
       : { ...mutation, draft: JSON.parse(JSON.stringify(mutation.draft)) as SpaceEntryDetail }
     await local.enqueue(record)
-    if (local !== replica.value || mutation.spaceId !== selectedSpaceId.value) return
+    if (local !== replica.value) return
     await queueState(local)
-    if (mutation.operation === 'delete') {
-      entries.value = entries.value.filter(item => item.id !== mutation.entryId)
-      selectedEntryId.value = ''
-      selectedEntryDetail.value = null
-    } else {
-      entries.value = [mutation.draft, ...entries.value.filter(item => item.id !== mutation.entryId)]
-      selectedEntryId.value = mutation.entryId
-      selectedEntryDetail.value = mutation.draft
+    if (local !== replica.value) return
+    if (mutation.spaceId === selectedSpaceId.value) {
+      if (mutation.operation === 'delete') {
+        entries.value = entries.value.filter(item => item.id !== mutation.entryId)
+        selectedEntryId.value = ''
+        selectedEntryDetail.value = null
+      } else {
+        entries.value = [mutation.draft, ...entries.value.filter(item => item.id !== mutation.entryId)]
+        if (selectDraft) {
+          selectedEntryId.value = mutation.entryId
+          selectedEntryDetail.value = mutation.draft
+        }
+      }
     }
     void syncPending().then(() => {
       if (local === replica.value && mutation.spaceId === selectedSpaceId.value && !offline.value) void refreshCurrentSpace()

@@ -11,6 +11,12 @@ export type SpaceTier = 'standard' | 'protected' | 'e2ee'
 export type SpaceTokenKind = 'standard' | 'vault'
 export type SpaceTokenScope = 'read' | 'write'
 
+export function inferSpaceTextTitle(text: string): string {
+  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean)
+  if (!firstLine) return '未命名文本'
+  return firstLine.length > 42 ? `${firstLine.slice(0, 42)}…` : firstLine
+}
+
 export interface SpaceCapabilities {
   enabled: boolean
   protectedAvailable: boolean
