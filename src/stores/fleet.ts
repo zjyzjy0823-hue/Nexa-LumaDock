@@ -4,7 +4,7 @@
 
 import { defineStore } from 'pinia'
 import { Channel } from '@tauri-apps/api/core'
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
 import { androidInvoke, isAndroidLocal } from '../desktop/androidLocal'
 import { downloadAndDecryptBlob, encryptAndUploadFile } from '../services/blobTransfer'
@@ -218,6 +218,7 @@ export const useFleetStore = defineStore('fleet', () => {
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyWrites: Promise<void> = Promise.resolve()
   let storage: FleetLocalStore | undefined
+  const localCacheRequested = ref(false)
   const SEND_SHORTCUT_KEY = 'studiolo:fleet-send-shortcut:v1'
   const sendShortcut = ref<'enter' | 'ctrl-enter'>(
     typeof window !== 'undefined' && window.localStorage?.getItem(SEND_SHORTCUT_KEY) === 'ctrl-enter'
@@ -509,9 +510,9 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   })
 
-  watch([localCacheScope, fleetRoute], async ([scope]) => {
+  watch([localCacheScope, fleetRoute, localCacheRequested], async ([scope, , requested]) => {
     if (storage && storage.scope !== scope) clearSessionMemory()
-    if (!scope || !FleetLocalStore.available()) return
+    if (!requested || !scope || !FleetLocalStore.available()) return
     const local = new FleetLocalStore(scope)
     storage = local
     const [cached, unsent] = await Promise.allSettled([local.history(), local.outbox()])
@@ -590,6 +591,7 @@ export const useFleetStore = defineStore('fleet', () => {
   // ---------------- REST Node Lifecycle ----------------
   async function loadNodes() {
     fleetRequested = true
+    localCacheRequested.value = true
     const route = fleetRoute.value
     if (!route) return
     nodesLoading.value = true
@@ -671,6 +673,7 @@ export const useFleetStore = defineStore('fleet', () => {
   // ---------------- WebSocket 连接与首帧认证 ----------------
   function connectSocket() {
     fleetRequested = true
+    localCacheRequested.value = true
     const route = fleetRoute.value
     if (!route) return
     const { token, origin } = route
@@ -2449,6 +2452,10 @@ export const useFleetStore = defineStore('fleet', () => {
     const clean = text.trim()
     if (!clean && !files.length) return
     const body = clean || '[发送了加密文件附件]'
+    if (!localCacheRequested.value) {
+      localCacheRequested.value = true
+      await nextTick()
+    }
     const local = storage
     const session = sessionsByKey.value[sKey]
     if (!session) throw new Error('目标会话不存在')
