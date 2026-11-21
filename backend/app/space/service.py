@@ -69,7 +69,7 @@ VAULT_TOKEN_PREFIX = "sv_live_"
 @dataclass(frozen=True)
 class SpaceActor:
     """统一的 Shared Space 访问主体。"""
-    kind: Literal["user", "standard_token", "vault_token"]
+    kind: Literal["user", "standard_token", "vault_token", "device"]
     workspace_id: str
     user_id: int
     actor_id: str
@@ -267,18 +267,19 @@ def _validate_wrapped_dek_structure(wrapped_dek: dict[str, Any], expected_epoch:
         raise HTTPException(422, "WrappedDek binary field length invalid")
 
 
-def _owned_space(db: Session, workspace_id: str, space_id: str) -> SharedSpace:
+def _owned_space(db: Session, workspace_id: str, space_id: str, *, standard_only: bool = False) -> SharedSpace:
     try:
         sid = valid_uuid(space_id)
     except ValueError as exc:
         raise HTTPException(404, "Space not found") from exc
-    space = db.scalar(
-        select(SharedSpace).where(
-            SharedSpace.id == sid,
-            SharedSpace.workspace_id == workspace_id,
-            SharedSpace.archived_at.is_(None),
-        )
+    query = select(SharedSpace).where(
+        SharedSpace.id == sid,
+        SharedSpace.workspace_id == workspace_id,
+        SharedSpace.archived_at.is_(None),
     )
+    if standard_only:
+        query = query.where(SharedSpace.tier == "standard")
+    space = db.scalar(query)
     if space is None:
         raise HTTPException(404, "Space not found")
     return space
@@ -295,6 +296,10 @@ def _enforce_token_space_access(
 ) -> None:
     """强边界检查：按三档矩阵强制隔离 standard_token 与 vault_token。"""
     if actor.kind == "user":
+        return
+    if actor.kind == "device":
+        if space.tier != "standard" or required_scope != "read":
+            raise HTTPException(404, "Space not found")
         return
 
     token = actor.token
@@ -417,7 +422,7 @@ def _space_to_out(db: Session, space: SharedSpace) -> SpaceOut:
     )
 
 
-def list_spaces(db: Session, actor: SpaceActor) -> list[SpaceOut]:
+def list_spaces(db: Session, actor: SpaceActor, *, space_ids: set[str] | None = None) -> list[SpaceOut]:
     _require_enabled()
     query = select(SharedSpace).where(
         SharedSpace.workspace_id == actor.workspace_id,
@@ -425,6 +430,8 @@ def list_spaces(db: Session, actor: SpaceActor) -> list[SpaceOut]:
     )
     if actor.token is not None:
         query = query.where(SharedSpace.id == actor.token.space_id)
+    if actor.kind == "device":
+        query = query.where(SharedSpace.tier == "standard", SharedSpace.id.in_(space_ids or set()))
     spaces = list(db.scalars(query.order_by(SharedSpace.created_at.desc())))
     return [_space_to_out(db, sp) for sp in spaces]
 
@@ -830,7 +837,7 @@ def download_blob_chunk(
 ) -> tuple[bytes, str]:
     """下载原始分块（e2ee 客户端拉密文块；standard 拉文件块；protected 禁止绕过门禁直拉原始块）。"""
     _require_enabled()
-    space = _owned_space(db, actor.workspace_id, space_id)
+    space = _owned_space(db, actor.workspace_id, space_id, standard_only=actor.kind == "device")
     if space.tier == "protected":
         raise HTTPException(403, "Protected space blobs must be downloaded via authenticated unlock or Vault Token")
     _enforce_token_space_access(db, actor, space, required_scope="read", action="blob.chunk.get")
@@ -1132,6 +1139,8 @@ def list_entries(
     search: str | None = None,
     entry_type: str | None = None,
     include_deleted: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[SpaceEntrySummaryOut]:
     _require_enabled()
     space = _owned_space(db, actor.workspace_id, space_id)
@@ -1158,6 +1167,10 @@ def list_entries(
             or needle in (e.file_name or "").lower()
             or any(needle in str(t).lower() for t in (e.tags_json or []))
         ]
+
+    if offset or limit is not None:
+        end = offset + limit if limit is not None else None
+        entries = entries[offset:end]
 
     out: list[SpaceEntrySummaryOut] = []
     for entry in entries:
@@ -1628,7 +1641,7 @@ def download_entry_bytes(
 ) -> tuple[bytes, str, str]:
     """下载 standard（随时）或 protected（凭密码或 sv_live_）的完整字节流，返回 (data, mime, file_name)。"""
     _require_enabled()
-    space = _owned_space(db, actor.workspace_id, space_id)
+    space = _owned_space(db, actor.workspace_id, space_id, standard_only=actor.kind == "device")
     if space.tier == "e2ee":
         raise HTTPException(400, "E2EE entries must download ciphertext chunks and decrypt locally")
     entry = _owned_entry(db, space, entry_id)
