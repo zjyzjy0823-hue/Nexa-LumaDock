@@ -359,7 +359,7 @@ for line in sys.stdin:
 
 
 HERMES_ACP_SCRIPT = """
-import sys, json, os
+import sys, json, os, time
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -381,11 +381,18 @@ for line in sys.stdin:
     elif m == 'session/load':
         sid = msg['params']['sessionId']
         assert msg['params']['cwd'] == os.getcwd()
-        for kind, text in [('user_message_chunk', 'Older question'), ('agent_message_chunk', 'Older answer')]:
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}), flush=True)
+        time.sleep(0.02)
+        for update in [
+            {'session_update': 'user_message_chunk', 'content': {'type': 'text', 'text': 'Older question'}},
+            {'session_update': 'agent_thought_chunk', 'content': {'type': 'text', 'text': 'check'}},
+            {'session_update': 'tool_call', 'tool_call_id': 'old-tool', 'title': 'read_file'},
+            {'session_update': 'tool_call_update', 'tool_call_id': 'old-tool', 'status': 'completed', 'raw_output': 'ok'},
+            {'session_update': 'agent_message_chunk', 'content': {'type': 'text', 'text': 'Older answer'}},
+        ]:
             print(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {
-                'sessionId': sid, 'update': {'sessionUpdate': kind, 'content': {'type': 'text', 'text': text}},
+                'session_id': sid, 'update': update,
             }}))
-        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}))
     elif m == 'session/prompt':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'agent_thought_chunk', 'content': {'text': 'plan step'}}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'tool_call', 'title': 'read_file'}}}) + '\\n')
@@ -477,7 +484,10 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
         assert listed[1]["updatedAt"] == "2026-11-19T16:00:00Z"
         assert await hermes.get_history(session_id="herm-older") == [
             {"role": "user", "text": "Older question"},
-            {"role": "assistant", "text": "Older answer"},
+            {"role": "assistant", "text": "Older answer", "thought": "check",
+             "parts": [{"type": "thought", "text": "check"}, {"type": "tool", "callId": "old-tool"},
+                       {"type": "text", "text": "Older answer"}],
+             "toolCalls": [{"callId": "old-tool", "name": "read_file", "status": "completed", "output": "ok"}]},
         ]
         outside = hermes._session_summaries([{"sessionId": "outside", "title": "Personal chat", "cwd": str(tmp_path.parent)}])
         assert outside[0]["title"] == "Personal chat" and outside[0]["cwd"] == ""
@@ -489,6 +499,10 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
             h_events.append(ev)
 
         async def h_approve(sid: str, cid: str, cmd: str, risk: str) -> str:
+            history = await hermes.get_history(session_id=sid)
+            assert history[0] == {"role": "user", "text": "hi", "runId": "r-hermes"}
+            assert history[1]["thought"] == "plan step"
+            assert history[1]["toolCalls"][0]["status"] == "running"
             return "allow_session"
 
         await hermes.send_prompt(session_id="herm-1", text="hi", request_id="r-hermes", emit=h_emit, request_approval=h_approve)

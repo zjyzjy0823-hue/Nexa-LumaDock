@@ -23,6 +23,8 @@
 - Hermes 一并接入 Fleet：会话列表分组、模型列表（60 个模型）与按轮切换模型、逐模型思考档位（取自 ACP `configOptions` 的 `none … ultra` 八档）。
 - 桌面端可独立登录 Core Fleet；Android 首次启动直连 Core。
 - Codex 续聊、图片附件预览修复；Agent 推流与 MCP 错误隔离。
+- Hermes 回放保留思考与工具调用，正在运行时也能读取上下文。客户端为已打开的会话提供加密离线历史与待发队列。消息重连后以原命令 ID 重发。
+- 已配对的桌面和 Android 设备可读取获授权的 standard 空间。空间所有者可管理设备授权，并查看设备访问审计。
 
 ### 4. 统一 Cron 控制台与调度
 - 三所有者（OpenClaw / Hermes / Core）统一 Cron 控制台，聚合调度 API、脱敏与防重调。
@@ -59,6 +61,6 @@
 | macOS x86_64 打包 + 安装冒烟 | 通过 |
 | Android arm64 APK + 真机安装 | 见发布说明后续补充 |
 | 真机跨设备项（离线恢复 / 后台同步 / 冲突中心 / 保留本地 / 保留远端） | 需真机复核，结果记录在发布 PR 评论 |
-| Windows x64 安装包 | 本次不在本机产出（需 CI 或 Windows 机器） |
+| Windows x64 和 macOS 安装包 | GitHub Actions 的 `CI` 工作流分别上传 NSIS 安装包和 x64 / aarch64 DMG |
 
 > 本版本按语义化版本记为 **0.8.0**：包含 Android Local-first、Shared Space 离线同步等成块新能力，而不是修补集。

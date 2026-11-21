@@ -401,7 +401,7 @@ const sortedNodes = computed(() => {
     if (n.status === 'online') return 1
     return 2
   }
-  return [...fleet.nodes].sort((a, b) => rank(a) - rank(b))
+  return [...fleet.chatNodes].sort((a, b) => rank(a) - rank(b))
 })
 
 const selectedNodeAdapters = computed(() => {
@@ -485,6 +485,25 @@ function matchesTreeFilter(node: AgentNode): boolean {
 }
 
 const visibleNodes = computed(() => sortedNodes.value.filter(matchesTreeFilter))
+const showCachedCoreLogin = ref(false)
+watch(() => fleet.coreSignInUrl, url => { if (!url) showCachedCoreLogin.value = false })
+
+const sessionStatus = computed(() => {
+  const approvals = new Set(fleet.pendingApprovalsList.map(item => sessionKey(item.nodeId, item.provider, item.sessionId)))
+  const inputs = new Set(Object.values(fleet.pendingFormsById).filter(item => item.status === 'pending')
+    .map(item => sessionKey(item.nodeId, item.provider, item.sessionId)))
+  const waiting = new Set(fleet.outbox.map(item => item.sessionKey))
+  return (key: string) => {
+    if (approvals.has(key)) return { key: 'approval', label: '待审批', rank: 0 }
+    if (inputs.has(key)) return { key: 'input', label: '待输入', rank: 1 }
+    if (fleet.runningBySession[key]) return { key: 'running', label: '运行中', rank: 2 }
+    if (waiting.has(key)) return { key: 'waiting', label: '待发送', rank: 3 }
+    return { key: 'done', label: '已结束', rank: 4 }
+  }
+})
+function compareSessionRows(a: TreeSession, b: TreeSession): number {
+  return sessionStatus.value(a.key).rank - sessionStatus.value(b.key).rank || b.activity - a.activity
+}
 
 function activityAt(sess: ChatSession, key: string): number {
   const lastMessage = fleet.messagesBySession[key]?.at(-1)
@@ -542,14 +561,14 @@ const nodeTree = computed(() => visibleNodes.value.map(node => {
   if (loose.workspaces.length) visible.push(loose)
   if (hermes.workspaces.length || (hasHermes && showSection(hermes))) visible.push(hermes)
   const displayedSections = visible.map(section => {
-    for (const workspace of section.workspaces) workspace.rows.sort((a, b) => b.activity - a.activity)
+    for (const workspace of section.workspaces) workspace.rows.sort(compareSessionRows)
     section.workspaces.sort((a, b) => (b.rows[0]?.activity ?? 0) - (a.rows[0]?.activity ?? 0))
     const id = `tree-section-${encodeURIComponent(node.id)}:${encodeURIComponent(section.key)}`
     const rows = section.workspaces.flatMap(workspace => workspace.rows)
     const showAll = treeIsNarrowed.value || expandedTreeLists.value.has(id)
     let workspaces = section.workspaces
     if (!showAll && rows.length > TREE_SESSION_LIMIT) {
-      rows.sort((a, b) => b.activity - a.activity)
+      rows.sort(compareSessionRows)
       const latest = new Set(rows.slice(0, TREE_SESSION_LIMIT).map(row => row.key))
       workspaces = workspaces.map(workspace => {
         const rows = workspace.rows.filter(row => latest.has(row.key))
@@ -562,7 +581,7 @@ const nodeTree = computed(() => visibleNodes.value.map(node => {
       canShowMore: !treeIsNarrowed.value && rows.length > TREE_SESSION_LIMIT,
     }
   })
-  const historyAdapters = node.adapters.filter(adapter => adapter.status === 'ready' && adapter.capabilities.includes('history'))
+  const historyAdapters = node.adapters.filter(adapter => adapter.status === 'ready' && (adapter.supports?.history ?? adapter.capabilities.includes('history')))
   return { node, sections: displayedSections, count: all.length, hasHermes, historyAdapters }
 }))
 
@@ -578,16 +597,6 @@ function nodeIndicatorStatus(nodeId: string, rawStatus: string) {
 function nodeStatusText(nodeId: string, rawStatus: string) {
   if (fleet.nodesWithApprovalPending.has(nodeId)) return '待审批'
   return rawStatus === 'online' ? '在线' : rawStatus === 'revoked' ? '已吊销' : '离线'
-}
-
-function sessionDotClass(sess: ChatSession): string {
-  const sKey = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
-  const hasPending = fleet.pendingApprovalsList.some(
-    c => sessionKey(c.nodeId, c.provider, c.sessionId) === sKey,
-  )
-  if (hasPending) return 'is-approval'
-  if (fleet.runningBySession[sKey]) return 'is-running'
-  return 'is-ready'
 }
 
 function openSessionTab(sess: ChatSession) {
@@ -1071,27 +1080,25 @@ const mobileInboxSessions = computed(() => {
       if (term) {
         const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? ''
         const hay = `${sess.title} ${nodeName} ${sess.provider} ${sess.cwd || ''}`.toLowerCase()
-        if (!hay.includes(term)) return false
+        if (!hay.includes(term) && !searchHits.value.has(k)) return false
       }
       return true
     })
     .map(sess => {
       const key = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
       const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? sess.nodeId
-      const hasApproval = fleet.pendingApprovalsList.some(a => sessionKey(a.nodeId, a.provider, a.sessionId) === key)
-      const isRunning = Boolean(fleet.runningBySession[key])
+      const status = sessionStatus.value(key)
       const unread = fleet.unreadCountBySession[key] ?? 0
       const diff = fleet.diffBySession[key]
       const diffCount = diff?.summary?.filesChanged ?? (sess.hasDiff ? 1 : 0)
       const branchName = sess.provider !== 'hermes' ? sessionDisplayBranch(sess, key) || (sess.worktreePath ? leafPathName(sess.worktreePath) : '') : ''
       const dirLabel = sess.provider !== 'hermes' && sess.cwd ? leafPathName(sess.cwd) : ''
       const lastAt = activityAt(sess, key)
-      return { key, session: sess, nodeName, hasApproval, isRunning, unread, diffCount, branchName, dirLabel, lastAt }
+      return { key, session: sess, nodeName, status, unread, diffCount, branchName, dirLabel, lastAt }
     })
 
   rows.sort((a, b) => {
-    if (a.hasApproval !== b.hasApproval) return a.hasApproval ? -1 : 1
-    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+    if (a.status.rank !== b.status.rank) return a.status.rank - b.status.rank
     if ((a.unread > 0) !== (b.unread > 0)) return a.unread > 0 ? -1 : 1
     return b.lastAt - a.lastAt
   })
@@ -1099,9 +1106,13 @@ const mobileInboxSessions = computed(() => {
 })
 
 const mobileSessionGroups = computed(() => [
-  { key: 'workspace', rows: mobileInboxSessions.value.filter(item => item.session.provider !== 'hermes') },
-  { key: 'hermes', rows: mobileInboxSessions.value.filter(item => item.session.provider === 'hermes') },
-].filter(group => group.rows.length))
+  { key: 'approval', label: '待审批' },
+  { key: 'input', label: '待输入' },
+  { key: 'running', label: '运行中' },
+  { key: 'waiting', label: '待发送' },
+  { key: 'done', label: '已结束' },
+].map(group => ({ ...group, rows: mobileInboxSessions.value.filter(item => item.status.key === group.key) }))
+  .filter(group => group.rows.length))
 
 function formatShortTime(ts?: number, compact = false): string {
   if (!ts) return ''
@@ -1262,8 +1273,12 @@ function handleClearMemory() {
 </script>
 
 <template>
-  <FleetCoreSignIn v-if="fleet.coreSignInUrl" />
+  <template v-if="fleet.coreSignInUrl && (!fleet.allSessions.length || showCachedCoreLogin)">
+    <button v-if="fleet.allSessions.length" type="button" class="btn btn-ghost btn-sm" @click="showCachedCoreLogin = false">返回本机历史</button>
+    <FleetCoreSignIn />
+  </template>
   <template v-else>
+  <button v-if="fleet.coreSignInUrl" type="button" class="btn btn-ghost btn-sm" @click="showCachedCoreLogin = true">登录 Core 以恢复连接</button>
   <!-- 移动端（方案 B · 收件箱列表 → 全屏沉浸对话页，类似 Happy / Orca Mobile） -->
   <div v-if="mobile" class="mchat-root">
     <!-- 第一层：会话与审批收件箱（极简顶栏图标工具条 + 带状态微动画的会话卡片） -->
@@ -1505,8 +1520,8 @@ function handleClearMemory() {
 
       <!-- 会话列表卡片（去头像绿点、去右箭头、精简副标题、角落带动画状态徽章） -->
       <template v-if="mobileSessionGroups.length">
-        <section v-for="group in mobileSessionGroups" :key="group.key" :aria-label="group.key === 'hermes' ? 'Hermes' : '工作区会话'">
-          <div v-if="group.key === 'hermes'" class="sec-t m-hermes-title"><OpusIcon name="hermes" />Hermes</div>
+        <section v-for="group in mobileSessionGroups" :key="group.key" :aria-label="group.label">
+          <div class="sec-t">{{ group.label }}</div>
           <div class="mlist mat-solid m-inbox-list">
             <button
               v-for="item in group.rows"
@@ -1519,7 +1534,7 @@ function handleClearMemory() {
                 class="m-sess-avatar"
                 :class="[
                   getProviderMeta(item.session.provider).accentClass,
-                  { 'is-running': item.isRunning, 'is-approval': item.hasApproval },
+                  `is-${item.status.key}`,
                 ]"
               >
                 <OpusIcon :name="getProviderMeta(item.session.provider).icon" />
@@ -1536,14 +1551,12 @@ function handleClearMemory() {
                     <span v-if="item.diffCount > 0" class="m-sess-diff-num num"> · {{ item.diffCount }} 改动</span>
                   </span>
                   <span
-                    v-if="item.hasApproval || item.isRunning || item.unread > 0"
                     class="m-sess-state-pill"
-                    :class="item.hasApproval ? 'is-approval' : item.isRunning ? 'is-running' : 'is-unread'"
+                    :class="item.unread && item.status.key === 'done' ? 'is-unread' : `is-${item.status.key}`"
                   >
-                    <span v-if="item.isRunning" class="m-state-spinner" aria-hidden="true" />
-                    <OpusIcon v-else-if="item.hasApproval" name="shield" class="m-state-ic is-pulse" />
-                    <OpusIcon v-else name="check" class="m-state-ic is-pop" />
-                    <span>{{ item.hasApproval ? '待审批' : item.isRunning ? '运行中' : '已完成' }}</span>
+                    <span v-if="item.status.key === 'running'" class="m-state-spinner" aria-hidden="true" />
+                    <OpusIcon v-else-if="item.status.key === 'approval'" name="shield" class="m-state-ic" />
+                    <span>{{ item.status.label }}</span>
                   </span>
                 </span>
               </span>
@@ -2006,7 +2019,7 @@ function handleClearMemory() {
                     :key="row.key"
                     v-model:draft="renameDraft"
                     :session="row.session"
-                    :status="sessionDotClass(row.session)"
+                    :status="sessionStatus(row.key)"
                     :active="fleet.activeSessionKey === row.key"
                     :renaming="renamingSessionKey === row.key"
                     :snippet="searchSnippetFor(row.session)"
@@ -2034,7 +2047,7 @@ function handleClearMemory() {
               </div>
             </section>
           </section>
-          <div v-if="!fleet.nodes.length" class="tree-empty-state">
+          <div v-if="!fleet.chatNodes.length" class="tree-empty-state">
             <p class="faint">尚未注册任何控制节点。</p>
             <button type="button" class="btn btn-primary btn-sm" @click="emit('navigate', 'Agents')">签发 sn_live_ 凭证</button>
           </div>
@@ -2081,7 +2094,7 @@ function handleClearMemory() {
             @contextmenu="openTabContextMenu(tab.key, $event)"
           >
             <OpusIcon v-if="pinnedTabKeys.includes(tab.key)" name="pin" class="tab-pin-ic" />
-            <span v-else class="tree-dot" :class="sessionDotClass(tab.session)" />
+            <span v-else class="tree-dot" :class="`is-${sessionStatus(tab.key).key}`" :title="sessionStatus(tab.key).label" />
             <span class="chat-tab-label">{{ tab.session.title }}</span>
             <span v-if="fleet.unreadCountBySession[tab.key]" class="tab-unread-dot num">
               {{ fleet.unreadCountBySession[tab.key] }}

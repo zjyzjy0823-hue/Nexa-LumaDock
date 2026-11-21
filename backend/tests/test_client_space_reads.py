@@ -75,6 +75,29 @@ def _space_read_paths(space_id):
     return [space, f"{space}/entries", entry, f"{entry}/download", f"{space}/blobs/{uuid4()}/chunks/0"]
 
 
+def test_owner_can_revoke_default_access_and_grant_it_again(client, users, device):
+    item, credential = device
+    owner, other_owner = users
+    space_id = _create_space(client, owner)["id"]
+    url = f"{SPACES}/{space_id}/device-grants"
+    grant_url = f"{url}/{item['id']}"
+    read_url = f"{READS}/spaces/{space_id}"
+    assert client.get(url, headers=owner).json() == [{
+        "clientId": item["id"], "deviceName": "Laptop", "platform": "macos",
+        "canRead": True, "explicit": False,
+    }]
+    assert client.delete(grant_url, headers=other_owner).status_code == 404
+    assert client.delete(grant_url, headers=credential).status_code == 403
+    assert client.delete(grant_url, headers=owner).status_code == 204
+    assert client.get(read_url, headers=credential).status_code == 404
+    assert client.get(url, headers=owner).json()[0]["canRead"] is False
+    assert client.put(grant_url, headers=owner).status_code == 204
+    assert client.get(read_url, headers=credential).status_code == 200
+    assert client.get(url, headers=owner).json()[0]["explicit"] is True
+    audit = client.get(f"{SPACES}/{space_id}/audit-logs?action=device.read", headers=owner).json()
+    assert [(log["action"], log["outcome"]) for log in audit] == [("device.read", "allowed"), ("device.read", "denied")]
+
+
 def test_no_grant_with_default_disabled(client, users, device, db, monkeypatch):
     monkeypatch.setenv("STUDIOLO_SPACE_DEVICE_DEFAULT_GRANT", "0")
     item, headers = device

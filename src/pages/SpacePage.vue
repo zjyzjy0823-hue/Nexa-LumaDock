@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ApiError } from '../api/client'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import SpacePasswordGate from '../components/space/SpacePasswordGate.vue'
 import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { useSpaceStore } from '../stores/space'
-import type { SpaceTier, SpaceTokenScope, StandardSpaceConflict } from '../services/spaceApi'
+import { fetchSpaceDeviceGrants, setSpaceDeviceGrant, type SpaceDeviceGrant, type SpaceTier, type SpaceTokenScope, type StandardSpaceConflict } from '../services/spaceApi'
 import type { SpaceEntryType } from '../services/spaceCrypto'
 
 const props = defineProps<{ mobile: boolean }>()
@@ -28,6 +29,10 @@ interface QueuedUploadFile {
 }
 
 const activeTab = ref<SpaceSubView>('entries')
+const auditAction = ref('')
+const deviceGrants = ref<SpaceDeviceGrant[] | null>(null)
+const grantBusy = ref('')
+const grantError = ref('')
 const canvasMode = ref<CanvasMode>('compose')
 const composeTab = ref<ComposeTab>('text')
 const searchQuery = ref('')
@@ -892,10 +897,10 @@ function handleVisibilityChange() {
   }
 }
 
-watch(activeTab, tab => {
+watch([activeTab, auditAction], ([tab]) => {
   if (spaceStore.deviceReadOnly) return
   if (tab === 'tokens' || tab === 'audit') {
-    void spaceStore.loadTokensAndAudit()
+    void spaceStore.loadTokensAndAudit(tab === 'audit' ? auditAction.value : undefined)
   }
   if (tab === 'conflicts') {
     decisionError.value = ''
@@ -910,12 +915,52 @@ watch(
     clearUploadQueue()
     uploadNote.value = ''
     if (!spaceStore.deviceReadOnly && (activeTab.value === 'tokens' || activeTab.value === 'audit')) {
-      void spaceStore.loadTokensAndAudit()
+      void spaceStore.loadTokensAndAudit(activeTab.value === 'audit' ? auditAction.value : undefined)
     }
   },
 )
 
+const deviceGrantTarget = computed(() => {
+  const { route, selectedSpaceId, deviceReadOnly, offline } = spaceStore
+  if (activeTab.value !== 'security' || currentSpace.value?.tier !== 'standard' || deviceReadOnly || offline || !route || !selectedSpaceId) return null
+  return { route, spaceId: selectedSpaceId }
+})
+
+watch(deviceGrantTarget, async target => {
+  deviceGrants.value = null
+  grantError.value = ''
+  grantBusy.value = ''
+  if (!target) return
+  try {
+    const rows = await fetchSpaceDeviceGrants(target.route, target.spaceId)
+    if (target === deviceGrantTarget.value) deviceGrants.value = rows
+  } catch (cause) {
+    if (target === deviceGrantTarget.value && !(cause instanceof ApiError && cause.status === 404)) {
+      grantError.value = cause instanceof Error ? cause.message : '无法读取设备授权'
+    }
+  }
+})
+
+async function toggleDeviceGrant(grant: SpaceDeviceGrant) {
+  const target = deviceGrantTarget.value
+  if (!target || grantBusy.value) return
+  grantBusy.value = grant.clientId
+  grantError.value = ''
+  try {
+    await setSpaceDeviceGrant(target.route, target.spaceId, grant.clientId, !grant.canRead)
+    if (target !== deviceGrantTarget.value) return
+    deviceGrants.value = deviceGrants.value?.map(row => row.clientId === grant.clientId
+      ? { ...row, canRead: !grant.canRead, explicit: true }
+      : row) ?? null
+  } catch (cause) {
+    if (target === deviceGrantTarget.value) grantError.value = cause instanceof Error ? cause.message : '更新设备授权失败'
+  } finally {
+    if (target === deviceGrantTarget.value) grantBusy.value = ''
+  }
+}
+
 onMounted(() => {
+  void spaceStore.refreshAndroidDeviceBinding()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('paste', handleGlobalPaste)
 })
@@ -992,13 +1037,16 @@ onUnmounted(() => {
     <div v-else-if="spaceStore.deviceReadOnly" class="space-device-banner">
       <div class="space-device-banner-head">
         <span>设备只读 · 登录 Core 后可编辑</span>
-        <button type="button" class="btn btn-sm btn-ghost" :aria-expanded="showDeviceSignIn" @click="showDeviceSignIn = !showDeviceSignIn">
+        <button type="button" class="btn btn-sm btn-ghost" :aria-expanded="showDeviceSignIn"
+          @click="spaceStore.openAndroidSpaceSignIn() || (showDeviceSignIn = !showDeviceSignIn)">
           {{ showDeviceSignIn ? '取消登录' : '登录 Core' }}
         </button>
       </div>
       <FleetCoreSignIn v-if="showDeviceSignIn" feature="共享空间" />
     </div>
     <p v-if="!spaceStore.available" class="space-route-status muted" role="status">{{ spaceStore.waitingForConnection ? '正在读取 Core 连接…' : '请连接并登录 Core 后打开共享空间。' }}</p>
+    <button v-if="spaceStore.android && !spaceStore.available" type="button" class="btn btn-sm btn-ghost"
+      @click="spaceStore.openAndroidSpaceSignIn()">登录 Core</button>
     <div v-else class="space-shell" :class="{ 'is-mobile': mobile, 'is-empty-state': !mobile && !spaceStore.loading && spaceStore.spaces.length === 0 }">
       <!-- ================================================================
            左栏：空间导航轨道
@@ -1726,6 +1774,10 @@ onUnmounted(() => {
           <div v-else-if="!spaceStore.deviceReadOnly && activeTab === 'audit'" class="canvas-inner canvas-subpanel">
             <header class="canvas-head">
               <h3 class="canvas-title">审计日志</h3>
+              <select v-model="auditAction" class="input" aria-label="按操作筛选审计日志">
+                <option value="">全部操作</option>
+                <option value="device.read">设备读取</option>
+              </select>
             </header>
 
             <div class="subpanel-card" data-surface-role="list">
@@ -1733,7 +1785,7 @@ onUnmounted(() => {
               <div v-for="log in spaceStore.auditLogs" :key="log.id" class="audit-row">
                 <span class="audit-outcome" :class="log.outcome">{{ log.outcome }}</span>
                 <strong>{{ log.action }}</strong>
-                <span class="faint">{{ log.actorKind }}</span>
+                <span class="faint">{{ log.actorKind === 'device' ? log.actorId : log.actorKind }}</span>
                 <span class="muted audit-detail">{{ log.detail }}</span>
                 <span class="faint mono audit-time">{{ log.createdAt.slice(0, 19).replace('T', ' ') }}</span>
               </div>
@@ -1772,6 +1824,22 @@ onUnmounted(() => {
             <header class="canvas-head">
               <h3 class="canvas-title">{{ currentSpace.tier === 'standard' ? '管理' : '安全' }}</h3>
             </header>
+
+            <section v-if="deviceGrants || grantError" class="subpanel-card" aria-label="设备读取授权">
+              <h4>设备读取授权</h4>
+              <p v-if="grantError" class="space-alert" role="alert">{{ grantError }}</p>
+              <p v-if="deviceGrants?.length === 0" class="muted">这个工作区还没有已配对设备。</p>
+              <div v-for="grant in deviceGrants ?? []" :key="grant.clientId" class="token-item">
+                <div>
+                  <strong>{{ grant.deviceName }}</strong>
+                  <span class="muted"> · {{ grant.platform }} · {{ grant.canRead ? (grant.explicit ? '已授权' : '默认允许') : '无读取权限' }}</span>
+                </div>
+                <button type="button" class="btn btn-sm" :class="grant.canRead ? 'btn-ghost' : 'btn-primary'"
+                  :disabled="!!grantBusy" @click="toggleDeviceGrant(grant)">
+                  {{ grantBusy === grant.clientId ? '更新中…' : grant.canRead ? '撤销读取' : '授权读取' }}
+                </button>
+              </div>
+            </section>
 
             <div v-if="currentSpace.tier !== 'standard'" class="subpanel-card">
               <h4>修改密码</h4>

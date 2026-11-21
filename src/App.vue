@@ -273,9 +273,12 @@ async function create(kind: string, value?: string) {
   if (kind === 'record') pageRef.value?.openCreateRecord?.()
   else pageRef.value?.openCreate?.(value)
 }
+const openChatFromNotification = () => { void navigate('Chat') }
+
 onMounted(async () => {
   window.addEventListener('popstate', onLocationChange)
   window.addEventListener('hashchange', onLocationChange)
+  window.addEventListener('studiolo:open-chat', openChatFromNotification)
   systemDark.addEventListener('change', updateSystemTheme)
   mobileMedia.addEventListener('change', updateMobile)
   motionMedia.addEventListener('change', updateSystemMotion)
@@ -289,6 +292,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('popstate', onLocationChange)
   window.removeEventListener('hashchange', onLocationChange)
+  window.removeEventListener('studiolo:open-chat', openChatFromNotification)
   systemDark.removeEventListener('change', updateSystemTheme)
   mobileMedia.removeEventListener('change', updateMobile)
   motionMedia.removeEventListener('change', updateSystemMotion)

@@ -2,7 +2,7 @@
  * Studiolo v0.7.0 多设备 Agent 协同调度（Fleet）与 E2EE 分块文件总线类型定义。
  */
 
-export type NodePlatform = 'macos' | 'windows' | 'linux' | 'android' | 'ios'
+export type NodePlatform = 'macos' | 'windows' | 'linux' | 'android' | 'ios' | 'unknown'
 
 export type AdapterProvider =
   | 'codex'
@@ -197,6 +197,8 @@ export interface AdapterInfo {
   version: string
   status: 'ready' | 'unavailable' | 'error'
   capabilities: string[]
+  supports?: Record<'chat' | 'history' | 'models' | 'approval' | 'forms' | 'worktree' | 'rollback' |
+    'readOnly' | 'fork' | 'steer' | 'usage' | 'thinking', boolean>
 }
 
 export interface AgentNode {
@@ -491,8 +493,14 @@ export interface FleetWsEvent {
   skills?: WorkspaceSkill[]
   lines?: FileBlameLine[]
   seq?: number
+  sequence?: number
+  streamId?: string
   lastSeq?: number
   incremental?: boolean
+  snapshotRequired?: boolean
+  historyCursor?: string | null
+  beforeCursor?: string
+  cursorExpired?: boolean
   pty?: boolean
   formId?: string
   fields?: FormFieldSchema[]
@@ -509,6 +517,7 @@ export interface FleetWsEvent {
   mergedFiles?: string[]
   active?: boolean
   events?: FleetWsEvent[]
+  pendingApprovals?: FleetWsEvent[]
   relDir?: string
   entries?: WorkspaceTreeEntry[]
   patterns?: string[]
@@ -522,6 +531,7 @@ export interface FleetWsEvent {
   messages?: Array<{
     role: string
     text: string
+    runId?: string
     thought?: string
     toolCalls?: ToolCallBadge[]
     media?: MessageMediaItem[]

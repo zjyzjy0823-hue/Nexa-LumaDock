@@ -17,10 +17,12 @@ from sqlalchemy.orm import Session
 
 from ..database import runtime_config
 from ..models import (
+    Client,
     SharedSpace,
     SpaceAccessAuditLog,
     SpaceBlob,
     SpaceChange,
+    SpaceDeviceGrant,
     SpaceEntry,
     SpaceEntryRevision,
     SpaceKeyEnvelope,
@@ -42,6 +44,7 @@ from .schemas import (
     SpaceChangeOut,
     SpaceChangesPageOut,
     SpaceCreateInput,
+    SpaceDeviceGrantOut,
     SpaceEntryCreateInput,
     SpaceEntryDetailOut,
     SpaceEntrySummaryOut,
@@ -2333,20 +2336,91 @@ def revoke_token(db: Session, actor: SpaceActor, space_id: str, token_id: str) -
     db.commit()
 
 
-def list_audit_logs(db: Session, actor: SpaceActor, space_id: str, limit: int = 100) -> list[SpaceAuditLogOut]:
+def device_default_grant_enabled() -> bool:
+    return os.getenv("STUDIOLO_SPACE_DEVICE_DEFAULT_GRANT", "1").strip().lower() in ("1", "true", "yes")
+
+
+def _device_grant_space(db: Session, actor: SpaceActor, space_id: str) -> SharedSpace:
+    _require_enabled()
+    if actor.kind != "user":
+        raise HTTPException(403, "Only the space owner can manage device grants")
+    space = _owned_space(db, actor.workspace_id, space_id, standard_only=True)
+    if space.user_id != actor.user_id:
+        raise HTTPException(403, "Only the space owner can manage device grants")
+    return space
+
+
+def list_device_grants(db: Session, actor: SpaceActor, space_id: str) -> list[SpaceDeviceGrantOut]:
+    space = _device_grant_space(db, actor, space_id)
+    clients = db.scalars(select(Client).where(
+        Client.workspace_id == space.workspace_id,
+        Client.revoked_at.is_(None),
+        Client.token_hash.is_not(None),
+    ).order_by(Client.name, Client.id)).all()
+    grants = db.scalars(select(SpaceDeviceGrant).where(
+        SpaceDeviceGrant.workspace_id == space.workspace_id,
+        SpaceDeviceGrant.space_id == space.id,
+    )).all()
+    explicit = {grant.client_id for grant in grants}
+    allowed = {grant.client_id for grant in grants if grant.can_read and grant.revoked_at is None}
+    default = device_default_grant_enabled()
+    return [SpaceDeviceGrantOut(
+        clientId=client.id, deviceName=client.name, platform=client.platform,
+        canRead=client.id in allowed or (default and client.id not in explicit),
+        explicit=client.id in explicit,
+    ) for client in clients]
+
+
+def set_device_grant(db: Session, actor: SpaceActor, space_id: str, client_id: str, *, allow: bool) -> None:
+    space = _device_grant_space(db, actor, space_id)
+    try:
+        client_id = valid_uuid(client_id)
+    except ValueError as exc:
+        raise HTTPException(404, "Device not found") from exc
+    # Serialize changes for the same space, including the first grant for a device.
+    db.execute(select(SharedSpace.id).where(SharedSpace.id == space.id).with_for_update())
+    client = db.scalar(select(Client).where(
+        Client.id == client_id, Client.workspace_id == space.workspace_id,
+        Client.revoked_at.is_(None), Client.token_hash.is_not(None),
+    ))
+    if client is None:
+        raise HTTPException(404, "Device not found")
+    rows = db.scalars(select(SpaceDeviceGrant).where(
+        SpaceDeviceGrant.space_id == space.id,
+        SpaceDeviceGrant.workspace_id == space.workspace_id,
+        SpaceDeviceGrant.client_id == client.id,
+    ).order_by(SpaceDeviceGrant.created_at, SpaceDeviceGrant.id)).all()
+    if not rows:
+        rows = [SpaceDeviceGrant(
+            id=str(uuid4()), workspace_id=space.workspace_id, space_id=space.id,
+            client_id=client.id, device_label=client.name,
+        )]
+        db.add(rows[0])
+    elif rows[0].can_read == allow and not rows[0].can_write and (rows[0].revoked_at is None) == allow and len(rows) == 1:
+        return
+    now = utcnow()
+    for index, grant in enumerate(rows):
+        grant.can_read = allow and index == 0
+        grant.can_write = False
+        grant.revoked_at = None if grant.can_read else now
+    _record_audit(
+        db, workspace_id=space.workspace_id, space_id=space.id, actor_kind="user", actor_id=actor.actor_id,
+        action="device.grant" if allow else "device.revoke", detail=f"client_id={client.id}",
+    )
+    db.commit()
+
+
+def list_audit_logs(db: Session, actor: SpaceActor, space_id: str, limit: int = 100,
+                    action: str | None = None) -> list[SpaceAuditLogOut]:
     _require_enabled()
     if actor.kind != "user":
         raise HTTPException(403, "Only workspace user can view audit logs")
     space = _owned_space(db, actor.workspace_id, space_id)
     capped = max(1, min(limit, 500))
-    rows = list(
-        db.scalars(
-            select(SpaceAccessAuditLog)
-            .where(SpaceAccessAuditLog.space_id == space.id)
-            .order_by(SpaceAccessAuditLog.created_at.desc())
-            .limit(capped)
-        )
-    )
+    query = select(SpaceAccessAuditLog).where(SpaceAccessAuditLog.space_id == space.id)
+    if action:
+        query = query.where(SpaceAccessAuditLog.action == action)
+    rows = db.scalars(query.order_by(SpaceAccessAuditLog.created_at.desc(), SpaceAccessAuditLog.id).limit(capped)).all()
     return [
         SpaceAuditLogOut(
             id=row.id,

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
@@ -50,12 +50,14 @@ def _granted_space_ids(db: Session, client: Client, workspace: Workspace) -> set
     explicit = select(SpaceDeviceGrant.space_id).where(
         SpaceDeviceGrant.workspace_id == workspace.id,
         SpaceDeviceGrant.client_id == client.id,
+    )
+    allowed = explicit.where(
         SpaceDeviceGrant.revoked_at.is_(None),
         SpaceDeviceGrant.can_read.is_(True),
     )
-    granted = SharedSpace.id.in_(explicit)
-    if os.getenv("STUDIOLO_SPACE_DEVICE_DEFAULT_GRANT", "1").strip().lower() in ("1", "true", "yes"):
-        granted = or_(granted, SharedSpace.user_id == workspace.owner_user_id)
+    granted = SharedSpace.id.in_(allowed)
+    if service.device_default_grant_enabled():
+        granted = or_(granted, and_(SharedSpace.user_id == workspace.owner_user_id, SharedSpace.id.not_in(explicit)))
     return set(db.scalars(select(SharedSpace.id).where(
         SharedSpace.workspace_id == workspace.id,
         SharedSpace.tier == "standard",

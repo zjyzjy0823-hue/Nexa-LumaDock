@@ -55,7 +55,10 @@
       "studiolo_data_collection_delete",
       "studiolo_data_record_create",
       "studiolo_data_record_update",
-      "studiolo_data_record_delete"
+      "studiolo_data_record_delete",
+      "studiolo_space_list",
+      "studiolo_space_entries_list",
+      "studiolo_space_entry_get"
     ]
   }
 }

@@ -24,6 +24,22 @@ def resolve_repo_root(target: str | Path, allowed_roots: tuple[Path, ...]) -> Pa
     return ensure_allowed_path(top, allowed_roots)
 
 
+def recover_session_worktree(cwd: Path, allowed_roots: tuple[Path, ...]) -> tuple[Path, Path] | None:
+    worktree = next((path for path in (cwd, *cwd.parents) if path.parent.name == ".studiolo-worktrees"), None)
+    if worktree is None or not (worktree / ".git").is_file():
+        return None
+    base = ensure_allowed_path(worktree.parent.parent, allowed_roots)
+    base_git = _run_git(base, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    worktree_git = _run_git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if Path(base_git).resolve() != Path(worktree_git).resolve():
+        return None
+    return base, worktree
+
+
+def current_session_ref(cwd: Path) -> str:
+    return _run_git(cwd, "branch", "--show-current") or _run_git(cwd, "rev-parse", "--short", "HEAD")
+
+
 def create_session_worktree(
     repo_path: str | Path,
     session_id: str,

@@ -6,7 +6,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 NodePlatform = Literal["macos", "windows", "linux", "android", "ios"]
@@ -62,6 +62,23 @@ class TransferEndpoint(BaseModel):
         return validate_endpoint_url(value)
 
 
+class AdapterSupport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chat: bool = False
+    history: bool = False
+    models: bool = False
+    approval: bool = False
+    forms: bool = False
+    worktree: bool = False
+    rollback: bool = False
+    readOnly: bool = False
+    fork: bool = False
+    steer: bool = False
+    usage: bool = False
+    thinking: bool = False
+
+
 class AdapterInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,6 +86,19 @@ class AdapterInfo(BaseModel):
     version: str = Field(default="", max_length=64)
     status: Literal["ready", "unavailable", "error"] = "ready"
     capabilities: list[str] = Field(default_factory=list, max_length=32)
+    supports: AdapterSupport = Field(default_factory=AdapterSupport)
+
+    @model_validator(mode="after")
+    def derive_supports(self):
+        caps = set(self.capabilities)
+        self.supports = AdapterSupport(
+            chat="chat" in caps, history="history" in caps, models="models" in caps, approval="approval" in caps,
+            forms="forms" in caps, worktree="worktree" in caps, rollback="checkpoints" in caps,
+            readOnly="read-only" in caps, fork="fork" in caps, steer="steer" in caps,
+            usage="usage" in caps or self.provider in ("codex", "hermes", "opencode", "mock"),
+            thinking="thinking" in caps or self.provider in ("codex", "hermes", "opencode"),
+        )
+        return self
 
 
 class SubscriptionQuotaWindow(BaseModel):

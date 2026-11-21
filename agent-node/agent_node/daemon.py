@@ -1,12 +1,17 @@
 """AgentNode 守护进程主循环：连接 Core WSS、响应会话与审批指令、启动直传端点。"""
 
 import asyncio
+from collections import OrderedDict, deque
+from contextlib import closing
+from dataclasses import dataclass, field
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import platform as py_platform
 import re
 import socket
+import sqlite3
 import tempfile
 from typing import Any
 from uuid import uuid4
@@ -42,7 +47,32 @@ from .workspace_tools import (
     revert_workspace_files,
     write_workspace_file,
 )
-from .worktree import remove_session_worktree
+from .worktree import current_session_ref, recover_session_worktree, remove_session_worktree
+
+
+@dataclass
+class SessionStream:
+    stream_id: str = field(default_factory=lambda: uuid4().hex)
+    sequence: int = 0
+    turn_start: int = 0
+    run_id: str | None = None
+    byte_count: int = 0
+    events: deque[tuple[int, dict[str, Any]]] = field(default_factory=deque)
+
+    def append(self, event: dict[str, Any]) -> dict[str, Any]:
+        self.sequence += 1
+        frame = {**event, "seq": self.sequence, "sequence": self.sequence, "streamId": self.stream_id}
+        size = len(json.dumps(frame, ensure_ascii=False).encode("utf-8"))
+        self.events.append((size, frame))
+        self.byte_count += size
+        while len(self.events) > 500 or self.byte_count > 4 * 1024 * 1024:
+            self.byte_count -= self.events.popleft()[0]
+        return frame
+
+
+def _history_cursor(message: dict[str, Any], previous: dict[str, Any]) -> str:
+    anchor = [(row.get("role"), row.get("text")) for row in (previous, message)]
+    return sha256(json.dumps(anchor, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 class AgentNodeDaemon:
@@ -62,6 +92,7 @@ class AgentNodeDaemon:
         self.terminal_manager = TerminalManager(config.allowed_roots)
         self._pending_approvals: dict[str, asyncio.Future[str]] = {}
         self._pending_approval_cmds: dict[str, str] = {}
+        self._pending_approval_events: dict[str, dict[str, Any]] = {}
         self._session_always_allow: set[tuple[str, str]] = set()
         self._trust_file = self.staging_dir / "trust-allowlist.json"
         self._trust_patterns: list[str] = self._load_trust_patterns()
@@ -70,8 +101,9 @@ class AgentNodeDaemon:
         self._checkpoints: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._checkpoint_order: dict[tuple[str, str], list[str]] = {}
         self._active_runs: set[tuple[str, str]] = set()
-        self._run_buffers: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        self._run_seq: dict[tuple[str, str], int] = {}
+        self._session_streams: OrderedDict[tuple[str, str], SessionStream] = OrderedDict()
+        self._command_db = (staging_dir or Path.home() / ".studiolo" / "agent-node") / "chat-commands.sqlite3"
+        self._command_scope = sha256(f"{config.core_url}\n{config.node_token}".encode()).hexdigest()
         self._send_lock = asyncio.Lock()
 
     def _load_trust_patterns(self) -> list[str]:
@@ -135,6 +167,28 @@ class AgentNodeDaemon:
                 pass
         return ensure_allowed_path(self.config.allowed_roots[0], self.config.allowed_roots)
 
+    def _remember_session_checkout(self, provider: str, meta: dict[str, Any], *, new: bool = False) -> dict[str, Any]:
+        sid = str(meta.get("sessionId") or "")
+        raw_cwd = meta.get("worktreePath") or meta.get("cwd")
+        if not sid or not raw_cwd:
+            return meta
+        try:
+            cwd = ensure_allowed_path(raw_cwd, self.config.allowed_roots)
+        except (PathOutsideAllowedRootsError, OSError):
+            return meta
+        key = (provider, sid)
+        self._session_cwds[key] = cwd
+        try:
+            worktree = self._session_worktrees.get(key) or recover_session_worktree(cwd, self.config.allowed_roots)
+            if worktree:
+                self._session_worktrees[key] = worktree
+                meta = {**meta, "worktreePath": str(worktree[1])}
+            if new or worktree:
+                meta = {**meta, "branch": current_session_ref(cwd)}
+        except (RuntimeError, OSError, PathOutsideAllowedRootsError):
+            pass
+        return meta
+
     async def probe_adapters(self) -> list[dict[str, Any]]:
         results = []
         for name, adapter in self.adapters.items():
@@ -177,6 +231,20 @@ class AgentNodeDaemon:
         async with self._send_lock:
             await ws.send(json.dumps(frame, ensure_ascii=False))
 
+    def _claim_prompt_command(self, command_id: str) -> bool:
+        self._command_db.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self._command_db)) as db, db:
+            db.execute("""CREATE TABLE IF NOT EXISTS chat_commands (
+                scope TEXT NOT NULL, command_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
+                PRIMARY KEY (scope, command_hash)
+            )""")
+            receipt = sha256(command_id.encode()).hexdigest()
+            inserted = db.execute("INSERT OR IGNORE INTO chat_commands VALUES (?, ?, unixepoch())", (self._command_scope, receipt))
+            db.execute("""DELETE FROM chat_commands WHERE rowid IN (
+                SELECT rowid FROM chat_commands ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 16384
+            )""")
+            return inserted.rowcount == 1
+
     async def _request_approval(
         self,
         ws: Any,
@@ -196,24 +264,22 @@ class AgentNodeDaemon:
         fut: asyncio.Future[str] = loop.create_future()
         self._pending_approvals[call_id] = fut
         self._pending_approval_cmds[call_id] = command
-        await self._send_ws(
-            ws,
-            {
-                "type": "PermissionRequest",
-                "provider": provider,
-                "sessionId": session_id,
-                "callId": call_id,
-                "command": command,
-                "risk": risk,
-            },
-        )
+        stream = self._session_streams.get((provider, session_id))
+        event = {
+            "type": "PermissionRequest", "provider": provider, "sessionId": session_id,
+            "callId": call_id, "command": command, "risk": risk,
+            **({"runId": stream.run_id} if stream and stream.run_id else {}),
+        }
+        self._pending_approval_events[call_id] = event
         try:
+            await self._send_ws(ws, event)
             decision = await asyncio.wait_for(fut, timeout=300.0)
         except asyncio.TimeoutError:
             decision = "deny"
         finally:
             self._pending_approvals.pop(call_id, None)
             self._pending_approval_cmds.pop(call_id, None)
+            self._pending_approval_events.pop(call_id, None)
         if decision == "allow_session":
             self._session_always_allow.add((provider, session_id))
         return decision
@@ -577,18 +643,29 @@ class AgentNodeDaemon:
                 sid = str(frame.get("sessionId") or "")
                 key = (provider, sid)
                 is_active = key in self._active_runs
-                raw_last_seq = frame.get("lastSeq")
-                last_seq = int(raw_last_seq) if isinstance(raw_last_seq, (int, float)) else 0
-                raw_buf = self._run_buffers.get(key, []) if is_active else []
-                buffered = [dict(e) for e in raw_buf if int(e.get("seq") or 0) > last_seq] if last_seq > 0 else list(raw_buf)
+                raw_last_seq = frame.get("afterSequence", frame.get("lastSeq"))
+                last_seq = raw_last_seq if type(raw_last_seq) is int and raw_last_seq > 0 else 0
+                stream = self._session_streams.get(key)
+                latest = stream.sequence if stream else 0
+                generation_matches = frame.get("streamId") in (None, stream.stream_id if stream else None)
+                incremental = bool(last_seq and generation_matches)
+                cursor = last_seq if incremental else stream.turn_start if stream and is_active else latest
+                oldest = stream.events[0][1]["sequence"] if stream and stream.events else latest + 1
+                snapshot_required = bool((last_seq and not generation_matches) or cursor > latest or cursor < oldest - 1)
+                buffered = [event for _, event in stream.events if event["sequence"] > cursor] if stream and not snapshot_required else []
                 await send_back(
                     {
                         "type": "SessionStreamReplay",
                         "provider": provider,
                         "sessionId": sid,
                         "active": is_active,
-                        "incremental": last_seq > 0,
-                        "lastSeq": self._run_seq.get(key, 0),
+                        "runId": stream.run_id if stream and is_active else None,
+                        "incremental": incremental,
+                        "lastSeq": latest,
+                        "streamId": stream.stream_id if stream else None,
+                        "snapshotRequired": snapshot_required,
+                        "pendingApprovals": [event for event in self._pending_approval_events.values()
+                                             if (event["provider"], event["sessionId"]) == key],
                         "events": buffered,
                     }
                 )
@@ -617,6 +694,7 @@ class AgentNodeDaemon:
                 )
             elif cmd == "sessions.list":
                 items = await adapter.list_sessions(page=int(frame.get("page") or 1), limit=int(frame.get("limit") or 30))
+                items = await asyncio.to_thread(lambda: [self._remember_session_checkout(provider, row) for row in items])
                 await send_back({"type": "SessionsSnapshot", "provider": provider, "sessions": items})
             elif cmd == "session.open":
                 cwd = str(frame.get("cwd") or self.config.allowed_roots[0])
@@ -625,19 +703,30 @@ class AgentNodeDaemon:
                     session_id=frame.get("sessionId"),
                     use_worktree=bool(frame.get("useWorktree", False)),
                 )
-                opened_sid = str(meta.get("sessionId") or "")
-                opened_dir = meta.get("worktreePath") or meta.get("cwd")
-                if opened_sid and opened_dir:
-                    self._session_cwds[(provider, opened_sid)] = Path(str(opened_dir))
-                if opened_sid and meta.get("worktreePath"):
-                    self._session_worktrees[(provider, opened_sid)] = (
-                        ensure_allowed_path(cwd, self.config.allowed_roots),
-                        Path(str(meta["worktreePath"])),
-                    )
+                meta = await asyncio.to_thread(self._remember_session_checkout, provider, meta, new=True)
                 await send_back({"type": "SessionOpened", **meta})
             elif cmd == "session.history":
                 sid = str(frame.get("sessionId") or "")
-                msgs = await adapter.get_history(session_id=sid, limit=int(frame.get("limit") or 50))
+                limit = min(500, max(1, int(frame.get("limit") or 50)))
+                before = frame.get("beforeCursor")
+                if not frame.get("pagination"):
+                    msgs = await adapter.get_history(session_id=sid, limit=limit)
+                else:
+                    source = await adapter.get_history(session_id=sid, limit=500 if before else min(500, limit + 1))
+                    end = len(source)
+                    if before:
+                        end = next((i for i in range(len(source) - 1, 0, -1)
+                                    if _history_cursor(source[i], source[i - 1]) == before), -1)
+                        if end < 0:
+                            await send_back({"type": "SessionHistory", "provider": provider, "sessionId": sid,
+                                             "messages": [], "cursorExpired": True})
+                            return
+                    start = max(0, end - limit)
+                    msgs = source[start:end]
+                    cursor = _history_cursor(source[start], source[start - 1]) if start > 0 and msgs else None
+                    await send_back({"type": "SessionHistory", "provider": provider, "sessionId": sid,
+                                     "messages": msgs, "historyCursor": cursor, "beforeCursor": before})
+                    return
                 await send_back({"type": "SessionHistory", "provider": provider, "sessionId": sid, "messages": msgs})
             elif cmd == "files.list":
                 sid = str(frame.get("sessionId") or "")
@@ -926,6 +1015,7 @@ class AgentNodeDaemon:
                     except Exception:
                         pass
                 self._session_cwds.pop((provider, sid), None)
+                self._session_streams.pop((provider, sid), None)
                 self._session_always_allow.discard((provider, sid))
                 await send_back({"type": "SessionDeleted", "provider": provider, "sessionId": sid})
             elif cmd == "session.compact":
@@ -943,6 +1033,9 @@ class AgentNodeDaemon:
                 )
             elif cmd in ("prompt.send", "handoff.send"):
                 sid = str(frame.get("sessionId") or "")
+                command_id = str(frame.get("commandId") or req_id or "")
+                if len(command_id) > 128:
+                    raise ValueError("命令 ID 过长")
                 options = frame.get("options") or {}
                 if options.get("readOnly") and provider not in ("codex", "mock"):
                     raise ValueError("当前适配器不支持只读沙箱")
@@ -968,22 +1061,26 @@ class AgentNodeDaemon:
                 base_emit, on_approval = self._build_run_callbacks(ws, provider=provider, options=options)
                 turn_state: dict[str, Any] = {"runId": None, "checkpointed": False}
                 run_key = (provider, sid)
+                if command_id and not await asyncio.to_thread(self._claim_prompt_command, command_id):
+                    await send_back({"type": "DuplicateIgnored", "commandId": command_id})
+                    return
+                if run_key in self._active_runs:
+                    raise ValueError("当前会话已有任务运行中")
                 self._active_runs.add(run_key)
-                self._run_buffers[run_key] = []
-                self._run_seq[run_key] = 0
+                stream = self._session_streams.setdefault(run_key, SessionStream())
+                stream.turn_start = stream.sequence
+                stream.run_id = eff_req_id
+                self._session_streams.move_to_end(run_key)
+                while len(self._session_streams) > 16:
+                    oldest = next((key for key in self._session_streams if key not in self._active_runs), None)
+                    if oldest is None:
+                        break
+                    del self._session_streams[oldest]
 
                 async def wrapped_emit(evt: dict[str, Any]) -> None:
                     if evt.get("runId"):
                         turn_state["runId"] = str(evt["runId"])
-                    next_seq = self._run_seq.get(run_key, 0) + 1
-                    self._run_seq[run_key] = next_seq
-                    stamped_evt = {**evt, "seq": next_seq}
-                    # 缓存最近 1000 帧带递增序号的流式事件，支持断线重连基于 lastSeq 增量续传
-                    buf = self._run_buffers.get(run_key)
-                    if buf is not None:
-                        buf.append(dict(stamped_evt))
-                        if len(buf) > 1000:
-                            del buf[: len(buf) - 1000]
+                        stream.run_id = turn_state["runId"]
                     if evt.get("type") == "Completed" and not turn_state["checkpointed"]:
                         turn_state["checkpointed"] = True
                         if before_tree and not options.get("readOnly"):
@@ -1032,7 +1129,7 @@ class AgentNodeDaemon:
                                         **diff_data,
                                     }
                                 )
-                    await base_emit(stamped_evt)
+                    await base_emit(stream.append(evt))
 
                 extra_kwargs = {"options": runtime} if runtime else {}
                 try:
@@ -1045,10 +1142,16 @@ class AgentNodeDaemon:
                         attachments=atts,
                         **extra_kwargs,
                     )
+                except Exception as err:
+                    log.exception("prompt failed (provider=%s)", provider)
+                    await wrapped_emit({
+                        "type": "Failed", "sessionId": sid, "requestId": eff_req_id,
+                        "runId": turn_state["runId"] or eff_req_id,
+                        "code": "path_forbidden" if isinstance(err, PathOutsideAllowedRootsError) else "node_execution_error",
+                        "message": str(err) or type(err).__name__,
+                    })
                 finally:
                     self._active_runs.discard(run_key)
-                    self._run_buffers.pop(run_key, None)
-                    self._run_seq.pop(run_key, None)
             elif cmd == "prompt.cancel":
                 await adapter.cancel(session_id=str(frame.get("sessionId") or ""), run_id=frame.get("runId"))
         except PathOutsideAllowedRootsError as err:
@@ -1075,6 +1178,8 @@ class AgentNodeDaemon:
             ready = json.loads(await ws.recv())
             if ready.get("type") != "NodeReady":
                 raise RuntimeError(f"Unexpected handshake frame: {ready}")
+            if ready.get("nodeId"):
+                self._command_scope = sha256(f"{self.config.core_url}\n{ready['nodeId']}".encode()).hexdigest()
 
             async def heartbeat_loop() -> None:
                 while True:

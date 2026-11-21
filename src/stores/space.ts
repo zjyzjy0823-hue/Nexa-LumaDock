@@ -11,6 +11,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
+import { androidInvoke, isAndroidLocal, type AndroidBinding } from '../desktop/androidLocal'
 import { useAuthStore } from './auth'
 import { useFleetStore } from './fleet'
 import { getApiBaseUrl } from '../services/fleetUrl'
@@ -127,20 +128,26 @@ function bytesToBase64(bytes: Uint8Array): string {
 export const useSpaceStore = defineStore('space', () => {
   const auth = useAuthStore()
   const fleet = useFleetStore()
+  const android = isAndroidLocal()
+  const androidBinding = ref<AndroidBinding | null>(null)
   const localView = ref(false)
   const linkedCore = computed(() => auth.mode === 'local' && auth.workstation && auth.coreConnection?.connected
     ? auth.coreConnection : null)
   const waitingForConnection = computed(() => auth.mode === 'local' && auth.workstation && auth.coreConnection === undefined)
   const connectionIdentity = computed(() => {
-    const link = linkedCore.value
+    const native = androidBinding.value
+    const link = linkedCore.value ?? (native?.status === 'connected' && (!getApiBaseUrl() || getApiBaseUrl() === native.coreUrl) ? native : null)
     return link ? JSON.stringify([link.coreUrl, link.workspaceId, link.clientId, link.connectedAt]) : ''
   })
   const deviceReadsUnsupported = ref(false)
-  const deviceRoute = computed<SpaceRouteConfig | null>(() =>
-    connectionIdentity.value && auth.token
+  const deviceRoute = computed<SpaceRouteConfig | null>(() => {
+    if (android && auth.androidOffline && connectionIdentity.value) return { kind: 'device-read', token: '', androidDevice: true }
+    return connectionIdentity.value && auth.token
       ? { kind: 'device-read', token: auth.token, origin: getApiBaseUrl() }
-      : null)
+      : null
+  })
   const route = computed<SpaceRouteConfig | null>(previous => {
+    if (android && (!auth.token || !auth.user)) return deviceReadsUnsupported.value ? null : deviceRoute.value
     if (!auth.token || waitingForConnection.value) return null
     const current = linkedCore.value && !localView.value
       ? fleet.coreWorkspaceRoute : { token: auth.token, origin: getApiBaseUrl() }
@@ -152,7 +159,7 @@ export const useSpaceStore = defineStore('space', () => {
   const coreSignInRequired = computed(() => !!linkedCore.value && !localView.value && !route.value)
   const apiOrigin = computed(() => route.value?.origin)
   const replica = computed<SpaceReplica | null>(previous => {
-    if (!auth.replicaAccount || waitingForConnection.value || localView.value || (!linkedCore.value && auth.mode !== 'core')) return null
+    if (!auth.replicaAccount || deviceReadOnly.value || waitingForConnection.value || localView.value || (!linkedCore.value && auth.mode !== 'core')) return null
     const link = linkedCore.value
     if (link && !fleet.coreWorkspaceRoute) return null
     const namespace = JSON.stringify([
@@ -187,6 +194,7 @@ export const useSpaceStore = defineStore('space', () => {
   const selectedEntryDetail = ref<SpaceEntryDetail | null>(null)
   const tokens = ref<SpaceTokenItem[]>([])
   const auditLogs = ref<SpaceAuditLogItem[]>([])
+  let auditRequest = 0
   const lastCreatedToken = ref<SpaceTokenCreated | null>(null)
 
   // 纯内存敏感内容状态（绝不落盘）
@@ -198,6 +206,16 @@ export const useSpaceStore = defineStore('space', () => {
   const error = ref<string>('')
 
   const selectedSpace = computed(() => spaces.value.find(s => s.id === selectedSpaceId.value) ?? null)
+
+  async function refreshAndroidDeviceBinding() {
+    if (android) androidBinding.value = await androidInvoke<AndroidBinding>('android_core_status').catch(() => null)
+  }
+
+  function openAndroidSpaceSignIn() {
+    if (!android) return false
+    auth.openAndroidSignIn()
+    return true
+  }
   const selectedEntrySummary = computed(() => entries.value.find(e => e.id === selectedEntryId.value) ?? null)
 
   function requireRoute(): SpaceRouteConfig {
@@ -1177,19 +1195,20 @@ export const useSpaceStore = defineStore('space', () => {
     await Promise.all([loadConflicts(), refreshCurrentSpace()])
   }
 
-  async function loadTokensAndAudit() {
+  async function loadTokensAndAudit(auditAction?: string) {
     requireUserSpaceAccess()
     const spaceId = selectedSpaceId.value
     const target = route.value
     if (!spaceId || !target || offline.value) return
     const current = () => target === route.value && spaceId === selectedSpaceId.value
+    const request = ++auditRequest
     try {
-      const [tks, logs] = await Promise.all([fetchSpaceTokens(target, spaceId), fetchSpaceAuditLogs(target, spaceId)])
-      if (!current()) return
+      const [tks, logs] = await Promise.all([fetchSpaceTokens(target, spaceId), fetchSpaceAuditLogs(target, spaceId, 100, auditAction)])
+      if (!current() || request !== auditRequest) return
       tokens.value = tks
       auditLogs.value = logs
     } catch (cause) {
-      if (current()) error.value = cause instanceof Error ? cause.message : '无法读取空间管理数据'
+      if (current() && request === auditRequest) error.value = cause instanceof Error ? cause.message : '无法读取空间管理数据'
     }
   }
 
@@ -1286,6 +1305,9 @@ export const useSpaceStore = defineStore('space', () => {
 
   return {
     route,
+    android,
+    refreshAndroidDeviceBinding,
+    openAndroidSpaceSignIn,
     available,
     linkedCore,
     localView,

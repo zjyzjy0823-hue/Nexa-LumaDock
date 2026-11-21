@@ -368,10 +368,26 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
         assert any(f["type"] == "CheckpointReverted" and "src/app.py" in f["restoredFiles"] for f in frames)
 
         daemon._active_runs.add(("mock", sid2))
-        daemon._run_buffers[("mock", sid2)] = [{"type": "TextDelta", "sessionId": sid2, "runId": "r-buf", "text": "buffered"}]
+        from agent_node.daemon import SessionStream
+
+        stream = SessionStream()
+        stream.append({"type": "TextDelta", "sessionId": sid2, "runId": "r-buf", "text": "buffered"})
+        daemon._session_streams[("mock", sid2)] = stream
         await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2, "requestId": "sub-1"})
         sub_snap = next(f for f in frames if f["type"] == "SessionStreamReplay" and f.get("requestId") == "sub-1")
         assert sub_snap["active"] is True and sub_snap["events"][0]["text"] == "buffered"
+        daemon._active_runs.discard(("mock", sid2))
+        stream.append({"type": "Completed", "sessionId": sid2, "runId": "r-buf"})
+        await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2,
+                                        "afterSequence": 1, "streamId": stream.stream_id, "requestId": "sub-completed"})
+        completed = next(f for f in frames if f.get("requestId") == "sub-completed")
+        assert completed["active"] is False and completed["events"][0]["type"] == "Completed"
+        for _ in range(501):
+            stream.append({"type": "TextDelta", "text": "overflow"})
+        await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2,
+                                        "afterSequence": 1, "streamId": stream.stream_id, "requestId": "sub-gap"})
+        gap = next(f for f in frames if f.get("requestId") == "sub-gap")
+        assert gap["snapshotRequired"] is True and gap["events"] == []
 
         # 7. Worktree 沙箱合并回主分支工作区
         await daemon.handle_command(ws, {"type": "session.open", "provider": "mock", "cwd": str(repo), "useWorktree": True, "requestId": "open-wt"})

@@ -913,6 +913,8 @@ const effectiveTodos = computed(() =>
 const effectiveQueue = computed(() =>
   effectiveKey.value ? fleet.queuedPromptsBySession[effectiveKey.value] ?? [] : [],
 )
+const effectiveOutbox = computed(() => fleet.outbox.filter(item => item.sessionKey === effectiveKey.value))
+const waitsForReconnect = computed(() => fleet.wsState !== 'online' || effectiveNode.value?.status !== 'online')
 const effectiveCheckpoints = computed(() =>
   effectiveKey.value ? fleet.checkpointsBySession[effectiveKey.value] ?? [] : [],
 )
@@ -1746,7 +1748,7 @@ async function handleSubmit() {
     return
   }
 
-  if (!effectiveNode.value) {
+  if (!effectiveSession.value && !effectiveNode.value) {
     emit('action', '请先在左侧选择或配对至少一个在线节点')
     return
   }
@@ -1785,12 +1787,6 @@ async function handleSubmit() {
       previewingPasteBlock.value = null
     }
     mentionMode.value = null
-  }
-
-  if (isStreaming.value && effectiveKey.value) {
-    fleet.enqueuePrompt(effectiveKey.value, payloadText, files, runOpts)
-    clearSubmittedExtras()
-    return
   }
 
   sending.value = true
@@ -2084,6 +2080,9 @@ async function retryTurn(msg: ChatMessage) {
       <span class="ts-count num">
         {{ searchMatches.length ? `${searchActiveIdx + 1} / ${searchMatches.length}` : searchQuery.trim() ? '0 / 0' : '' }}
       </span>
+      <button v-if="effectiveKey && searchQuery.trim() && fleet.wsState === 'online' && fleet.historyCursorBySession[effectiveKey] !== null"
+        type="button" class="icon-btn ts-nav-btn" title="搜索更早历史" aria-label="搜索更早历史"
+        @click="fleet.searchOlderHistory(effectiveKey)"><OpusIcon name="history" /></button>
       <button
         type="button"
         class="icon-btn ts-nav-btn"
@@ -2137,14 +2136,16 @@ async function retryTurn(msg: ChatMessage) {
       @keyup="handleMessageSelection"
     >
       <div ref="innerListEl" :class="mobile ? 'mmsgs-inner' : 'msgs-inner'">
-        <div v-if="effectiveKey && effectiveMessages.length >= 50" class="older-history-bar">
+        <div v-if="effectiveKey && fleet.wsState === 'online' && (fleet.historyCursorBySession[effectiveKey] ||
+          (fleet.historyCursorBySession[effectiveKey] === undefined && effectiveMessages.length >= 50))" class="older-history-bar">
           <button
             type="button"
             class="older-history-btn"
+            :disabled="Boolean(fleet.pendingHistoryPages[effectiveKey])"
             @click="fleet.requestOlderHistory(effectiveKey)"
           >
             <OpusIcon name="history" />
-            <span>加载更早历史消息</span>
+            <span>{{ fleet.pendingHistoryPages[effectiveKey] ? '正在加载历史…' : '加载更早历史消息' }}</span>
           </button>
         </div>
 
@@ -2508,6 +2509,20 @@ async function retryTurn(msg: ChatMessage) {
         :streaming="isStreaming"
         @execute-plan="handleExecutePlan"
       />
+
+      <div v-if="effectiveOutbox.length" class="follow-queue">
+        <div class="queue-hdr" role="status">
+          <OpusIcon name="tasks" class="queue-ic" />
+          <span>{{ waitsForReconnect ? '重连后发送' : '待发送' }}（{{ effectiveOutbox.length }}）</span>
+        </div>
+        <div class="queue-items">
+          <div v-for="item in effectiveOutbox" :key="item.id" class="queue-row">
+            <span class="queue-text">{{ item.text }}</span>
+            <button type="button" class="btn btn-ghost btn-sm"
+              @click="fleet.cancelDeferredPrompt(item.id) || emit('action', '这条消息正在发送')">还原到输入框</button>
+          </div>
+        </div>
+      </div>
 
       <div v-if="effectiveQueue.length" class="follow-queue">
         <div class="queue-hdr">
