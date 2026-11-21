@@ -32,6 +32,19 @@ export type TurnRenderItem =
   | { type: 'text'; id: string; text: string; isLast: boolean }
   | { type: 'media'; id: string; attachment: InlineMediaAttachment }
 
+export type WorkLogStep = Extract<TurnRenderItem, { type: 'thought' | 'tool' }>
+export type WorkLogProgress = { type: 'thought' | 'text' } | { type: 'tool'; tool: ToolCallBadge }
+
+export interface WorkLogRenderItem {
+  type: 'work-log'
+  id: string
+  steps: WorkLogStep[]
+  isLast: boolean
+  progress?: WorkLogProgress
+}
+
+type ThreadRenderItem = WorkLogRenderItem | Extract<TurnRenderItem, { type: 'text' | 'media' }>
+
 export interface ExtractedHostMedia {
   match: string
   path: string
@@ -469,5 +482,54 @@ export function buildTurnRenderItems(
     }
   }
 
+  return out
+}
+
+// Keep user-visible prose and attachments in place when a provider emits them between steps.
+export function buildThreadRenderItems(
+  msg: ChatMessage,
+  imagePreviewByArtifactId: Record<string, string> = {},
+): ThreadRenderItem[] {
+  const out: ThreadRenderItem[] = []
+  const items = buildTurnRenderItems(msg, imagePreviewByArtifactId)
+  for (const [index, item] of items.entries()) {
+    if (item.type === 'text' || item.type === 'media') {
+      out.push(item)
+      continue
+    }
+    const steps: WorkLogStep[] = item.type === 'tool-group'
+      ? item.group.tools.map(tool => ({ type: 'tool', id: `${msg.id}-tool-${tool.callId || tool.id}`, callId: tool.callId || tool.id, tool }))
+      : item.type === 'tool'
+        ? [{ ...item, id: `${msg.id}-tool-${item.callId}` }]
+        : [item]
+    const previous = out.at(-1)
+    const isLast = index === items.length - 1
+    if (previous?.type === 'work-log') {
+      previous.steps.push(...steps)
+      previous.isLast = isLast
+    } else {
+      out.push({ type: 'work-log', id: `${item.id}-work`, steps, isLast })
+    }
+  }
+
+  if (msg.streaming) {
+    const logs = out.filter(item => item.type === 'work-log')
+    const latestLog = logs.at(-1)
+    const progress = msg.liveProgress
+    if (latestLog && progress?.type === 'tool') {
+      for (const log of logs) {
+        const step = log.steps.find(step => step.type === 'tool' && step.callId === progress.callId)
+        if (step?.type !== 'tool') continue
+        log.progress = { type: 'tool', tool: step.tool }
+        return out
+      }
+    }
+    if (latestLog) {
+      const lastStep = latestLog.steps.at(-1)
+      if (progress?.type === 'thought' || progress?.type === 'text') latestLog.progress = progress
+      else if (msg.parts?.at(-1)?.type === 'text' || out.at(-1)?.type === 'text') latestLog.progress = { type: 'text' }
+      else if (lastStep) latestLog.progress = lastStep
+    }
+  }
   return out
 }

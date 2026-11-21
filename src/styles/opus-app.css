@@ -357,6 +357,26 @@ dialog.dlg .dlg-check input { width: 16px; height: 16px; margin: 0; }
 }
 .opus-shell .window.nav-collapsed .nav-sec + * { margin-top: 0; }
 
+.chat-progress-shimmer { color: var(--text-3); }
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  @supports (background-clip: text) {
+    .chat-progress-shimmer {
+      background: linear-gradient(105deg, var(--text-3) 41%, var(--text) 50%, var(--text-3) 59%) 100% 50% / 240% 100% no-repeat;
+      background-clip: text;
+      color: transparent;
+      animation: chat-progress-shimmer 2.2s ease-in-out infinite;
+    }
+    [data-motion="reduced"] .chat-progress-shimmer {
+      background: none;
+      color: var(--text-3);
+      animation: none;
+    }
+  }
+}
+@keyframes chat-progress-shimmer {
+  to { background-position: 0% 50%; }
+}
+
 /* 全局复制按钮点击打勾交互反馈 */
 @keyframes opus-copy-check-pop {
   0% { transform: scale(0.62); opacity: 0.45; }

@@ -14,6 +14,7 @@ import socket
 import sqlite3
 import tempfile
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import uvicorn
@@ -24,6 +25,7 @@ from .adapters.registry import build_adapter_registry
 from .config import NodeConfig, PathOutsideAllowedRootsError, detect_lan_urls, ensure_allowed_path
 from .crypto_chunks import generate_file_key
 from .terminal_session import TerminalManager
+from .port_preview import PortPreviewManager
 from .transfer import (
     DirectArtifactStore,
     create_direct_transfer_app,
@@ -47,7 +49,7 @@ from .workspace_tools import (
     revert_workspace_files,
     write_workspace_file,
 )
-from .worktree import current_session_ref, recover_session_worktree, remove_session_worktree
+from .worktree import current_session_ref, project_identity, recover_session_worktree, remove_session_worktree
 
 
 @dataclass
@@ -71,7 +73,8 @@ class SessionStream:
 
 
 def _history_cursor(message: dict[str, Any], previous: dict[str, Any]) -> str:
-    anchor = [(row.get("role"), row.get("text")) for row in (previous, message)]
+    anchor = [(row.get("role"), row.get("id") if row.get("systemEvents") else row.get("text"))
+              for row in (previous, message)]
     return sha256(json.dumps(anchor, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -90,10 +93,11 @@ class AgentNodeDaemon:
         self.staging_dir = staging_dir or (Path(tempfile.gettempdir()) / "studiolo-node-direct")
         self.direct_store = DirectArtifactStore(self.staging_dir) if config.direct.enabled else None
         self.terminal_manager = TerminalManager(config.allowed_roots)
+        self.port_previews = PortPreviewManager()
         self._pending_approvals: dict[str, asyncio.Future[str]] = {}
         self._pending_approval_cmds: dict[str, str] = {}
         self._pending_approval_events: dict[str, dict[str, Any]] = {}
-        self._session_always_allow: set[tuple[str, str]] = set()
+        self._session_allowed_commands: dict[tuple[str, str], set[str]] = {}
         self._trust_file = self.staging_dir / "trust-allowlist.json"
         self._trust_patterns: list[str] = self._load_trust_patterns()
         self._session_cwds: dict[tuple[str, str], Path] = {}
@@ -101,6 +105,7 @@ class AgentNodeDaemon:
         self._checkpoints: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._checkpoint_order: dict[tuple[str, str], list[str]] = {}
         self._active_runs: set[tuple[str, str]] = set()
+        self._compacting_sessions: set[tuple[str, str]] = set()
         self._session_streams: OrderedDict[tuple[str, str], SessionStream] = OrderedDict()
         self._command_db = (staging_dir or Path.home() / ".studiolo" / "agent-node") / "chat-commands.sqlite3"
         self._command_scope = sha256(f"{config.core_url}\n{config.node_token}".encode()).hexdigest()
@@ -167,7 +172,10 @@ class AgentNodeDaemon:
                 pass
         return ensure_allowed_path(self.config.allowed_roots[0], self.config.allowed_roots)
 
-    def _remember_session_checkout(self, provider: str, meta: dict[str, Any], *, new: bool = False) -> dict[str, Any]:
+    def _remember_session_checkout(
+        self, provider: str, meta: dict[str, Any], *, new: bool = False,
+        projects: dict[Path, dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         sid = str(meta.get("sessionId") or "")
         raw_cwd = meta.get("worktreePath") or meta.get("cwd")
         if not sid or not raw_cwd:
@@ -178,6 +186,7 @@ class AgentNodeDaemon:
             return meta
         key = (provider, sid)
         self._session_cwds[key] = cwd
+        worktree = None
         try:
             worktree = self._session_worktrees.get(key) or recover_session_worktree(cwd, self.config.allowed_roots)
             if worktree:
@@ -187,6 +196,12 @@ class AgentNodeDaemon:
                 meta = {**meta, "branch": current_session_ref(cwd)}
         except (RuntimeError, OSError, PathOutsideAllowedRootsError):
             pass
+        if provider != "hermes" and cwd.is_dir():
+            project_dir = worktree[0] if worktree else cwd
+            cache = projects if projects is not None else {}
+            if project_dir not in cache:
+                cache[project_dir] = project_identity(project_dir, self.config.allowed_roots)
+            meta = {**meta, **cache[project_dir]}
         return meta
 
     async def probe_adapters(self) -> list[dict[str, Any]]:
@@ -255,9 +270,9 @@ class AgentNodeDaemon:
         command: str,
         risk: str,
     ) -> str:
-        # 仅在同一节点本次活跃会话内允许用户显式选定的 "本会话允许"，默认全阻断审批
-        if (provider, session_id) in self._session_always_allow:
-            return "allow_session"
+        session = (provider, session_id)
+        if risk != "high" and command and command in self._session_allowed_commands.get(session, ()):
+            return "allow_once"
         if risk != "high" and self._is_command_trusted(command):
             return "allow_once"
         loop = asyncio.get_running_loop()
@@ -281,7 +296,11 @@ class AgentNodeDaemon:
             self._pending_approval_cmds.pop(call_id, None)
             self._pending_approval_events.pop(call_id, None)
         if decision == "allow_session":
-            self._session_always_allow.add((provider, session_id))
+            if risk != "high" and command:
+                allowed = self._session_allowed_commands.setdefault(session, set())
+                if len(allowed) < 100:
+                    allowed.add(command)
+            return "allow_once"
         return decision
 
     def _build_run_callbacks(
@@ -297,7 +316,7 @@ class AgentNodeDaemon:
         async def on_approval(s_id: str, call_id: str, command: str, risk: str) -> str:
             if options.get("denyRequests") or options.get("readOnly"):
                 return "deny"
-            if options.get("autoApprove"):
+            if options.get("autoApprove") and risk != "high":
                 return "allow_once"
             return await self._request_approval(
                 ws, provider=provider, session_id=s_id, call_id=call_id, command=command, risk=risk
@@ -392,13 +411,17 @@ class AgentNodeDaemon:
 
         if cmd == "permission.respond":
             call_id = str(frame.get("callId") or "")
+            fut = self._pending_approvals.get(call_id)
+            if not fut or fut.done():
+                return
             decision = str(frame.get("decision") or "deny")
             if decision == "allow_trust":
                 raw_pat = str(frame.get("trustPattern") or "") or self._derive_trust_prefix(
                     self._pending_approval_cmds.get(call_id, "")
                 )
                 clean_pat = " ".join(raw_pat.strip().split())
-                if clean_pat and not any(tok in clean_pat for tok in ("&&", "||", ";", "|", "$(", "`", "\n", "\r", ">", "<")):
+                approval = self._pending_approval_events.get(call_id, {})
+                if approval.get("risk") != "high" and clean_pat and not any(tok in clean_pat for tok in ("&&", "||", ";", "|", "$(", "`", "\n", "\r", ">", "<")):
                     if clean_pat not in self._trust_patterns:
                         self._trust_patterns = [*self._trust_patterns, clean_pat][-100:]
                         self._save_trust_patterns()
@@ -406,8 +429,7 @@ class AgentNodeDaemon:
                 decision = "allow_once"
             elif decision not in ("allow_once", "allow_session", "deny"):
                 decision = "deny"
-            fut = self._pending_approvals.get(call_id)
-            if fut and not fut.done():
+            if not fut.done():
                 fut.set_result(decision)
             return
 
@@ -694,7 +716,8 @@ class AgentNodeDaemon:
                 )
             elif cmd == "sessions.list":
                 items = await adapter.list_sessions(page=int(frame.get("page") or 1), limit=int(frame.get("limit") or 30))
-                items = await asyncio.to_thread(lambda: [self._remember_session_checkout(provider, row) for row in items])
+                projects: dict[Path, dict[str, str]] = {}
+                items = await asyncio.to_thread(lambda: [self._remember_session_checkout(provider, row, projects=projects) for row in items])
                 await send_back({"type": "SessionsSnapshot", "provider": provider, "sessions": items})
             elif cmd == "session.open":
                 cwd = str(frame.get("cwd") or self.config.allowed_roots[0])
@@ -923,6 +946,26 @@ class AgentNodeDaemon:
                         **diff_after,
                     },
                 )
+            elif cmd == "terminal.preview":
+                sid = str(frame.get("sessionId") or "")
+                port = frame.get("port")
+                result = {"type": "TerminalPreview", "provider": provider, "sessionId": sid, "port": port}
+                try:
+                    if not sid or type(port) is not int or not 1024 <= port <= 65535:
+                        raise ValueError("请选择有效的工作区预览端口（1024–65535）")
+                    if not self.config.direct.enabled:
+                        raise ValueError("节点未启用局域网直连")
+                    if not self.terminal_manager.is_open_for(str(frame.get("terminalId") or ""), sid):
+                        raise ValueError("请先打开当前会话的节点终端")
+                    self._resolve_session_dir(provider, sid)
+                    urls = detect_lan_urls(1)
+                    host = urlsplit(urls[0]).hostname if urls else None
+                    if not host:
+                        raise ValueError("节点没有可用于直连的局域网地址")
+                    url = await self.port_previews.open(provider, sid, host, port, frame.get("tls") is True)
+                    await send_back({**result, "previewUrl": url})
+                except (ValueError, OSError, TimeoutError) as err:
+                    await send_back({**result, "error": str(err) if isinstance(err, ValueError) else "节点端口不可访问"})
             elif cmd == "terminal.open":
                 sid = str(frame.get("sessionId") or "")
                 target_dir = self._resolve_session_dir(provider, sid or None, frame.get("cwd"))
@@ -1016,13 +1059,21 @@ class AgentNodeDaemon:
                         pass
                 self._session_cwds.pop((provider, sid), None)
                 self._session_streams.pop((provider, sid), None)
-                self._session_always_allow.discard((provider, sid))
+                self._session_allowed_commands.pop((provider, sid), None)
+                await self.port_previews.close((provider, sid))
                 await send_back({"type": "SessionDeleted", "provider": provider, "sessionId": sid})
             elif cmd == "session.compact":
                 sid = str(frame.get("sessionId") or "")
                 if not sid:
                     raise ValueError("缺少会话 ID")
-                res = await adapter.compact_session(session_id=sid)
+                key = (provider, sid)
+                if key in self._active_runs or key in self._compacting_sessions:
+                    raise ValueError("请等待当前会话任务结束后再压缩")
+                self._compacting_sessions.add(key)
+                try:
+                    res = await adapter.compact_session(session_id=sid)
+                finally:
+                    self._compacting_sessions.discard(key)
                 await send_back(
                     {
                         "type": "SessionCompacted",
@@ -1061,10 +1112,12 @@ class AgentNodeDaemon:
                 base_emit, on_approval = self._build_run_callbacks(ws, provider=provider, options=options)
                 turn_state: dict[str, Any] = {"runId": None, "checkpointed": False}
                 run_key = (provider, sid)
+                if run_key in self._compacting_sessions:
+                    raise ValueError("请等待会话上下文压缩结束")
                 if command_id and not await asyncio.to_thread(self._claim_prompt_command, command_id):
                     await send_back({"type": "DuplicateIgnored", "commandId": command_id})
                     return
-                if run_key in self._active_runs:
+                if run_key in self._active_runs or run_key in self._compacting_sessions:
                     raise ValueError("当前会话已有任务运行中")
                 self._active_runs.add(run_key)
                 stream = self._session_streams.setdefault(run_key, SessionStream())
@@ -1078,6 +1131,9 @@ class AgentNodeDaemon:
                     del self._session_streams[oldest]
 
                 async def wrapped_emit(evt: dict[str, Any]) -> None:
+                    if cmd == "handoff.send" and evt.get("type") == "Accepted":
+                        evt = {**evt, "handoffSummary": str(frame.get("summary") or frame.get("text") or ""),
+                               "handoffSource": str(frame.get("sourceSessionKey") or "")[:512]}
                     if evt.get("runId"):
                         turn_state["runId"] = str(evt["runId"])
                         stream.run_id = turn_state["runId"]
@@ -1153,7 +1209,24 @@ class AgentNodeDaemon:
                 finally:
                     self._active_runs.discard(run_key)
             elif cmd == "prompt.cancel":
-                await adapter.cancel(session_id=str(frame.get("sessionId") or ""), run_id=frame.get("runId"))
+                sid = str(frame.get("sessionId") or "")
+                key = (provider, sid)
+                reply = {"type": "RunStopStatus", "provider": provider, "sessionId": sid, "runId": frame.get("runId")}
+                if key not in self._active_runs:
+                    await send_back({**reply, "status": "error", "message": "当前会话已无运行中的任务"})
+                    return
+                try:
+                    await adapter.cancel(session_id=sid, run_id=frame.get("runId"))
+                except Exception:
+                    log.exception("cancel failed (provider=%s)", provider)
+                    await send_back({**reply, "status": "error", "message": "代理未接受停止请求"})
+                    return
+                for call_id, event in list(self._pending_approval_events.items()):
+                    if (event["provider"], event["sessionId"]) == key:
+                        pending = self._pending_approvals.get(call_id)
+                        if pending and not pending.done():
+                            pending.set_result("deny")
+                await send_back({**reply, "status": "accepted"})
         except PathOutsideAllowedRootsError as err:
             await send_back(
                 {
@@ -1200,6 +1273,8 @@ class AgentNodeDaemon:
                 hb_task.cancel()
                 for t in list(bg_tasks):
                     t.cancel()
+                await asyncio.gather(*bg_tasks, return_exceptions=True)
+                await self.port_previews.close()
 
     async def run_forever(self) -> None:
         direct_server: uvicorn.Server | None = None

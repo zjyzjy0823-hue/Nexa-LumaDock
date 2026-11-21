@@ -280,6 +280,10 @@ class TerminalManager:
         self.max_sessions = max_sessions
         self._sessions: dict[str, WorkspaceTerminalSession] = {}
 
+    def is_open_for(self, terminal_id: str, session_id: str) -> bool:
+        terminal = self._sessions.get(terminal_id)
+        return bool(terminal and not terminal._closed and terminal.session_id == session_id)
+
     async def open_terminal(
         self,
         *,

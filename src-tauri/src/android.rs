@@ -164,8 +164,14 @@ pub(crate) async fn android_show_fleet_notification(
     state: State<'_, AndroidNotifications>,
     title: String,
     body: String,
+    session_key: Option<String>,
+    ongoing: Option<bool>,
+    clear: Option<bool>,
 ) -> CommandResult<bool> {
-    state.invoke("show", json!({ "title": title, "body": body })).await
+    state.invoke("show", json!({
+        "title": title, "body": body, "sessionKey": session_key,
+        "ongoing": ongoing.unwrap_or(false), "clear": clear.unwrap_or(false)
+    })).await
 }
 
 #[tauri::command]

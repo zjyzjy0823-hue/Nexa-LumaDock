@@ -5,14 +5,16 @@ import { useDataStore } from '../../stores/data'
 import { sessionKey as buildSessionKey, useFleetStore } from '../../stores/fleet'
 import { useWebsitesStore } from '../../stores/websites'
 import {
+  buildSessionMarkdown,
   createPastedTextBlock,
-  extractMessageParts,
   fuzzyMatchFileScore,
   isQuotaOrModelError,
+  readTurnTestResult,
   shouldConvertToPastedBlock,
+  systemEventLabel,
 } from '../../services/chatHelpers'
 import {
-  buildTurnRenderItems,
+  buildThreadRenderItems,
   collectMessageInlineAttachments,
   splitTextByInlineMedia,
 } from '../../services/messageSegments'
@@ -41,8 +43,7 @@ import MessageRail from './MessageRail.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
 import PromptLibraryModal from './PromptLibraryModal.vue'
 import SessionTodoBar from './SessionTodoBar.vue'
-import ToolCallCard from './ToolCallCard.vue'
-import ToolRunGroup from './ToolRunGroup.vue'
+import WorkLog from './WorkLog.vue'
 import { formatBytes, getProviderMeta, type OpusIconName } from './providerMeta'
 import { useWorkbenchTheme } from '../../composables/useWorkbenchTheme'
 
@@ -73,7 +74,6 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const listEl = ref<HTMLElement | null>(null)
 const innerListEl = ref<HTMLElement | null>(null)
-const expandedThought = ref<Record<string, boolean>>({})
 
 const effectiveKey = computed(() => props.sessionKey || fleet.activeSessionKey)
 const effectiveSession = computed(() =>
@@ -904,6 +904,47 @@ watchEffect(onCleanup => {
 const effectiveMessages = computed<ChatMessage[]>(() =>
   effectiveKey.value ? fleet.messagesBySession[effectiveKey.value] ?? [] : [],
 )
+const rawHistoryDialog = ref<HTMLDialogElement>()
+const rawHistoryTitleId = useId()
+const rawHistoryBoundary = ref('')
+const rawHistorySourceKey = ref('')
+const rawHistorySessionKey = computed(() => rawHistorySourceKey.value || effectiveKey.value)
+const rawHistory = computed(() => {
+  if (rawHistorySourceKey.value) {
+    const source = fleet.sessionsByKey[rawHistorySourceKey.value]
+    const messages = fleet.messagesBySession[rawHistorySourceKey.value] ?? []
+    return source && messages.length ? buildSessionMarkdown(source, messages) : ''
+  }
+  const session = effectiveKey.value && fleet.sessionsByKey[effectiveKey.value]
+  const end = effectiveMessages.value.findIndex(message => message.id === rawHistoryBoundary.value)
+  if (!session || end <= 0) return ''
+  return buildSessionMarkdown(session, effectiveMessages.value.slice(0, end), effectiveNode.value?.name)
+})
+function canLoadHistoryPage(key: string | undefined) {
+  if (!key || fleet.wsState !== 'online') return false
+  const cursor = fleet.historyCursorBySession[key]
+  return Boolean(cursor) || (cursor === undefined && (fleet.messagesBySession[key]?.length ?? 0) >= 50)
+}
+const canLoadOlder = computed(() => canLoadHistoryPage(effectiveKey.value))
+const historyState = computed(() => effectiveKey.value ? fleet.historyStateBySession[effectiveKey.value] : undefined)
+const stopStatus = computed(() => effectiveKey.value ? fleet.stopStatusBySession[effectiveKey.value] : undefined)
+
+function openRawHistory(messageId: string, sourceKey?: string) {
+  rawHistoryBoundary.value = messageId
+  rawHistorySourceKey.value = sourceKey && fleet.sessionsByKey[sourceKey] && sourceKey !== effectiveKey.value ? sourceKey : ''
+  if (rawHistorySourceKey.value) fleet.loadSessionHistory(rawHistorySourceKey.value)
+  rawHistoryDialog.value?.showModal()
+}
+
+watch(effectiveKey, () => rawHistoryDialog.value?.close())
+const assistantTurns = computed(() => {
+  const previews = fleet.imagePreviewByArtifactId
+  return new Map(effectiveMessages.value.filter(msg => msg.role === 'assistant').map(msg => {
+    const items = buildThreadRenderItems(msg, previews)
+    return [msg.id, { items, singleLog: items.filter(item => item.type === 'work-log').length === 1,
+      testResult: msg.streaming ? undefined : readTurnTestResult(msg.toolCalls) }]
+  }))
+})
 const isStreaming = computed(() =>
   Boolean(effectiveKey.value && fleet.runningBySession[effectiveKey.value]),
 )
@@ -982,12 +1023,6 @@ function formatDurationShort(ms?: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
-function thoughtPreviewLine(text: string): string {
-  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean)
-  const tail = lines[lines.length - 1] ?? ''
-  return tail.length > 68 ? `${tail.slice(0, 68)}…` : tail
-}
-
 // 自定义 Prompt 模板与节点信任命令白名单
 const customPrompts = ref<CustomPromptTemplate[]>(loadCustomPrompts())
 const promptLibraryOpen = ref(false)
@@ -1038,52 +1073,47 @@ const searchActiveIdx = ref(0)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const highlightedMsgId = ref<string | null>(null)
 
+interface WorkLogMatch {
+  logId: string
+  stepId: string
+}
 interface SearchMatchEntry {
   msgId: string
-  msgIdx: number
-  thoughtKey?: string
+  workLog?: WorkLogMatch
 }
+const revealedWorkLog = ref<WorkLogMatch>()
 
 const searchMatches = computed<SearchMatchEntry[]>(() => {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) return []
   const hits: SearchMatchEntry[] = []
-  effectiveMessages.value.forEach((msg, msgIdx) => {
-    const parts = extractMessageParts(msg)
-    let matchedThoughtKey: string | undefined
-    for (let pIdx = 0; pIdx < parts.length; pIdx += 1) {
-      const p = parts[pIdx]
-      if (p.type === 'thought' && p.text.toLowerCase().includes(q)) {
-        matchedThoughtKey = `${msg.id}-p-${pIdx}`
+  for (const msg of effectiveMessages.value) {
+    let workLog: WorkLogMatch | undefined
+    for (const item of assistantTurns.value.get(msg.id)?.items ?? []) {
+      if (item.type !== 'work-log') continue
+      const step = item.steps.find(entry => {
+        if (entry.type === 'thought') return entry.text.toLowerCase().includes(q)
+        const { name, title, detail, output, error } = entry.tool
+        return [name, title, detail, output, error].some(value => value?.toLowerCase().includes(q))
+      })
+      if (step) {
+        workLog = { logId: item.id, stepId: step.id }
         break
       }
     }
-    const textHit = (msg.text || '').toLowerCase().includes(q)
-    const toolHit = (msg.toolCalls ?? []).some(
-      tc =>
-        tc.name.toLowerCase().includes(q)
-        || (tc.title || '').toLowerCase().includes(q)
-        || (tc.output || '').toLowerCase().includes(q)
-        || (tc.error || '').toLowerCase().includes(q),
-    )
-    if (textHit || matchedThoughtKey || toolHit) {
-      hits.push({ msgId: msg.id, msgIdx, thoughtKey: matchedThoughtKey })
-    }
-  })
+    if ((msg.text ?? '').toLowerCase().includes(q) || workLog) hits.push({ msgId: msg.id, workLog })
+  }
   return hits
 })
 
-function scrollToMessage(msgId: string, thoughtKey?: string) {
-  if (thoughtKey && !expandedThought.value[thoughtKey]) {
-    expandedThought.value = { ...expandedThought.value, [thoughtKey]: true }
-  }
+function scrollToMessage(msgId: string, workLog?: WorkLogMatch) {
+  revealedWorkLog.value = workLog && { ...workLog }
   highlightedMsgId.value = msgId
   followLatest.value = false
   void nextTick(() => {
-    const el = listEl.value?.querySelector(`[data-msg-id="${msgId}"]`)
-    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
-      ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
+    const message = listEl.value?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(msgId)}"]`)
+    const step = workLog && message?.querySelector<HTMLElement>(`[data-work-step="${CSS.escape(workLog.stepId)}"]`)
+    ;(step || message)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   })
 }
 
@@ -1091,13 +1121,14 @@ watch(searchMatches, list => {
   if (!list.length) {
     searchActiveIdx.value = 0
     if (searchOpen.value) highlightedMsgId.value = null
+    revealedWorkLog.value = undefined
     return
   }
   if (searchActiveIdx.value >= list.length) {
     searchActiveIdx.value = 0
   }
   const hit = list[searchActiveIdx.value]
-  if (hit) scrollToMessage(hit.msgId, hit.thoughtKey)
+  if (hit) scrollToMessage(hit.msgId, hit.workLog)
 })
 
 function openThreadSearch() {
@@ -1112,6 +1143,7 @@ function closeThreadSearch() {
   searchOpen.value = false
   searchQuery.value = ''
   highlightedMsgId.value = null
+  revealedWorkLog.value = undefined
 }
 
 function stepSearchMatch(delta: number) {
@@ -1119,7 +1151,7 @@ function stepSearchMatch(delta: number) {
   if (!list.length) return
   searchActiveIdx.value = (searchActiveIdx.value + delta + list.length) % list.length
   const hit = list[searchActiveIdx.value]
-  if (hit) scrollToMessage(hit.msgId, hit.thoughtKey)
+  if (hit) scrollToMessage(hit.msgId, hit.workLog)
 }
 
 const bookmarkedIds = computed(() =>
@@ -1869,14 +1901,6 @@ function handleApproval(callId: string, decision: ApprovalDecision) {
   fleet.respondPermission(callId, decision)
 }
 
-function toggleThought(key: string, ev: Event) {
-  const el = ev.target as HTMLDetailsElement | null
-  if (!el) return
-  const isOpen = Boolean(el.open)
-  if (Boolean(expandedThought.value[key]) === isOpen) return
-  expandedThought.value = { ...expandedThought.value, [key]: isOpen }
-}
-
 function shareAsHandoff(msg: ChatMessage, artifact?: ArtifactRef) {
   emit('openHandoff', { summary: msg.text.slice(0, 1200), artifact })
 }
@@ -2064,6 +2088,21 @@ async function retryTurn(msg: ChatMessage) {
     :data-bubble-style="bubbleStyle"
     @keydown="handleThreadKeydown"
   >
+    <dialog ref="rawHistoryDialog" class="raw-history-dialog" :aria-labelledby="rawHistoryTitleId" @close="rawHistoryBoundary = ''; rawHistorySourceKey = ''">
+      <div class="raw-history-header">
+        <h4 :id="rawHistoryTitleId">原始记录</h4>
+        <form method="dialog"><button class="btn btn-ghost" type="submit" autofocus>关闭</button></form>
+      </div>
+      <button
+        v-if="rawHistorySessionKey && canLoadHistoryPage(rawHistorySessionKey)"
+        type="button"
+        class="older-history-btn"
+        :disabled="Boolean(fleet.pendingHistoryPages[rawHistorySessionKey])"
+        @click="fleet.requestOlderHistory(rawHistorySessionKey)"
+      >{{ fleet.pendingHistoryPages[rawHistorySessionKey] ? '正在加载历史…' : '加载更早历史消息' }}</button>
+      <pre v-if="rawHistory" class="raw-history-content" tabindex="0">{{ rawHistory }}</pre>
+      <p v-else class="raw-history-empty">{{ rawHistorySessionKey && fleet.pendingHistoryPages[rawHistorySessionKey] ? '正在读取原始记录…' : '当前没有可查看的原始记录。' }}</p>
+    </dialog>
     <div v-if="searchOpen" class="thread-search-bar" role="search" aria-label="在当前对话中搜索">
       <OpusIcon name="search" class="ts-ic" />
       <input
@@ -2136,8 +2175,13 @@ async function retryTurn(msg: ChatMessage) {
       @keyup="handleMessageSelection"
     >
       <div ref="innerListEl" :class="mobile ? 'mmsgs-inner' : 'msgs-inner'">
-        <div v-if="effectiveKey && fleet.wsState === 'online' && (fleet.historyCursorBySession[effectiveKey] ||
-          (fleet.historyCursorBySession[effectiveKey] === undefined && effectiveMessages.length >= 50))" class="older-history-bar">
+        <div v-if="historyState?.state === 'error'" class="older-history-bar" role="status">
+          <span>{{ historyState.message }}</span>
+          <button v-if="effectiveKey && fleet.wsState === 'online'" type="button" class="older-history-btn"
+            :disabled="Boolean(fleet.pendingHistoryPages[effectiveKey])" @click="fleet.loadSessionHistory(effectiveKey, true)">重试</button>
+        </div>
+        <div v-else-if="historyState?.state === 'body-only'" class="older-history-bar faint">这段 Hermes 历史仅包含正文</div>
+        <div v-if="effectiveKey && canLoadOlder" class="older-history-bar">
           <button
             type="button"
             class="older-history-btn"
@@ -2153,7 +2197,10 @@ async function retryTurn(msg: ChatMessage) {
           <div class="thread-empty-ic" :class="getProviderMeta(effectiveProvider).accentClass">
             <OpusIcon :name="getProviderMeta(effectiveProvider).icon" />
           </div>
-          <h4>
+          <h4 v-if="effectiveKey && fleet.pendingHistoryPages[effectiveKey]">正在读取历史…</h4>
+          <h4 v-else-if="historyState?.state === 'error'">历史读取失败</h4>
+          <h4 v-else-if="historyState?.state === 'empty'">这段会话还没有消息</h4>
+          <h4 v-else>
             {{ effectiveNode ? `与 ${getProviderMeta(effectiveProvider).label} 开始会话` : '尚未选定在线控制节点' }}
           </h4>
           <p v-if="effectiveNode">
@@ -2171,8 +2218,24 @@ async function retryTurn(msg: ChatMessage) {
             <span>新消息</span>
           </div>
 
+          <div v-if="msg.systemEvents?.length" :data-msg-id="msg.id" class="context-events">
+            <details v-for="(event, eventIndex) in msg.systemEvents" :key="eventIndex" class="context-event">
+              <summary class="context-event-rule">
+                <span>{{ systemEventLabel(event) }}</span>
+                <OpusIcon name="chevR" />
+              </summary>
+              <div class="context-event-detail">
+                <p v-if="event.detail.summary">{{ event.detail.summary }}</p>
+                <p v-else-if="event.kind === 'compacted'">该代理未提供可读的压缩摘要。</p>
+                <button type="button" class="context-event-original" @click="openRawHistory(msg.id, event.detail.sourceSessionKey)">
+                  查看原始记录 <OpusIcon name="external" />
+                </button>
+              </div>
+            </details>
+          </div>
+
           <div
-            v-if="msg.role === 'system'"
+            v-if="msg.role === 'system' && !msg.systemEvents?.length"
             :data-msg-id="msg.id"
             class="sys-notice"
             :class="{
@@ -2185,7 +2248,7 @@ async function retryTurn(msg: ChatMessage) {
           </div>
 
           <div
-            v-else-if="msg.role === 'user' || msg.streaming || msg.text || msg.thought || msg.toolCalls?.length || msg.parts?.length || msg.error || msg.forms?.length || msg.approvals?.length || msg.artifacts?.length || msg.media?.length"
+            v-else-if="msg.role !== 'system' && (msg.role === 'user' || msg.streaming || msg.text || msg.thought || msg.toolCalls?.length || msg.parts?.length || msg.error || msg.forms?.length || msg.approvals?.length || msg.artifacts?.length || msg.media?.length)"
             :data-msg-id="msg.id"
             :class="[
               mobile ? 'mmsg' : 'msg',
@@ -2270,40 +2333,18 @@ async function retryTurn(msg: ChatMessage) {
               </span>
               <div class="agent-col">
                 <div class="bubble">
-                  <template v-if="buildTurnRenderItems(msg, fleet.imagePreviewByArtifactId).length">
+                  <template v-if="assistantTurns.get(msg.id)?.items.length">
                     <div class="msg-parts">
                       <template
-                        v-for="item in buildTurnRenderItems(msg, fleet.imagePreviewByArtifactId)"
+                        v-for="item in assistantTurns.get(msg.id)?.items"
                         :key="item.id"
                       >
-                        <details
-                          v-if="item.type === 'thought'"
-                          class="thought-box thought-light"
-                          :open="Boolean(expandedThought[item.id])"
-                          @toggle="toggleThought(item.id, $event)"
-                        >
-                          <summary>
-                            <OpusIcon name="chevR" class="thought-chev" />
-                            <span class="thought-lbl">
-                              {{ msg.streaming && item.isLast ? '思考中' : '思考过程' }}
-                            </span>
-                            <span class="thought-cnt num">{{ item.text.length }} 字</span>
-                            <span
-                              v-if="!expandedThought[item.id] && msg.streaming && item.isLast"
-                              class="thought-live-preview"
-                            >{{ thoughtPreviewLine(item.text) }}</span>
-                          </summary>
-                          <div class="thought-body">{{ item.text }}</div>
-                        </details>
-                        <ToolRunGroup
-                          v-else-if="item.type === 'tool-group'"
-                          :group="item.group"
-                          @open-file="fp => emit('openFile', fp)"
-                          @open-subagent="sid => emit('openSubagent', sid)"
-                        />
-                        <ToolCallCard
-                          v-else-if="item.type === 'tool'"
-                          :tool="item.tool"
+                        <WorkLog
+                          v-if="item.type === 'work-log'"
+                          :steps="item.steps"
+                          :progress="item.progress"
+                          :duration-ms="assistantTurns.get(msg.id)?.singleLog ? msg.durationMs : undefined"
+                          :reveal="revealedWorkLog?.logId === item.id ? revealedWorkLog : undefined"
                           @open-file="fp => emit('openFile', fp)"
                           @open-subagent="sid => emit('openSubagent', sid)"
                         />
@@ -2364,15 +2405,21 @@ async function retryTurn(msg: ChatMessage) {
                 </div>
 
                 <div
-                  v-if="msg.role === 'assistant' && !msg.streaming && (msg.text || msg.error || msg.checkpointId || msg.diffSummary?.filesChanged)"
+                  v-if="msg.role === 'assistant' && !msg.streaming && (msg.text || msg.error || msg.checkpointId || msg.diffSummary?.filesChanged || assistantTurns.get(msg.id)?.testResult)"
                   class="msg-foot msg-foot--outside"
                 >
                   <span v-if="msg.createdAt" class="msg-time num" :title="usageTooltip">
                     {{ formatMsgTime(msg.createdAt) }}
                     <template v-if="msg.modelLabel"> · {{ msg.modelLabel }}</template>
-                    <template v-if="formatDurationShort(msg.durationMs)"> · {{ formatDurationShort(msg.durationMs) }}</template>
+                    <template v-if="!assistantTurns.get(msg.id)?.singleLog && formatDurationShort(msg.durationMs)"> · {{ formatDurationShort(msg.durationMs) }}</template>
                     <template v-if="msg.turnTokens"> · {{ formatTokenCount(msg.turnTokens) }} tok</template>
                   </span>
+                  <div v-if="assistantTurns.get(msg.id)?.testResult" class="turn-diff-bar" aria-label="本轮测试结果">
+                    <span class="num">{{ assistantTurns.get(msg.id)?.testResult?.passed }} 项测试通过
+                      <template v-if="assistantTurns.get(msg.id)?.testResult?.failed"> · {{ assistantTurns.get(msg.id)?.testResult?.failed }} 项失败</template>
+                      <template v-else-if="!assistantTurns.get(msg.id)?.testResult?.successful"> · 测试命令失败</template>
+                    </span>
+                  </div>
                   <div v-if="msg.checkpointId || msg.diffSummary?.filesChanged" class="turn-diff-bar">
                     <button
                       type="button"
@@ -2491,9 +2538,11 @@ async function retryTurn(msg: ChatMessage) {
         </button>
       </Transition>
 
-      <div v-if="isInterrupted && !isStreaming && effectiveKey" class="interrupted-bar">
-        <span class="interrupted-txt">上次生成已中断</span>
+      <div v-if="stopStatus?.requestId || stopStatus?.message || (isInterrupted && !isStreaming)" class="interrupted-bar" role="status">
+        <span class="interrupted-txt">{{ stopStatus?.message ||
+          (stopStatus?.state === 'accepted' ? '节点已收到请求，等待代理停止' : stopStatus?.requestId ? '正在发送停止请求…' : '上次生成已中断') }}</span>
         <button
+          v-if="isInterrupted && !isStreaming && effectiveKey"
           type="button"
           class="btn btn-subtle btn-sm"
           @click="fleet.continueInterruptedRun(effectiveKey)"
@@ -4374,22 +4423,6 @@ async function retryTurn(msg: ChatMessage) {
 }
 .thread-empty-ic .i { width: 22px; height: 22px; }
 .tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
-.thought-box {
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-  color: var(--text-2);
-}
-.thought-box summary { cursor: pointer; font-weight: 550; }
-.thought-body {
-  margin-top: 6px;
-  white-space: pre-wrap;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--text-3);
-}
 .msg-text { white-space: pre-wrap; word-break: break-word; color: inherit; }
 .msg.agent, .mmsg.agent { min-width: 0; }
 .msg.agent .bubble, .mmsg.agent .bubble {
@@ -4866,9 +4899,6 @@ dialog.img-lightbox::backdrop {
   display: grid;
   gap: 8px;
 }
-.msg-parts .thought-box {
-  margin-bottom: 0;
-}
 .voice-btn.is-recording {
   color: var(--warn);
   background: var(--warn-soft);
@@ -5085,6 +5115,53 @@ dialog.img-lightbox::backdrop {
   content-visibility: auto;
   contain-intrinsic-size: auto none auto 140px;
 }
+.context-event { color: var(--text-3); font-size: 12px; }
+.context-event-rule {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  list-style: none;
+  cursor: pointer;
+}
+.context-event-rule::-webkit-details-marker { display: none; }
+.context-event-rule::before, .context-event-rule::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.context-event-rule .i, .context-event-original .i { width: 12px; height: 12px; flex: none; }
+.context-event[open] > .context-event-rule .i { transform: rotate(90deg); }
+.context-event-rule:hover, .context-event-original:hover { color: var(--text); }
+.context-event-detail { padding: 0 12px 10px; color: var(--text-2); line-height: 1.6; }
+.context-event-detail p { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.context-event-original {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.raw-history-dialog {
+  width: min(44rem, calc(100vw - 24px));
+  max-height: 82dvh;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  background: var(--solid);
+}
+.raw-history-dialog[open] { display: flex; flex-direction: column; gap: 10px; }
+.raw-history-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.raw-history-header { display: flex; align-items: center; justify-content: space-between; }
+.raw-history-header h4 { margin: 0; font-size: 14px; }
+.raw-history-content { margin: 0; padding: 8px 2px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono, monospace); }
+.raw-history-empty { color: var(--text-2); font-size: 13px; }
+.raw-history-dialog > button { align-self: flex-start; }
 .older-history-bar {
   display: flex;
   justify-content: center;
@@ -5357,37 +5434,6 @@ dialog.img-lightbox::backdrop {
   }
 }
 
-/* 无边框轻过程流（Thought 降噪优化） */
-.thought-box.thought-light {
-  border: 0;
-  background: transparent;
-  padding: 0;
-}
-.thought-box.thought-light > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px;
-  border-radius: var(--r-xs);
-  color: var(--text-3);
-  font-size: 12px;
-  background: transparent;
-}
-.thought-box.thought-light > summary:hover {
-  background: var(--surface-2);
-  color: var(--text-2);
-}
-.thought-chev {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  color: var(--text-3);
-  transition: transform var(--dur-1, 140ms) var(--ease-out, ease);
-}
-.thought-box.thought-light[open] > summary .thought-chev {
-  transform: rotate(90deg);
-  color: var(--text-2);
-}
 .agent-col {
   flex: 1;
   min-width: 0;
@@ -5430,30 +5476,6 @@ dialog.img-lightbox::backdrop {
   height: 26px;
   padding: 0 7px;
   font-size: 11.5px;
-}
-.thought-lbl {
-  font-weight: 520;
-}
-.thought-cnt {
-  font-size: 11px;
-  opacity: 0.72;
-}
-.thought-live-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-style: italic;
-  opacity: 0.72;
-}
-.thought-box.thought-light .thought-body {
-  margin: 4px 0 6px 12px;
-  padding: 2px 0 2px 10px;
-  border-left: 1.5px solid var(--line);
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12px;
 }
 
 /* 限额/模型报错卡片内一键救场行 */
@@ -5540,11 +5562,6 @@ dialog.img-lightbox::backdrop {
   border: 0;
   border-radius: 0;
   padding: 2px 2px;
-}
-.thread-root[data-bubble-style="claude"] .thought-box.thought-light {
-  border-left: 2px solid var(--line-strong);
-  padding-left: 8px;
-  border-radius: 0;
 }
 
 /* 3. 现代轻卡片（LobeChat 风格） */

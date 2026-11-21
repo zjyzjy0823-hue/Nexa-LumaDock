@@ -19,6 +19,8 @@ from .base import (
     build_todo_updated_event,
     build_token_usage_event,
     build_tool_call_update,
+    compaction_frame,
+    compaction_record,
     extract_usage_counts,
     merge_prompt_with_attachments,
     prepare_session_dir,
@@ -180,6 +182,8 @@ def _read_rollout_messages(path: Path, session_id: str, limit: int) -> list[dict
                     text = "".join(p.get("text", "") for p in item.get("content") or [] if isinstance(p, dict))
                     if text:
                         items.append({"role": "assistant", "text": text})
+                elif item.get("type") == "ContextCompaction" and item.get("id"):
+                    items.append(compaction_record(str(item["id"]), at=0))
             elif kind in ("user_message", "agent_message") and isinstance(event.get("message"), str):
                 role = "user" if kind == "user_message" else "assistant"
                 legacy.append({"role": role, "text": event["message"]})
@@ -196,6 +200,7 @@ class CodexAdapter(AgentAdapter):
         self._proc: StdioJsonRpcProcess | None = None
         self._defaults: dict[str, dict[str, Any]] = {}
         self._turns: dict[str, ActiveTurn] = {}
+        self._compactions: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._initialized = False
         self._init_lock = asyncio.Lock()
         self._quota_lock = asyncio.Lock()
@@ -422,6 +427,10 @@ class CodexAdapter(AgentAdapter):
                     )
                 elif itype == "agentMessage":
                     pending_text.append(str(item.get("text") or ""))
+                elif itype == "contextCompaction" and item.get("id"):
+                    _flush_assistant()
+                    completed = turn.get("completedAt") or turn.get("startedAt")
+                    messages.append(compaction_record(str(item["id"]), at=int(completed * 1000) if isinstance(completed, (int, float)) else 0))
             _flush_assistant()
         return messages[-limit:]
 
@@ -507,18 +516,39 @@ class CodexAdapter(AgentAdapter):
             pass
 
     async def compact_session(self, *, session_id: str) -> dict[str, Any]:
+        if session_id in self._compactions:
+            return {"supported": True, "message": "Codex 正在压缩上下文"}
+        completion = asyncio.get_running_loop().create_future()
+        self._compactions[session_id] = completion
         try:
             proc = await self._ensure_proc()
+            await self._resume_thread(proc, session_id)
             await proc.call("thread/compact/start", {"threadId": session_id})
-            return {"supported": True, "message": "已通知 Codex 压缩上下文"}
-        except Exception:
-            return {"supported": False}
+            return await asyncio.wait_for(completion, timeout=90)
+        except TimeoutError:
+            return {"supported": True, "message": "已提交 Codex 压缩请求，等待代理报告结果"}
+        except JsonRpcError as err:
+            if err.code == -32601:
+                return {"supported": False}
+            raise
+        finally:
+            self._compactions.pop(session_id, None)
 
     async def _on_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "account/updated":
             self._quota_cache = None
             return
         thread_id = str(params.get("threadId") or "")
+        completion = self._compactions.get(thread_id)
+        if completion and not completion.done() and method == "item/completed":
+            item = params.get("item") or {}
+            if item.get("type") == "contextCompaction" and item.get("id"):
+                completion.set_result(compaction_frame(compaction_record(str(item["id"]))))
+                return
+        if completion and not completion.done() and method == "turn/completed":
+            turn_data = params.get("turn") or {}
+            if turn_data.get("status") in ("failed", "interrupted"):
+                completion.set_result({"supported": True, "message": "Codex 未完成上下文压缩"})
         turn = self._turns.get(thread_id)
         if not turn or turn.done.done():
             return
@@ -584,6 +614,9 @@ class CodexAdapter(AgentAdapter):
         elif method == "item/completed":
             item = params.get("item") or {}
             itype = str(item.get("type") or "")
+            if itype == "contextCompaction" and item.get("id"):
+                await emit(compaction_frame(compaction_record(str(item["id"]))))
+                return
             if itype in ("commandExecution", "fileChange", "mcpToolCall"):
                 call_id = str(item.get("id") or uuid4().hex[:8])
                 tmeta = active.tools.pop(call_id, {})

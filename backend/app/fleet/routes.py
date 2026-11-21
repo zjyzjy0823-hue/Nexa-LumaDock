@@ -500,6 +500,8 @@ async def fleet_node_ws(websocket: WebSocket):
                     "SessionsSnapshot",
                     "SessionHistory",
                     "SessionStreamReplay",
+                    "RunStopStatus",
+                    "TerminalPreview",
                     "DuplicateIgnored",
                     "ModelsSnapshot",
                     "AgentsSnapshot",

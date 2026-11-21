@@ -15,6 +15,8 @@ from .base import (
     build_todo_updated_event,
     build_token_usage_event,
     build_tool_call_update,
+    compaction_frame,
+    compaction_record,
     estimate_tokens,
 )
 
@@ -39,6 +41,7 @@ class MockAdapter(AgentAdapter):
         self.allowed_roots = allowed_roots
         self._sessions: dict[str, dict[str, Any]] = {}
         self._histories: dict[str, list[dict[str, Any]]] = {}
+        self._context_start: dict[str, int] = {}
         self._active_runs: dict[str, asyncio.Event] = {}
 
     async def probe(self) -> AdapterProbe:
@@ -124,7 +127,12 @@ class MockAdapter(AgentAdapter):
         self._active_runs[run_id] = cancel_ev
         try:
             thought_text = "Inspecting workspace constraints..."
-            hist_tokens = sum(estimate_tokens(str(item.get("text") or "")) for item in self._histories.get(session_id, []))
+            history = self._histories.get(session_id, [])
+            hist_tokens = sum(
+                estimate_tokens(str(item["systemEvents"][0]["detail"].get("summary", ""))) if item.get("systemEvents")
+                else estimate_tokens(str(item.get("text") or ""))
+                for item in history[self._context_start.get(session_id, 0):]
+            )
             input_tokens = max(12, hist_tokens + estimate_tokens(text) + len(attachments or []) * 120)
             reasoning_tokens = estimate_tokens(thought_text)
             ctx_win = MOCK_CONTEXT_WINDOWS.get(model_id, 128000)
@@ -275,6 +283,10 @@ class MockAdapter(AgentAdapter):
                     )
                 )
                 decision = await request_approval(session_id, call_id, "git status && pytest -q", "medium")
+                if cancel_ev.is_set():
+                    await emit({"type": "Failed", "sessionId": session_id, "runId": run_id, "requestId": request_id,
+                                "code": "cancelled", "message": "已中断当前 Mock 任务"})
+                    return
                 await emit({"type": "ToolCall", "sessionId": session_id, "runId": run_id, "callId": call_id, "name": "shell", "decision": decision})
                 if decision == "deny":
                     await emit(
@@ -355,15 +367,16 @@ class MockAdapter(AgentAdapter):
     async def delete_session(self, *, session_id: str) -> None:
         self._sessions.pop(session_id, None)
         self._histories.pop(session_id, None)
+        self._context_start.pop(session_id, None)
 
     async def compact_session(self, *, session_id: str) -> dict[str, Any]:
         hist = self._histories.get(session_id, [])
-        if len(hist) <= 4:
+        start = self._context_start.get(session_id, 0)
+        turns = [index for index in range(start, len(hist)) if hist[index]["role"] == "user"]
+        if len(turns) <= 1:
             return {"supported": True, "message": "上下文已保持精简，无需进一步压缩"}
-        kept = hist[-2:]
-        summarized_count = len(hist) - len(kept)
-        self._histories[session_id] = [
-            {"role": "assistant", "text": f"[上下文压缩摘要] 已合并早先 {summarized_count} 条历史交互要点。"},
-            *kept,
-        ]
-        return {"supported": True, "message": f"已压缩早先 {summarized_count} 条消息并保留最近上下文"}
+        summary = "\n".join(f"- {' '.join(hist[index]['text'].split())[:160]}" for index in turns[:-1])
+        row = compaction_record(uuid4().hex, summary=f"早先 {len(turns) - 1} 轮讨论的主题\n{summary}", retained_turns=1)
+        hist.append(row)
+        self._context_start[session_id] = turns[-1]
+        return compaction_frame(row)

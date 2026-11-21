@@ -140,8 +140,8 @@ export class FleetLocalStore {
     const messages = []
     let byteCount = 0
     for (const row of rows.slice(-120).reverse()) {
-      // Transfer keys, in-flight approvals and live Blob URLs are scoped to the current app session.
-      const { artifacts, approvals, forms, branches, media, ...message } = row
+      // Transfer keys, approvals, live progress and Blob URLs are scoped to the current app session.
+      const { artifacts, approvals, forms, branches, media, liveProgress, ...message } = row
       const cached = {
         ...message,
         streaming: false,

@@ -30,6 +30,9 @@ class NotificationPreference {
 class FleetNotification {
     lateinit var title: String
     lateinit var body: String
+    var sessionKey: String? = null
+    var ongoing = false
+    var clear = false
 }
 
 @InvokeArg
@@ -50,6 +53,7 @@ class AndroidNotifications(private val host: Activity) : Plugin(host) {
     private val channelId = "studiolo.chat"
     private val approvalChannel = "studiolo.chat.approval"
     private val approvalNotificationId = 2
+    private val activityNotificationId = 3
     private val approvalIntents = mutableMapOf<String, Pair<String, String?>>()
     private var approvalListener: Channel? = null
 
@@ -57,9 +61,11 @@ class AndroidNotifications(private val host: Activity) : Plugin(host) {
     fun listenApproval(invoke: Invoke) {
         approvalListener = invoke.parseArgs(FleetApprovalListener::class.java).channel
         invoke.resolve(JSObject().put("value", true))
+        openSessionIntent(host.intent)
     }
 
     override fun onNewIntent(intent: Intent) {
+        if (openSessionIntent(intent)) return
         if (intent.action != "${host.packageName}.FLEET_APPROVAL") return
         val token = intent.getStringExtra("studiolo.approval.token") ?: return
         val response = synchronized(approvalIntents) {
@@ -68,6 +74,16 @@ class AndroidNotifications(private val host: Activity) : Plugin(host) {
         intent.removeExtra("studiolo.approval.token")
         manager.cancel(approvalNotificationId)
         approvalListener?.send(JSObject().put("action", response.first).put("callId", response.second))
+    }
+
+    private fun openSessionIntent(intent: Intent?): Boolean {
+        if (intent == null || intent.action != "${host.packageName}.FLEET_SESSION") return false
+        val listener = approvalListener ?: return true
+        val key = intent.getStringExtra("studiolo.session.key")
+        intent.removeExtra("studiolo.session.key")
+        intent.action = null
+        listener.send(JSObject().put("action", "open").put("sessionKey", key))
+        return true
     }
 
     private fun approvalIntent(action: String, callId: String?): PendingIntent {
@@ -151,30 +167,41 @@ class AndroidNotifications(private val host: Activity) : Plugin(host) {
 
     @Command
     fun show(invoke: Invoke) {
+        val data = invoke.parseArgs(FleetNotification::class.java)
+        if (data.clear) {
+            manager.cancel(activityNotificationId)
+            invoke.resolve(JSObject().put("value", true))
+            return
+        }
         if (!preferences.getBoolean("enabled", false) || !canNotify()) {
             invoke.resolve(JSObject().put("value", false))
             return
         }
         try {
-            val data = invoke.parseArgs(FleetNotification::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(channelId) == null) {
                 manager.createNotificationChannel(NotificationChannel(
                     channelId, "聊天与任务提醒", NotificationManager.IMPORTANCE_LOW
                 ))
             }
-            val openApp = host.packageManager.getLaunchIntentForPackage(host.packageName)?.let {
-                PendingIntent.getActivity(host, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            }
+            val intent = Intent(host, host.javaClass)
+                .setAction("${host.packageName}.FLEET_SESSION")
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra("studiolo.session.key", data.sessionKey)
+            val openApp = PendingIntent.getActivity(host, if (data.ongoing) activityNotificationId else UUID.randomUUID().hashCode(),
+                intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val notification = NotificationCompat.Builder(host, channelId)
                 .setSmallIcon(R.drawable.studiolo_notification_icon)
                 .setContentTitle(data.title.take(80))
                 .setContentText(data.body.take(120))
                 .setContentIntent(openApp)
-                .setAutoCancel(true)
+                .setAutoCancel(!data.ongoing)
+                .setOngoing(data.ongoing)
+                .setOnlyAlertOnce(data.ongoing)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setVisibility(if (data.ongoing) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
                 .build()
-            manager.notify(UUID.randomUUID().toString(), 1, notification)
+            if (data.ongoing) manager.notify(activityNotificationId, notification)
+            else manager.notify(UUID.randomUUID().toString(), 1, notification)
             invoke.resolve(JSObject().put("value", true))
         } catch (_: SecurityException) {
             // Android can revoke notification permission between the check and notify().

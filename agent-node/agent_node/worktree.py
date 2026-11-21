@@ -1,9 +1,11 @@
 """同仓库多 Agent 并发执行的 Git Worktree 沙箱管理器。"""
 
+from hashlib import sha256
 import os
 from pathlib import Path
 import re
 import subprocess
+from urllib.parse import urlsplit
 
 from .config import PathOutsideAllowedRootsError, ensure_allowed_path
 
@@ -22,6 +24,34 @@ def resolve_repo_root(target: str | Path, allowed_roots: tuple[Path, ...]) -> Pa
     safe_target = ensure_allowed_path(target, allowed_roots)
     top = _run_git(safe_target, "rev-parse", "--show-toplevel")
     return ensure_allowed_path(top, allowed_roots)
+
+
+def project_identity(cwd: Path, allowed_roots: tuple[Path, ...]) -> dict[str, str]:
+    try:
+        root = resolve_repo_root(cwd, allowed_roots)
+    except (RuntimeError, OSError, PathOutsideAllowedRootsError):
+        return {}
+    project = {"projectName": root.name}
+    try:
+        remote = _run_git(root, "config", "--local", "--get", "remote.origin.url")
+        if "://" in remote:
+            url = urlsplit(remote)
+            host, path = url.hostname, url.path
+        else:
+            match = re.fullmatch(r"(?:[^@/]+@)?([^:/]+):(.+)", remote)
+            if not match or len(match[1]) == 1:  # Windows drive letter
+                return project
+            host, path = match.groups()
+        path = path.strip("/").removesuffix(".git")
+        if not host or not path or "/" not in path:
+            return project
+        normalized = f"{host.lower()}/{path}"
+        repo_name = path.rsplit("/", 1)[-1]
+        if repo_name and not any(char in repo_name for char in "?#@"):
+            project["projectName"] = repo_name
+        return {**project, "projectKey": f"git:{sha256(normalized.encode()).hexdigest()}"}
+    except (RuntimeError, ValueError, OSError):
+        return project
 
 
 def recover_session_worktree(cwd: Path, allowed_roots: tuple[Path, ...]) -> tuple[Path, Path] | None:

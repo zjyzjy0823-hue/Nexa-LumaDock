@@ -25,10 +25,33 @@ from .base import (
     build_todo_updated_event,
     build_token_usage_event,
     build_tool_call_update,
+    compaction_frame,
+    compaction_record,
     extract_usage_counts,
     merge_prompt_with_attachments,
     prepare_session_dir,
 )
+
+
+def _opencode_compaction(message: dict[str, Any]) -> dict[str, Any] | None:
+    info = message.get("info")
+    if isinstance(info, dict):
+        if info.get("role") != "assistant" or info.get("summary") is not True or info.get("error"):
+            return None
+        summary = "".join(str(part.get("text") or "") for part in message.get("parts") or []
+                          if isinstance(part, dict) and part.get("type") == "text")
+        if not summary.strip():
+            return None
+    elif message.get("type") == "compaction" and message.get("status") == "completed":
+        info = message
+        summary = str(message.get("summary") or "")
+    else:
+        return None
+    if not info.get("id"):
+        return None
+    timestamp = info.get("time")
+    at = (timestamp.get("completed") or timestamp.get("created")) if isinstance(timestamp, dict) else None
+    return compaction_record(str(info["id"]), summary=summary, at=int(at) if isinstance(at, (int, float)) else 0)
 
 
 def _extract_incremental_text(
@@ -580,6 +603,10 @@ class OpenCodeAdapter(AgentAdapter):
 
             out: list[dict[str, Any]] = []
             for msg in items:
+                boundary = _opencode_compaction(msg)
+                if boundary:
+                    out.append(boundary)
+                    continue
                 # OpenCode v2 消息结构：{type: "user"|"assistant"|"idle", text?, content?: [...]}
                 if "type" in msg and "info" not in msg:
                     mtype = msg.get("type")
@@ -648,6 +675,12 @@ class OpenCodeAdapter(AgentAdapter):
 
                 info = msg.get("info") or {}
                 parts = msg.get("parts") or []
+                if info.get("summary") is True or (
+                    info.get("role") == "user" and parts and all(
+                        isinstance(part, dict) and part.get("type") == "compaction" for part in parts
+                    )
+                ):
+                    continue
                 text_chunks: list[str] = []
                 thought_chunks: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
@@ -772,10 +805,23 @@ class OpenCodeAdapter(AgentAdapter):
         except httpx.TransportError:
             before = None
         baseline = {str(row["info"]["id"]) for row in before or [] if row["info"].get("id")}
+        seen_compactions: set[str] = set()
 
         async def consume(evt: dict[str, Any]) -> bool:
             etype = evt.get("type")
             props = evt.get("properties") or {}
+            if etype == "session.compacted" and props.get("sessionID") == session_id:
+                try:
+                    rows = await history()
+                except httpx.TransportError:
+                    rows = None
+                for message in rows or []:
+                    if str(message["info"].get("id")) in baseline:
+                        continue
+                    boundary = _opencode_compaction(message)
+                    if boundary and boundary["id"] not in seen_compactions:
+                        seen_compactions.add(boundary["id"])
+                        await emit({**compaction_frame(boundary), **scoped})
             if etype == "message.part.updated":
                 part = props.get("part") or {}
                 if part.get("sessionID") != session_id or part.get("synthetic"):
@@ -1100,7 +1146,15 @@ class OpenCodeAdapter(AgentAdapter):
                 if evt_sid and evt_sid != session_id:
                     continue
 
-                if etype == "session.text.started":
+                if etype == "session.compaction.ended" and evt_sid == session_id:
+                    try:
+                        rows = await self.get_history(session_id=session_id, limit=8)
+                    except httpx.TransportError:
+                        rows = []
+                    boundary = next((row for row in reversed(rows) if row.get("systemEvents")), None)
+                    if boundary:
+                        await emit({**compaction_frame(boundary), "sessionId": session_id, "runId": run_id})
+                elif etype == "session.text.started":
                     if has_text_emitted:
                         await emit({"type": "TextDelta", "sessionId": session_id, "runId": run_id, "text": "\n\n"})
                 elif etype == "session.text.delta":
@@ -1365,9 +1419,10 @@ class OpenCodeAdapter(AgentAdapter):
             prefix = await self._detect_api_prefix(c)
             directory = await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
-                await c.post(f"{self.serve_url}/api/session/{session_id}/interrupt")
+                response = await c.post(f"{self.serve_url}/api/session/{session_id}/interrupt")
             else:
-                await c.post(f"{self.serve_url}/session/{session_id}/abort", params={"directory": str(directory)})
+                response = await c.post(f"{self.serve_url}/session/{session_id}/abort", params={"directory": str(directory)})
+            response.raise_for_status()
 
     async def rename_session(self, *, session_id: str, title: str) -> dict[str, Any]:
         async with self._client() as c:
@@ -1385,13 +1440,23 @@ class OpenCodeAdapter(AgentAdapter):
             await c.delete(f"{self.serve_url}{prefix}/session/{session_id}")
 
     async def compact_session(self, *, session_id: str) -> dict[str, Any]:
+        existing = {row["id"] for row in await self.get_history(session_id=session_id, limit=8) if row.get("systemEvents")}
         async with self._client() as c:
             prefix = await self._detect_api_prefix(c)
-            await self._session_directory(c, prefix, session_id)
+            directory = await self._session_directory(c, prefix, session_id)
             if prefix == "/api":
                 res = await c.post(f"{self.serve_url}/api/session/{session_id}/compact", json={})
             else:
-                res = await c.post(f"{self.serve_url}/session/{session_id}/summarize", json={})
-            if res.status_code < 400:
-                return {"supported": True, "message": "已通知 OpenCode 压缩会话上下文"}
-        return {"supported": False}
+                location = {"directory": str(directory)}
+                history = self._optional_json(await c.get(f"{self.serve_url}/session/{session_id}/message", params={**location, "limit": 8}))
+                models = [row["info"].get("model") or row["info"] for row in history or []
+                          if isinstance(row, dict) and isinstance(row.get("info"), dict)]
+                body = next(({"providerID": model["providerID"], "modelID": model["modelID"]}
+                             for model in models if isinstance(model, dict) and model.get("providerID") and model.get("modelID")), {})
+                res = await c.post(f"{self.serve_url}/session/{session_id}/summarize", params=location, json=body)
+            if not res.is_success:
+                return {"supported": False, "message": "OpenCode 未接受上下文压缩请求"}
+        for row in reversed(await self.get_history(session_id=session_id, limit=8)):
+            if row.get("systemEvents") and row["id"] not in existing:
+                return compaction_frame(row)
+        return {"supported": True, "message": "已提交 OpenCode 压缩请求，等待代理报告结果"}

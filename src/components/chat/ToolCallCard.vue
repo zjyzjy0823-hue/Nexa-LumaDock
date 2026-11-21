@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { hasAnsiSequences, parseAnsiText } from '../../services/ansiParser'
+import { describeToolCall } from '../../services/chatHelpers'
 import { extractToolMiniDiff } from '../../services/diffHelpers'
 import { useFleetStore } from '../../stores/fleet'
 import type { MessageMediaItem, ToolCallBadge } from '../../types/fleet'
@@ -8,6 +9,7 @@ import OpusIcon from '../ui/OpusIcon.vue'
 
 const props = defineProps<{
   tool: ToolCallBadge
+  reveal?: { stepId: string }
 }>()
 
 const emit = defineEmits<{
@@ -17,35 +19,20 @@ const emit = defineEmits<{
 
 const fleet = useFleetStore()
 
-const userToggled = ref(false)
-const manualOpen = ref(false)
+const isOpen = ref(false)
 const copiedTarget = ref<'input' | 'output' | null>(null)
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
-const isOpen = computed(() => {
-  if (userToggled.value) return manualOpen.value
-  return props.tool.status === 'error'
-})
+watch(() => props.reveal, reveal => {
+  if (reveal) isOpen.value = true
+}, { immediate: true })
 
 function onToggle(ev: Event) {
-  const el = ev.target as HTMLDetailsElement
-  userToggled.value = true
-  manualOpen.value = el.open
+  isOpen.value = (ev.currentTarget as HTMLDetailsElement).open
 }
 
-const toolIcon = computed(() => {
-  const n = props.tool.name.toLowerCase()
-  if (n.includes('bash') || n.includes('shell') || n.includes('command')) return 'terminal'
-  if (n.includes('file') || n.includes('edit') || n.includes('write') || n.includes('read')) return 'file'
-  if (n.includes('todo') || n.includes('plan')) return 'tasks'
-  return 'api'
-})
-
-const statusLabel = computed(() => {
-  if (props.tool.status === 'running') return '执行中'
-  if (props.tool.status === 'error') return '失败'
-  return '完成'
-})
+const description = computed(() => describeToolCall(props.tool))
+const targetFilePath = computed(() => description.value.filePath)
 
 const formattedInput = computed(() => {
   if (props.tool.input === undefined || props.tool.input === null) return ''
@@ -55,14 +42,6 @@ const formattedInput = computed(() => {
   } catch {
     return String(props.tool.input)
   }
-})
-
-const targetFilePath = computed(() => {
-  const raw = props.tool.input
-  if (!raw || typeof raw !== 'object') return ''
-  const rec = raw as Record<string, unknown>
-  const cand = rec.filePath ?? rec.path ?? rec.file ?? rec.target_file ?? rec.filename
-  return typeof cand === 'string' && cand.trim() && !cand.includes('://') ? cand.trim() : ''
 })
 
 const miniDiff = computed(() => extractToolMiniDiff(props.tool.name, props.tool.input))
@@ -75,7 +54,7 @@ const ansiOutputSpans = computed(() => {
 
 const durationText = computed(() => {
   const ms = props.tool.durationMs
-  if (ms === undefined || ms === null || Number.isNaN(ms)) return ''
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 })
 
@@ -126,55 +105,26 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <details
-    class="tool-card"
-    :class="[`is-${tool.status || 'completed'}`]"
-    :open="isOpen"
-    @toggle="onToggle"
-  >
+  <details class="tool-card" :class="`is-${tool.status || 'completed'}`" :open="isOpen" @toggle.self="onToggle">
     <summary class="tool-card-head">
+      <OpusIcon :name="description.icon" class="tool-kind-ic" />
+      <span class="tool-card-label" :class="{ 'chat-progress-shimmer': tool.status === 'running' }">{{ description.label }}</span>
       <OpusIcon name="chevR" class="tool-chev" />
-      <OpusIcon :name="toolIcon" class="tool-kind-ic" />
-      <span class="tool-name">{{ tool.name }}</span>
-      <span v-if="tool.title && tool.title !== tool.name" class="tool-title">{{ tool.title }}</span>
-      <span class="tool-spacer" />
-      <button
-        v-if="tool.subagentSessionId"
-        type="button"
-        class="tool-pill-btn is-accent"
-        title="查看或切换至该子代理独立会话"
-        @click.stop="emit('openSubagent', tool.subagentSessionId)"
-      >
-        子代理会话
-      </button>
-      <button
-        v-if="targetFilePath"
-        type="button"
-        class="tool-pill-btn"
-        :title="`在右侧预览 ${targetFilePath}`"
-        @click.stop="emit('openFile', targetFilePath)"
-      >
-        查看文件
-      </button>
-      <button
-        v-if="tool.media?.length || targetFilePath"
-        type="button"
-        class="tool-pill-btn"
-        :title="`下载 ${tool.media?.[0]?.fileName || targetFilePath}`"
-        @click.stop="handleDownloadToolFile()"
-      >
-        下载
-      </button>
-      <span v-if="durationText" class="tool-dur num">{{ durationText }}</span>
-      <span class="tool-status-badge" :class="`is-${tool.status || 'completed'}`">
-        <span v-if="tool.status === 'running'" class="tool-spin" aria-hidden="true" />
-        <OpusIcon v-else-if="tool.status === 'error'" name="alert" class="tool-st-ic" />
-        <OpusIcon v-else name="check" class="tool-st-ic" />
-        <span>{{ statusLabel }}</span>
-      </span>
     </summary>
 
-    <div class="tool-card-body">
+    <div v-if="isOpen" class="tool-card-body">
+      <div class="tool-meta">
+        <code>{{ tool.name }}</code><span v-if="durationText" class="num"> · {{ durationText }}</span>
+      </div>
+      <div v-if="tool.subagentSessionId || targetFilePath || tool.media?.length" class="tool-actions">
+        <button v-if="tool.subagentSessionId" type="button" class="tool-pill-btn is-accent"
+          @click="emit('openSubagent', tool.subagentSessionId)">打开子代理会话</button>
+        <button v-if="targetFilePath" type="button" class="tool-pill-btn" :title="targetFilePath"
+          @click="emit('openFile', targetFilePath)">查看文件</button>
+        <button v-if="targetFilePath || tool.media?.length" type="button" class="tool-pill-btn"
+          @click="handleDownloadToolFile()">下载</button>
+      </div>
+
       <div v-if="miniDiff" class="tool-section">
         <div class="tool-sec-bar">
           <span>当步文件变更 · {{ miniDiff.filePath }}</span>
@@ -254,12 +204,13 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="tool.error" class="tool-err">
+      <div v-if="tool.error && tool.error.trim() !== tool.output?.trim()" class="tool-err">
         <OpusIcon name="alert" />
         <span>{{ tool.error }}</span>
       </div>
 
-      <p v-if="!miniDiff && !formattedInput && !tool.output && !tool.error" class="tool-empty">
+      <p v-if="tool.detail && !tool.output && !tool.error" class="tool-detail">{{ tool.detail }}</p>
+      <p v-if="!miniDiff && !formattedInput && !tool.output && !tool.error && !tool.detail && !tool.media?.length" class="tool-empty">
         {{ tool.status === 'running' ? '正在等待工具返回结果…' : '工具已完成，无额外控制台输出。' }}
       </p>
     </div>
@@ -268,41 +219,30 @@ onUnmounted(() => {
 
 <style scoped>
 .tool-card {
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-  overflow: hidden;
-}
-.tool-card.is-running {
-  border-color: var(--accent-line);
-}
-.tool-card.is-error {
-  border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
+  min-width: 0;
+  font-size: 13px;
 }
 .tool-card-head {
   list-style: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  max-width: 100%;
   min-block-size: 28px;
-  padding: 5px 8px;
+  padding-block: 4px;
   cursor: pointer;
   user-select: none;
-  color: var(--text-2);
-}
-.tool-card-head::-webkit-details-marker { display: none; }
-.tool-card-head:hover {
-  background: var(--surface-3);
   color: var(--text);
 }
+.tool-card-head::-webkit-details-marker { display: none; }
+.tool-card-head:hover .tool-chev { color: var(--text); }
 .tool-card-head:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 .tool-chev {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex: none;
   color: var(--text-3);
   rotate: 0deg;
@@ -311,32 +251,21 @@ onUnmounted(() => {
   rotate: 90deg;
 }
 .tool-kind-ic {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   flex: none;
   color: var(--text-3);
 }
-.tool-name {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  flex: none;
-}
-.tool-title {
+.tool-card-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-3);
-  font-size: 11.5px;
 }
-.tool-spacer { flex: 1; }
-.tool-dur {
-  font-size: 10.5px;
-  color: var(--text-3);
-  flex: none;
-}
+.tool-card.is-error .tool-card-label { color: var(--warn); }
+.tool-meta { font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; }
+.tool-meta code { font-family: var(--mono); }
+.tool-detail { margin: 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-pill-btn {
   padding: 1px 6px;
   border-radius: var(--r-full);
@@ -353,31 +282,7 @@ onUnmounted(() => {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.tool-status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 550;
-  flex: none;
-  background: var(--solid);
-  color: var(--text-2);
-}
-.tool-status-badge.is-completed { color: var(--ok); }
-.tool-status-badge.is-error { color: var(--warn); background: var(--warn-soft); }
-.tool-status-badge.is-running { color: var(--accent); background: var(--accent-soft); }
-.tool-st-ic { width: 11px; height: 11px; }
-.tool-spin {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: tool-spin 0.8s linear infinite;
-}
-@keyframes tool-spin { to { transform: rotate(360deg); } }
+@media (pointer: coarse) { .tool-card-head { min-height: 44px; } }
 
 .tool-card::details-content {
   interpolate-size: allow-keywords;
@@ -398,12 +303,14 @@ onUnmounted(() => {
 }
 
 .tool-card-body {
+  min-width: 0;
   display: grid;
   gap: 8px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--line);
-  background: var(--solid);
+  margin: 4px 0 3px 5px;
+  padding: 8px 8px 8px 10px;
+  border-left: 1px solid var(--line-strong, var(--line));
 }
+.tool-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .tool-section { display: grid; gap: 4px; }
 .tool-sec-bar {
   display: flex;

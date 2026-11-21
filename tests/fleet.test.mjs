@@ -36,6 +36,7 @@ import {
 import { deleteCustomPrompt, loadCustomPrompts, saveCustomPrompt } from '../src/services/customPrompts.ts'
 import { buildSessionHtmlReport } from '../src/services/htmlExport.ts'
 import {
+  buildThreadRenderItems,
   buildTurnRenderItems,
   extractHostMediaDirectives,
   snapToBlockEnd,
@@ -49,20 +50,89 @@ import {
   buildDiffAnnotationsPrompt,
   buildForkContextSeed,
   buildSessionMarkdown,
+  classifyToolKind,
   createPastedTextBlock,
   deriveOptimisticSessionTitle,
+  describeToolCall,
   extractMessageParts,
   fuzzyMatchFileScore,
   groupMessageParts,
   isGenericSessionTitle,
   isQuotaOrModelError,
+  mergeHistoryBoundaries,
   mergeToolCallUpdate,
   parseCodeBlockLang,
+  readTurnTestResult,
   searchSessionsAndMessages,
+  sessionInboxProject,
   shouldConvertToPastedBlock,
   suggestCommitMessageFromDiff,
+  systemEventLabel,
   switchMessageBranch,
 } from '../src/services/chatHelpers.ts'
+
+test('工作记录按单步工具选用操作类别', () => {
+  assert.equal(classifyToolKind({ name: 'browser_navigate' }), 'browser')
+  assert.equal(classifyToolKind({ name: 'fileChange' }), 'edit')
+  assert.equal(classifyToolKind({ name: 'shell' }), 'cmd')
+  assert.equal(classifyToolKind({ name: 'read_file' }), 'read')
+  assert.equal(classifyToolKind({ name: 'read_file', subagentSessionId: 'child' }), 'subagent')
+})
+
+test('收件箱按仓库标识合并不同机器的检出，并保留旧节点的项目文件夹', () => {
+  const remote = { projectKey: 'git:shared', projectName: 'studiolo' }
+  assert.deepEqual(sessionInboxProject({ ...remote, cwd: 'D:\\work\\first-copy' }),
+    sessionInboxProject({ ...remote, cwd: '/home/dev/second-copy' }))
+  assert.notEqual(sessionInboxProject({ ...remote, cwd: '/one/studiolo' }).key,
+    sessionInboxProject({ ...remote, projectKey: 'git:different', cwd: '/two/studiolo' }).key)
+  assert.deepEqual(sessionInboxProject({ cwd: 'D:\\src\\Studiolo\\.studiolo-worktrees\\run-12' }),
+    { key: 'folder:studiolo', name: 'Studiolo' })
+  assert.equal(sessionInboxProject({ cwd: '/srv/studiolo' }).key, 'folder:studiolo')
+})
+
+test('本轮测试统计从最后一次可识别的工具结果读取', () => {
+  const pytest = { status: 'completed', input: { command: 'pytest -q' }, output: '=== 12 passed in 0.42s ===' }
+  const unsuccessful = { ...pytest, status: 'error', output: '=== 2 failed, 8 passed in 1s ===' }
+  assert.deepEqual(readTurnTestResult([pytest, unsuccessful]), { passed: 8, failed: 2, successful: false })
+  assert.deepEqual(readTurnTestResult([{ ...pytest, output: 'On branch main\n12 passed in 0.42s' }]),
+    { passed: 12, failed: 0, successful: true })
+  assert.equal(readTurnTestResult([{ ...pytest, output: 'tests will run' }]), undefined)
+  assert.equal(readTurnTestResult([{ ...pytest, input: { command: 'npm run build' } }]), undefined)
+})
+
+test('工作记录跟随最新流式事件，早先步骤收到更新时保留时间轴位置', () => {
+  const shell = { id: 'shell', name: 'shell', status: 'running', input: { command: 'npm run build' } }
+  const message = {
+    id: 'progress', role: 'assistant', text: '已准备构建。', streaming: true, toolCalls: [shell],
+    parts: [
+      { type: 'tool', callId: 'shell' },
+      { type: 'text', text: '已准备构建。' },
+      { type: 'thought', text: '正在检查构建输出。' },
+    ],
+  }
+  const logsFor = (liveProgress, streaming = true) =>
+    buildThreadRenderItems({ ...message, liveProgress, streaming }).filter(item => item.type === 'work-log')
+  assert.deepEqual(logsFor({ type: 'thought' }).map(log => log.progress), [undefined, { type: 'thought' }])
+  const runningLogs = logsFor({ type: 'tool', callId: 'shell' })
+  assert.equal(describeToolCall(runningLogs[0].progress.tool).label, '正在运行命令 · npm run build')
+  assert.equal(runningLogs[1].progress, undefined)
+  assert.deepEqual(logsFor({ type: 'text' }).at(-1).progress, { type: 'text' })
+  assert.ok(logsFor({ type: 'tool', callId: 'shell' }, false).every(log => !log.progress))
+})
+
+test('会话快照保留历史、去重压缩事件，并将快照分界线留在后续消息之前', () => {
+  const oldest = { id: 'old', role: 'user', text: '历史问题' }
+  const reply = { id: 'live-reply', role: 'assistant', text: '完成' }
+  const compact = { id: 'compact', role: 'system', systemEvents: [{ kind: 'compacted', at: 10, detail: { retainedTurns: 2 } }] }
+  const reconnect = { id: 'reconnect', role: 'system', systemEvents: [{ kind: 'reconnected', at: 20, detail: {} }] }
+  const snapReply = { ...reply, id: 'snapshot-reply' }
+  const next = { id: 'next', role: 'user', text: '接着做' }
+  assert.deepEqual(mergeHistoryBoundaries(
+    [oldest, reply, compact, reconnect], [snapReply, compact, next],
+  ), [oldest, snapReply, compact, reconnect, next])
+  assert.deepEqual(mergeHistoryBoundaries([reconnect], [next]), [next, reconnect])
+  assert.equal(systemEventLabel(compact.systemEvents[0]), '上下文已压缩 · 保留最近 2 轮')
+})
 
 test('首页实测用量按代理轮次去重并隔离本机记录', t => {
   const data = {
@@ -733,6 +803,27 @@ test('模糊文件匹配、配额异常识别、代码块路径解析、Commit �
   assert.equal(isGenericSessionTitle('修复 Diff 抽屉快捷键'), false)
   assert.equal(deriveOptimisticSessionTitle('[Plan Mode]\n修复滚动抖动问题'), '修复滚动抖动问题')
   assert.equal(deriveOptimisticSessionTitle('这是一个超过二十二个字符长度限制用于验证自动截断省略号效果的测试问题').endsWith('…'), true)
+})
+
+test('工作记录折叠思考与连续工具，保留旧历史与穿插正文的顺序', () => {
+  const read = { id: 'read', name: 'read_file', status: 'completed' }
+  const search = { id: 'search', name: 'search_files', status: 'running' }
+  const run = { id: 'run', name: 'shell', status: 'error', output: 'assertion failed' }
+  const items = buildThreadRenderItems({
+    id: 'm-work', role: 'assistant', text: '正在排查。请看结果。', toolCalls: [read, search, run],
+    parts: [
+      { type: 'thought', text: '先查文件' }, { type: 'tool', callId: 'read' }, { type: 'tool', callId: 'search' },
+      { type: 'text', text: '正在排查。' }, { type: 'tool', callId: 'run' }, { type: 'text', text: '请看结果。' },
+    ],
+  })
+  assert.deepEqual(items.map(item => item.type), ['work-log', 'text', 'work-log', 'text'])
+  assert.deepEqual(items[0].steps.map(step => step.type === 'tool' ? step.tool.status : step.text), ['先查文件', 'completed', 'running'])
+  assert.equal(items[2].steps[0].tool.output, 'assertion failed')
+
+  const old = buildThreadRenderItems({ id: 'old', role: 'assistant', text: '', thought: '旧思考', toolCalls: [run] })
+  assert.deepEqual(old.map(item => item.type), ['work-log'])
+  assert.equal(old[0].isLast, true)
+  assert.deepEqual(old[0].steps.map(step => step.type), ['thought', 'tool'])
 })
 
 test('hermes-mobile 风格正文内联媒体分段：MEDIA 指令、路径引用穿插与代码围栏闭合保护', () => {

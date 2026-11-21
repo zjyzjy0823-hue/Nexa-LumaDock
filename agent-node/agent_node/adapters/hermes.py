@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 import time
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -29,6 +30,95 @@ from .jsonrpc import StdioJsonRpcProcess
 
 _HISTORY_LIMIT = 500
 _HISTORY_SESSIONS = 32
+
+
+def _gateway_history(items: list[Any]) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    calls: dict[str, dict[str, Any]] = {}
+
+    def content_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "".join(str(part.get("text", "")) for part in value
+                           if isinstance(part, dict) and part.get("type") in ("text", "output_text"))
+        return ""
+
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        role = raw.get("role")
+        content = raw.get("content", raw.get("text"))
+        if role == "tool":
+            call = calls.get(str(raw.get("tool_call_id") or raw.get("callId") or ""))
+            if call is not None:
+                call["output"] = content_text(content)
+                call["status"] = "error" if raw.get("error") else "completed"
+                if raw.get("error"):
+                    call["error"] = str(raw["error"])
+                continue
+        role = role if role in ("user", "assistant", "system") else "assistant"
+        text = content_text(content)
+        row: dict[str, Any] = {"role": role, "text": text}
+        for key in ("id", "runId", "requestId"):
+            if raw.get(key) is not None:
+                row[key] = str(raw[key])
+        created = raw.get("createdAt", raw.get("created_at", raw.get("timestamp")))
+        if type(created) in (int, float):
+            row["createdAt"] = created * 1000 if created < 1e12 else created
+        if role != "assistant":
+            history.append(row)
+            continue
+
+        tools: dict[str, dict[str, Any]] = {}
+        source_tools = raw.get("toolCalls") or raw.get("tool_calls") or []
+        if not isinstance(source_tools, list):
+            source_tools = []
+        if isinstance(content, list):
+            source_tools = [*source_tools, *(part for part in content if isinstance(part, dict) and part.get("type") in ("tool", "tool_use"))]
+        for item in source_tools:
+            if not isinstance(item, dict):
+                continue
+            call_id = str(item.get("callId") or item.get("toolCallId") or item.get("id") or "")
+            if not call_id:
+                continue
+            function = item.get("function") if isinstance(item.get("function"), dict) else {}
+            tool = {"callId": call_id, "name": item.get("name") or function.get("name") or "tool"}
+            tool.update({key: item[key] for key in ("title", "detail", "output", "error", "durationMs", "subagentSessionId", "media") if key in item})
+            tool["input"] = item.get("input", function.get("arguments"))
+            status = item.get("status")
+            tool["status"] = "error" if status in ("error", "failed", "cancelled") else "running" if status in ("running", "in_progress") else "completed"
+            tools[call_id] = tool
+            calls[call_id] = tool
+
+        thought = raw.get("thought") or raw.get("reasoning_content")
+        parts = []
+        for part in raw.get("parts") or (content if isinstance(content, list) else []):
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type")
+            if kind in ("thought", "reasoning", "text", "output_text") and part.get("text"):
+                parts.append({"type": "thought" if kind in ("thought", "reasoning") else "text", "text": str(part["text"])})
+            elif kind in ("tool", "tool_use"):
+                call_id = str(part.get("callId") or part.get("id") or "")
+                if call_id in tools:
+                    parts.append({"type": "tool", "callId": call_id})
+        if isinstance(thought, str) and thought and not any(part["type"] == "thought" for part in parts):
+            parts.insert(0, {"type": "thought", "text": thought})
+        seen = {part["callId"] for part in parts if part["type"] == "tool"}
+        parts.extend({"type": "tool", "callId": key} for key in tools if key not in seen)
+        if text and not any(part["type"] == "text" for part in parts):
+            parts.append({"type": "text", "text": text})
+        row["text"] = "".join(part["text"] for part in parts if part["type"] == "text")
+        reasoning = "".join(part["text"] for part in parts if part["type"] == "thought")
+        if reasoning:
+            row["thought"] = reasoning
+        if tools:
+            row["toolCalls"] = list(tools.values())
+        if reasoning or tools:
+            row["parts"] = parts
+        history.append(row)
+    return history
 
 
 class HermesAdapter(AgentAdapter):
@@ -166,16 +256,16 @@ class HermesAdapter(AgentAdapter):
         self._history_updated[sid] = updated
         try:
             response = await proc.call("session/load", {"sessionId": sid, "cwd": str(cwd), "mcpServers": []})
-            # Some Hermes builds deliver the first replay chunk just after the RPC response.
-            if not messages:
-                try:
-                    await asyncio.wait_for(updated.wait(), timeout=0.25)
-                    deadline = asyncio.get_running_loop().time() + 0.25
-                    while asyncio.get_running_loop().time() < deadline:
+            # Replay notifications may continue arriving after the RPC response.
+            try:
+                if not messages:
+                    await asyncio.wait_for(updated.wait(), timeout=0.45)
+                async with asyncio.timeout(0.6):
+                    while True:
                         updated.clear()
-                        await asyncio.wait_for(updated.wait(), timeout=0.04)
-                except TimeoutError:
-                    pass
+                        await asyncio.wait_for(updated.wait(), timeout=0.12)
+            except TimeoutError:
+                pass
             self._remember_models(response)
             self._save_history(sid, messages)
         finally:
@@ -332,14 +422,19 @@ class HermesAdapter(AgentAdapter):
     async def get_history(self, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(limit, _HISTORY_LIMIT))
         if self.mode == "gateway" and self.serve_url:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
             async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(f"{self.serve_url}/api/sessions/{session_id}/messages", headers=headers)
-                if res.status_code == 200:
-                    data = res.json()
-                    items = data if isinstance(data, list) else data.get("messages", [])
-                    return [{"role": m.get("role", "assistant"), "text": m.get("content", "")} for m in items[-limit:]]
-            return []
+                res = await client.get(
+                    f"{self.serve_url}/api/sessions/{quote(session_id, safe='')}/messages",
+                    headers=self._gateway_headers(),
+                    params={"limit": _HISTORY_LIMIT, "order": "latest", "include_compacted": "true", "inline_images": "false"},
+                )
+                if not res.is_success:
+                    raise RuntimeError(f"Hermes Gateway 历史读取失败（HTTP {res.status_code}）")
+                data = res.json()
+                items = data.get("messages") if isinstance(data, dict) else data
+                if not isinstance(items, list):
+                    raise ValueError("Hermes Gateway 返回了无法识别的历史格式")
+                return _gateway_history(items)[-limit:]
         proc = await self._ensure_acp()
         async with self._history_lock:
             if session_id not in self._turns:
@@ -403,7 +498,11 @@ class HermesAdapter(AgentAdapter):
                             source="exact",
                         )
                     )
-            await emit({"type": "Completed", "sessionId": session_id, "runId": request_id, "requestId": request_id})
+            if isinstance(prompt_res, dict) and prompt_res.get("stopReason") in ("cancelled", "canceled"):
+                await emit({"type": "Failed", "sessionId": session_id, "runId": request_id, "requestId": request_id,
+                            "code": "cancelled", "message": "已中断当前 Hermes 任务"})
+            else:
+                await emit({"type": "Completed", "sessionId": session_id, "runId": request_id, "requestId": request_id})
         finally:
             self._turns.pop(session_id, None)
             self._approvals.pop(session_id, None)

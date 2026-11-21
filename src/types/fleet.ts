@@ -270,6 +270,8 @@ export interface ChatSession {
   title: string
   cwd: string
   worktreePath?: string | null
+  projectKey?: string
+  projectName?: string
   branch?: string
   model?: string
   updatedAt?: string | number
@@ -422,6 +424,12 @@ export interface PermissionRequestCard {
   createdAt: number
 }
 
+export interface ChatSystemEvent {
+  kind: 'compacted' | 'handoff' | 'reconnected'
+  at: number
+  detail: { summary?: string; retainedTurns?: number; sourceSessionKey?: string }
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -432,6 +440,8 @@ export interface ChatMessage {
   text: string
   thought?: string
   streaming?: boolean
+  interrupted?: boolean
+  liveProgress?: { type: 'thought' | 'text' } | { type: 'tool'; callId: string }
   error?: string
   toolCalls?: ToolCallBadge[]
   parts?: MessagePart[]
@@ -446,6 +456,7 @@ export interface ChatMessage {
   durationMs?: number
   turnTokens?: number
   modelLabel?: string
+  systemEvents?: ChatSystemEvent[]
   createdAt: number
 }
 
@@ -486,6 +497,11 @@ export interface FleetWsEvent {
   checkpointId?: string
   restoredFiles?: string[]
   supported?: boolean
+  systemEvent?: ChatSystemEvent
+  handoffSummary?: string
+  handoffSource?: string
+  port?: number
+  previewUrl?: string
   models?: FleetModel[]
   agents?: AgentModeOption[]
   servers?: McpServerInfo[]
@@ -527,11 +543,15 @@ export interface FleetWsEvent {
   data?: string
   exitCode?: number
   nodes?: AgentNode[]
-  sessions?: Array<Pick<ChatSession, 'sessionId' | 'provider' | 'worktreePath' | 'branch' | 'model' | 'updatedAt'> & { title?: string; cwd?: string }>
+  sessions?: Array<Pick<ChatSession, 'sessionId' | 'provider' | 'worktreePath' | 'branch' | 'model' | 'updatedAt' | 'projectKey' | 'projectName'> & { title?: string; cwd?: string }>
   messages?: Array<{
+    id?: string
     role: string
     text: string
     runId?: string
+    requestId?: string
+    createdAt?: number
+    systemEvents?: ChatSystemEvent[]
     thought?: string
     toolCalls?: ToolCallBadge[]
     media?: MessageMediaItem[]
@@ -539,6 +559,8 @@ export interface FleetWsEvent {
   }>
   cwd?: string
   worktreePath?: string | null
+  projectKey?: string
+  projectName?: string
   messageId?: string
   scope?: 'turn' | 'cumulative'
   inputTokens?: number
