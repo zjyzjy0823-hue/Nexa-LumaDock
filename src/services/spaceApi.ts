@@ -153,8 +153,24 @@ export interface SpaceAuditLogItem {
 }
 
 export interface SpaceRouteConfig {
+  kind?: 'user' | 'device-read'
   token: string
   origin?: string
+}
+
+export const deviceReadCapabilities: SpaceCapabilities = {
+  enabled: true,
+  protectedAvailable: false,
+  maxFileBytes: 0,
+  defaultQuotaBytes: 0,
+  defaultChunkSize: 0,
+  tiers: ['standard'],
+}
+
+function spaceApiPath(route: SpaceRouteConfig, path: string): string {
+  return route.kind === 'device-read'
+    ? path.replace(/^\/api\/v1\/spaces(?=\/|\?|$)/, '/api/v1/core/space-reads/spaces')
+    : path
 }
 
 function resolveOrigin(route: SpaceRouteConfig): string {
@@ -166,12 +182,12 @@ export function fetchSpaceCapabilities(route: SpaceRouteConfig): Promise<SpaceCa
 }
 
 export function fetchSpaces(route: SpaceRouteConfig): Promise<SpaceItem[]> {
-  return apiRequest<SpaceItem[]>('/api/v1/spaces', {}, route.token, route.origin)
+  return apiRequest<SpaceItem[]>(spaceApiPath(route, '/api/v1/spaces'), {}, route.token, route.origin)
 }
 
 /** 单个空间的最新摘要（entryCount / usedBytes），用于条目增删后刷新列表卡片。 */
 export function fetchSpace(route: SpaceRouteConfig, spaceId: string): Promise<SpaceItem> {
-  return apiRequest<SpaceItem>(`/api/v1/spaces/${encodeURIComponent(spaceId)}`, {}, route.token, route.origin)
+  return apiRequest<SpaceItem>(spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}`), {}, route.token, route.origin)
 }
 
 export function createSpaceApi(
@@ -295,7 +311,8 @@ export async function downloadSpaceBlobChunk(
   blobId: string,
   chunkIndex: number,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  const url = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
+  const path = `/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
+  const url = resolveOrigin(route) + spaceApiPath(route, path)
   const res = await fetch(url, {
     credentials: 'omit', redirect: 'error',
     headers: { Authorization: `Bearer ${route.token}` },
@@ -317,7 +334,7 @@ export function fetchSpaceEntries(
   if (params?.entryType) qs.set('entryType', params.entryType)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return apiRequest<SpaceEntrySummary[]>(
-    `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries${suffix}`,
+    spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries${suffix}`),
     {},
     route.token,
     route.origin,
@@ -345,7 +362,7 @@ export function fetchSpaceEntryDetail(
 ): Promise<SpaceEntryDetail> {
   const qs = revision ? `?revision=${revision}` : ''
   return apiRequest<SpaceEntryDetail>(
-    `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}${qs}`,
+    spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}${qs}`),
     {},
     route.token,
     route.origin,
@@ -374,7 +391,9 @@ export async function downloadEntryBlob(
   password?: string,
   revision?: number,
 ): Promise<Blob> {
-  const base = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/download`
+  if (password && route.kind === 'device-read') throw new Error('设备只读：登录 Core 后可编辑')
+  const path = `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/download`
+  const base = resolveOrigin(route) + spaceApiPath(route, path)
   const res = await (password
     ? fetch(base, {
         method: 'POST',
@@ -390,7 +409,9 @@ export async function downloadEntryBlob(
         headers: { Authorization: `Bearer ${route.token}` },
       })).catch(() => { throw new ApiError(0, '无法连接 Core 下载文件') })
   if (!res.ok) {
-    throw new Error(res.status === 403 ? '空间密码不正确或无权下载' : `下载失败 (${res.status})`)
+    const message = res.status === 403 ? '空间密码不正确或无权下载' : `下载失败 (${res.status})`
+    if (route.kind === 'device-read') throw new ApiError(res.status, message)
+    throw new Error(message)
   }
   return res.blob()
 }

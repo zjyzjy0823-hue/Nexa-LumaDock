@@ -21,6 +21,7 @@ import {
   createSpaceEntryApi,
   createSpaceTokenApi,
   deleteSpaceEntryApi,
+  deviceReadCapabilities,
   downloadEntryBlob,
   downloadSpaceBlobChunk,
   fetchSpace,
@@ -130,18 +131,30 @@ export const useSpaceStore = defineStore('space', () => {
   const linkedCore = computed(() => auth.mode === 'local' && auth.workstation && auth.coreConnection?.connected
     ? auth.coreConnection : null)
   const waitingForConnection = computed(() => auth.mode === 'local' && auth.workstation && auth.coreConnection === undefined)
+  const connectionIdentity = computed(() => {
+    const link = linkedCore.value
+    return link ? JSON.stringify([link.coreUrl, link.workspaceId, link.clientId, link.connectedAt]) : ''
+  })
+  const deviceReadsUnsupported = ref(false)
+  const deviceRoute = computed<SpaceRouteConfig | null>(() =>
+    connectionIdentity.value && auth.token
+      ? { kind: 'device-read', token: auth.token, origin: getApiBaseUrl() }
+      : null)
   const route = computed<SpaceRouteConfig | null>(previous => {
     if (!auth.token || waitingForConnection.value) return null
     const current = linkedCore.value && !localView.value
       ? fleet.coreWorkspaceRoute : { token: auth.token, origin: getApiBaseUrl() }
-    if (!current) return null
-    return previous?.origin === current.origin && previous.token === current.token ? previous : current
+    if (!current) return deviceReadsUnsupported.value ? null : deviceRoute.value
+    return previous?.kind === 'user' && previous.origin === current.origin && previous.token === current.token
+      ? previous : { ...current, kind: 'user' }
   })
+  const deviceReadOnly = computed(() => route.value?.kind === 'device-read')
   const coreSignInRequired = computed(() => !!linkedCore.value && !localView.value && !route.value)
   const apiOrigin = computed(() => route.value?.origin)
   const replica = computed<SpaceReplica | null>(previous => {
     if (!auth.replicaAccount || waitingForConnection.value || localView.value || (!linkedCore.value && auth.mode !== 'core')) return null
     const link = linkedCore.value
+    if (link && !fleet.coreWorkspaceRoute) return null
     const namespace = JSON.stringify([
       link?.coreUrl ?? getApiBaseUrl(), link?.workspaceId ?? '', auth.replicaAccount,
     ])
@@ -190,6 +203,17 @@ export const useSpaceStore = defineStore('space', () => {
   function requireRoute(): SpaceRouteConfig {
     if (!route.value) throw new Error(coreSignInRequired.value ? '请先登录 Core 共享空间' : '共享空间连接尚未就绪')
     return route.value
+  }
+
+  function requireUserSpaceAccess() {
+    if (deviceReadOnly.value) throw new Error('设备只读：登录 Core 后可编辑')
+  }
+
+  function rejectDeviceReads(target: SpaceRouteConfig | null, cause: unknown, listing = false) {
+    if (target !== route.value || target?.kind !== 'device-read' || !(cause instanceof ApiError)) return
+    if (cause.status === 401 || cause.status === 403 || cause.status === 409 || (listing && cause.status === 404)) {
+      deviceReadsUnsupported.value = true
+    }
   }
 
   function checkRoute(target: SpaceRouteConfig, spaceId?: string) {
@@ -257,6 +281,7 @@ export const useSpaceStore = defineStore('space', () => {
   watch(linkedCore, (next, previous) => {
     if (next?.workspaceId !== previous?.workspaceId || next?.coreUrl !== previous?.coreUrl) localView.value = false
   })
+  watch([connectionIdentity, () => auth.token], () => { deviceReadsUnsupported.value = false }, { flush: 'sync' })
   watch(route, reset, { flush: 'sync' })
   watch(replica, reset, { flush: 'sync' })
 
@@ -310,6 +335,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function retrySpaceQueue() {
+    requireUserSpaceAccess()
     const target = replica.value
     if (!target) return
     try {
@@ -334,7 +360,11 @@ export const useSpaceStore = defineStore('space', () => {
       let data: { caps: SpaceCapabilities; list: SpaceItem[] } | undefined
       try {
         if (target) {
-          const [caps, list] = await Promise.all([fetchSpaceCapabilities(target), fetchSpaces(target)])
+          const [caps, list] = await Promise.all([
+            target.kind === 'device-read' ? deviceReadCapabilities : fetchSpaceCapabilities(target),
+            fetchSpaces(target),
+          ])
+          if (request !== listRequest || target !== route.value) return
           data = { caps, list }
           if (local) await local.write('catalog', { caps, list: list.filter(space => space.tier === 'standard') })
           if (target === route.value) offline.value = false
@@ -359,7 +389,10 @@ export const useSpaceStore = defineStore('space', () => {
         await selectSpace(list[0]!.id)
       }
     } catch (cause) {
-      if (request === listRequest) error.value = cause instanceof Error ? cause.message : '加载共享空间失败'
+      if (request === listRequest) {
+        rejectDeviceReads(target, cause, true)
+        if (request === listRequest) error.value = cause instanceof Error ? cause.message : '加载共享空间失败'
+      }
     } finally {
       if (request === listRequest) loading.value = false
     }
@@ -380,11 +413,16 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   /** 条目增删后把空间卡片上的 entryCount / usedBytes 拉回最新，避免卡片长期显示 0 条。 */
-  async function syncSpaceSummary(spaceId: string) {
+  async function syncSpaceSummary(spaceId: string, request: number) {
+    const target = route.value
+    if (!target) return
     try {
-      const fresh = await fetchSpace(requireRoute(), spaceId)
-      spaces.value = spaces.value.map(item => (item.id === fresh.id ? fresh : item))
-    } catch {
+      const fresh = await fetchSpace(target, spaceId)
+      if (request === entriesRequest && target === route.value) {
+        spaces.value = spaces.value.map(item => (item.id === fresh.id ? fresh : item))
+      }
+    } catch (cause) {
+      if (request === entriesRequest) rejectDeviceReads(target, cause)
       // 计数刷新失败不影响条目读写本身，卡片保持旧值即可。
     }
   }
@@ -446,9 +484,16 @@ export const useSpaceStore = defineStore('space', () => {
         selectedEntryId.value = ''
         selectedEntryDetail.value = null
       }
-      await syncSpaceSummary(selectedSpaceId.value)
+      if (request === entriesRequest && selectedSpaceId.value === space.id) await syncSpaceSummary(space.id, request)
     } catch (cause) {
-      if (request === entriesRequest && selectedSpaceId.value === space.id) error.value = cause instanceof Error ? cause.message : '加载条目失败'
+      if (request === entriesRequest && selectedSpaceId.value === space.id) {
+        if (target?.kind === 'device-read' && cause instanceof ApiError && cause.status === 404) {
+          entries.value = []
+          await selectEntry('')
+        }
+        rejectDeviceReads(target, cause)
+        if (request === entriesRequest) error.value = cause instanceof Error ? cause.message : '加载条目失败'
+      }
     } finally {
       if (request === entriesRequest) loading.value = false
     }
@@ -483,7 +528,10 @@ export const useSpaceStore = defineStore('space', () => {
         if (!detail) error.value = '这个条目的内容尚未下载，请联网打开一次。'
       }
     } catch (cause) {
-      if (request === detailRequest && selectedEntryId.value === entryId) error.value = cause instanceof Error ? cause.message : '加载条目详情失败'
+      if (request === detailRequest && selectedEntryId.value === entryId) {
+        rejectDeviceReads(target, cause)
+        if (request === detailRequest) error.value = cause instanceof Error ? cause.message : '加载条目详情失败'
+      }
     }
   }
 
@@ -494,6 +542,7 @@ export const useSpaceStore = defineStore('space', () => {
     password?: string
     workspaceId?: string
   }): Promise<SpaceItem> {
+    requireUserSpaceAccess()
     const route = requireRoute()
     let created: SpaceItem
     if (input.tier === 'e2ee') {
@@ -542,8 +591,10 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function archiveSpace(spaceId: string) {
+    requireUserSpaceAccess()
     const route = requireRoute()
     if ((await replica.value?.queue())?.some(item => item.spaceId === spaceId)) throw new Error('该空间还有待同步修改或冲突，请处理后再归档。')
+    checkRoute(route)
     await archiveSpaceApi(route, spaceId)
     checkRoute(route)
     clearSensitiveMemory()
@@ -554,6 +605,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function importLocalStandardSpaces() {
+    requireUserSpaceAccess()
     const target = requireRoute()
     const local = replica.value
     const localToken = auth.token
@@ -610,6 +662,7 @@ export const useSpaceStore = defineStore('space', () => {
     file?: File
     password?: string
   }): Promise<SpaceEntryDetail> {
+    requireUserSpaceAccess()
     const space = selectedSpace.value
     if (!space) throw new Error('请先选择一个共享空间')
 
@@ -763,6 +816,7 @@ export const useSpaceStore = defineStore('space', () => {
 
   /** 按次输入密码解密 E2EE 当前目录（仅驻留内存，离页即清）。 */
   async function decryptE2eeCatalogWithPassword(password: string) {
+    requireUserSpaceAccess()
     const space = selectedSpace.value
     if (!space || space.tier !== 'e2ee') return
     const generation = sensitiveGeneration
@@ -816,6 +870,7 @@ export const useSpaceStore = defineStore('space', () => {
 
   /** 按次输入密码解锁查看单条 protected 或 e2ee 条目。 */
   async function unlockCurrentEntryWithPassword(password: string, revision?: number): Promise<UnlockedEntryView> {
+    requireUserSpaceAccess()
     const space = selectedSpace.value
     const entry = selectedEntryDetail.value
     if (!space || !entry) throw new Error('未选择条目')
@@ -942,6 +997,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function pinEncryptedEntry() {
+    requireUserSpaceAccess()
     const local = replica.value
     const target = requireRoute()
     const space = selectedSpace.value
@@ -967,6 +1023,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function unpinEncryptedEntry(entryId: string) {
+    requireUserSpaceAccess()
     const local = replica.value
     const spaceId = selectedSpaceId.value
     if (!local || !spaceId) return
@@ -979,6 +1036,9 @@ export const useSpaceStore = defineStore('space', () => {
   async function downloadStandardEntry(entry: SpaceEntryDetail) {
     const local = replica.value
     const target = route.value
+    const generation = sensitiveGeneration
+    const current = () => target === route.value && local === replica.value
+      && (target?.kind !== 'device-read' || generation === sensitiveGeneration)
     const key = `file/${entry.spaceId}/${entry.id}/${entry.blobId ?? entry.revision}`
     let blob = local ? await local.read<Blob>(key) : undefined
     if (!blob && local && entry.revision === 0) {
@@ -988,14 +1048,19 @@ export const useSpaceStore = defineStore('space', () => {
     if (!blob && entry.entryType !== 'file') blob = new Blob([entry.contentText ?? ''], { type: entry.mime })
     if (!blob) {
       if (!target) throw new Error('该文件尚未下载，请联网后打开。')
-      try { blob = await downloadEntryBlob(target, entry.spaceId, entry.id, undefined, entry.revision) }
-      catch (cause) {
+      try {
+        blob = await downloadEntryBlob(target, entry.spaceId, entry.id, undefined,
+          target.kind === 'device-read' ? undefined : entry.revision)
+      } catch (cause) {
+        if (!current()) return
+        rejectDeviceReads(target, cause)
+        if (!current()) return
         if (local && canUseCache(cause)) throw new Error('该文件尚未下载，请联网后打开。')
         throw cause
       }
       if (local) await local.write(key, blob)
     }
-    if (target !== route.value || local !== replica.value) return
+    if (!current()) return
     const url = registerObjectUrl(blob)
     const a = document.createElement('a')
     a.href = url
@@ -1004,6 +1069,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function updateStandardEntry(entry: SpaceEntryDetail, nextTitle: string, nextText: string, nextTags: string[]) {
+    requireUserSpaceAccess()
     const local = replica.value
     if (local && entry.tier === 'standard' && !legacySpaces.value.has(entry.spaceId)) {
       const edit = { title: nextTitle.trim(), contentText: nextText, tags: [...nextTags] }
@@ -1028,6 +1094,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function deleteCurrentEntry() {
+    requireUserSpaceAccess()
     if (!selectedSpaceId.value || !selectedEntryId.value) return
     const local = replica.value
     const entry = selectedEntryDetail.value
@@ -1081,6 +1148,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function loadConflicts() {
+    requireUserSpaceAccess()
     const target = route.value
     const space = selectedSpace.value
     conflicts.value = []
@@ -1100,6 +1168,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function resolveConflict(candidate: StandardSpaceConflict, strategy: 'core' | 'candidate') {
+    requireUserSpaceAccess()
     const target = requireRoute()
     const spaceId = candidate.current.spaceId
     await resolveStandardSpaceConflict(target, spaceId, candidate, strategy)
@@ -1109,6 +1178,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function loadTokensAndAudit() {
+    requireUserSpaceAccess()
     const spaceId = selectedSpaceId.value
     const target = route.value
     if (!spaceId || !target || offline.value) return
@@ -1130,6 +1200,7 @@ export const useSpaceStore = defineStore('space', () => {
     expiresInDays?: number | null
     password?: string
   }): Promise<SpaceTokenCreated> {
+    requireUserSpaceAccess()
     const spaceId = selectedSpaceId.value
     if (!spaceId) throw new Error('未选择空间')
     const route = requireRoute()
@@ -1143,6 +1214,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function revokeToken(tokenId: string) {
+    requireUserSpaceAccess()
     const spaceId = selectedSpaceId.value
     if (!spaceId) return
     const route = requireRoute()
@@ -1152,6 +1224,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function changeSpacePassword(oldPassword: string, newPassword: string) {
+    requireUserSpaceAccess()
     const route = requireRoute()
     const space = selectedSpace.value
     if (!space) throw new Error('未选择空间')
@@ -1185,6 +1258,7 @@ export const useSpaceStore = defineStore('space', () => {
   }
 
   async function rotateE2eeEpoch(newPassword: string) {
+    requireUserSpaceAccess()
     const route = requireRoute()
     const space = selectedSpace.value
     if (!space || space.tier !== 'e2ee') throw new Error('仅极密 E2EE 空间支持 Epoch 密钥轮换')
@@ -1216,6 +1290,7 @@ export const useSpaceStore = defineStore('space', () => {
     linkedCore,
     localView,
     coreSignInRequired,
+    deviceReadOnly,
     waitingForConnection,
     apiOrigin,
     offline,
