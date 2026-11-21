@@ -6,6 +6,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
+import logging
 import os
 from pathlib import Path
 import platform as py_platform
@@ -50,6 +51,9 @@ from .workspace_tools import (
     write_workspace_file,
 )
 from .worktree import current_session_ref, project_identity, recover_session_worktree, remove_session_worktree
+
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -1199,7 +1203,7 @@ class AgentNodeDaemon:
                         **extra_kwargs,
                     )
                 except Exception as err:
-                    log.exception("prompt failed (provider=%s)", provider)
+                    _LOG.exception("prompt failed (provider=%s)", provider)
                     await wrapped_emit({
                         "type": "Failed", "sessionId": sid, "requestId": eff_req_id,
                         "runId": turn_state["runId"] or eff_req_id,
@@ -1218,7 +1222,7 @@ class AgentNodeDaemon:
                 try:
                     await adapter.cancel(session_id=sid, run_id=frame.get("runId"))
                 except Exception:
-                    log.exception("cancel failed (provider=%s)", provider)
+                    _LOG.exception("cancel failed (provider=%s)", provider)
                     await send_back({**reply, "status": "error", "message": "代理未接受停止请求"})
                     return
                 for call_id, event in list(self._pending_approval_events.items()):
@@ -1240,7 +1244,7 @@ class AgentNodeDaemon:
         except Exception as err:
             # 空的 str(err) 会让 app 只显示一个没有原因的 node_execution_error，
             # 所以把完整堆栈写进节点日志，排查时不用再猜。
-            log.exception("command %s failed (provider=%s)", frame.get("type"), provider)
+            _LOG.exception("command %s failed (provider=%s)", frame.get("type"), provider)
             detail = str(err) or type(err).__name__
             await send_back({"type": "Failed", "code": "node_execution_error", "provider": provider, "sessionId": frame.get("sessionId"), "message": detail})
 
