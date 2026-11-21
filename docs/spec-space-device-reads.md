@@ -1,9 +1,33 @@
 # SPEC：已配对设备免二次登录只读 Shared Space（方案 B · Sidecar 代理）
 
-- 状态：待实现
+- 状态：**已实现（待合并 main / 待发版）**
 - 分支：`feat/space-device-reads`
 - 目标：用户在「同步设置」里已用 `nc_live_` 连上 Core 后，打开共享空间**不再要求登录 Core 账号**；设备只能**只读 `standard` 档**，`protected` / `e2ee` 与所有写操作仍需登录 Core。
 - 非目标：不做离线镜像缓存（后续可在此代理层上叠加）、不放行设备凭据直访 `/api/v1/spaces`、不改 e2ee 密码学与信封格式。
+
+## 实现状态
+
+| 阶段 | 提交 | 说明 |
+|---|---|---|
+| Core 端点 | `05fe1f3` | `/api/v1/client/space-reads/*`（7 条），设备主体 + standard 硬门禁 + 授权解析 + 审计；`/api/v1/spaces` 对设备凭据仍 403（有回归测试） |
+| Sidecar 代理 + 前端 | `c24d223` | Local 代理 7 条（流式下载、传输门禁、UUID 校验）；前端 `kind='device-read'` 只读模式与 UI 收口 |
+
+**开关**（默认关闭，需显式打开）：
+
+- Core：`STUDIOLO_SPACE_DEVICE_READS=true`
+- 默认授权（本人 workspace 的 standard 空间免逐台授权）：`STUDIOLO_SPACE_DEVICE_DEFAULT_GRANT=true`（默认 true）
+
+**冒烟证据**（真实 `nc_live_` 凭据）：
+
+| 请求 | 本地 Core | 公网 Core |
+|---|---|---|
+| `GET /client/space-reads/status` | 200 `ready, spaceCount=1` | 200 同 |
+| `GET /client/space-reads/spaces` | 200 `日常笔记(standard, 2 条)` | 200 同 |
+| `GET /api/v1/spaces`（设备凭据） | 403 | 403 |
+| 不存在的空间 | 404 | — |
+
+**测试**：后端 37 passed（代理 18 + Core 13 + 共享空间 6）、前端 15 passed、`npm run build` 通过。
+
 
 ## 0. 既有事实（实现时不要推翻）
 
