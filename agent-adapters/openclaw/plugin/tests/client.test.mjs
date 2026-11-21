@@ -15,10 +15,11 @@ const ok = () => Response.json({ status: 'ok', replayed: false, data: { entityId
 test('official SDK registers all static typed tools and safe status executes', async () => {
   const metadata = getToolPluginMetadata(entry)
   assert.equal(metadata.id, 'studiolo-tools')
-  assert.equal(metadata.tools.length, 30)
+  const expected = ['studiolo_status', ...catalog.map(tool => tool.toolName)].sort()
+  assert.equal(metadata.tools.length, expected.length)
   const tools = []
   entry.register({ pluginConfig: config, registerTool: tool => tools.push(tool) })
-  assert.equal(tools.length, 30)
+  assert.deepEqual(tools.map(tool => tool.name).sort(), expected)
   const original = globalThis.fetch
   try {
     globalThis.fetch = async (url, options) => {
@@ -33,7 +34,7 @@ test('official SDK registers all static typed tools and safe status executes', a
 })
 
 test('every typed tool maps to a strict static schema', () => {
-  assert.equal(catalog.length, 29)
+  assert.equal(new Set(catalog.map(tool => tool.action)).size, catalog.length)
   for (const tool of catalog) {
     assert.equal(tool.parameters.additionalProperties, false)
     assert.equal(tool.parameters.type, 'object')
@@ -44,6 +45,9 @@ test('every typed tool maps to a strict static schema', () => {
   const transaction = catalog.find(t => t.action === 'ledger.transaction.create')
   assert.ok(transaction.parameters.required.includes('occurredAt'))
   assert.ok(transaction.parameters.properties.categoryId)
+  for (const action of ['space.list', 'space.entries.list', 'space.entry.get']) {
+    assert.equal(catalog.find(tool => tool.action === action)?.effect, 'read')
+  }
 })
 
 test('all tools use Agent Action endpoint, writes have UUID and reads no actionId', async () => {

@@ -313,7 +313,7 @@ def test_opencode_go_quota_from_service_and_explicit_key(tmp_path, monkeypatch):
 
 
 CODEX_MOCK_SCRIPT = """
-import sys, json
+import sys, json, os
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -345,13 +345,20 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'thread/tokenUsage/updated', 'params': {'threadId': 'thr-1', 'turnId': 'turn-1', 'tokenUsage': {'modelContextWindow': 200000, 'total': {'inputTokens': 600, 'cachedInputTokens': 150, 'outputTokens': 90, 'reasoningOutputTokens': 20, 'totalTokens': 690}, 'last': {'inputTokens': 600, 'cachedInputTokens': 150, 'outputTokens': 90, 'reasoningOutputTokens': 20, 'totalTokens': 690}}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'turn/completed', 'params': {'threadId': 'thr-1', 'turn': {'id': 'turn-1'}}}) + '\\n')
     elif m == 'thread/read':
-        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'thread': {'id': 'thr-1', 'turns': [{'items': [{'type': 'userMessage', 'content': [{'text': 'run'}]}, {'type': 'reasoning', 'summary': ['checking files']}, {'type': 'commandExecution', 'id': 'call-1', 'command': 'pytest -q', 'status': 'completed', 'aggregatedOutput': '12 passed'}, {'type': 'agentMessage', 'text': 'approved:accept'}]}]}}}) + '\\n')
+        turns = [{'items': [{'type': 'userMessage', 'content': [{'text': 'run'}]}, {'type': 'reasoning', 'summary': ['checking files']}, {'type': 'commandExecution', 'id': 'call-1', 'command': 'pytest -q', 'status': 'completed', 'aggregatedOutput': '12 passed'}, {'type': 'agentMessage', 'text': 'approved:accept'}]}]
+        if 'compaction' in globals():
+            turns.append({'items': [compaction]})
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'thread': {'id': 'thr-1', 'cwd': os.getcwd(), 'turns': turns}}}) + '\\n')
+    elif m == 'thread/resume':
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}))
     elif m == 'thread/turns/list':
         print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': 'Method not found'}}))
     elif m == 'thread/name/set':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}) + '\\n')
     elif m == 'thread/compact/start':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}) + '\\n')
+        compaction = {'type': 'contextCompaction', 'id': 'compact-item-1'}
+        print(json.dumps({'jsonrpc': '2.0', 'method': 'item/completed', 'params': {'threadId': 'thr-1', 'item': compaction}}))
     elif m == 'thread/list':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {'data': [{'id': 'thr-1', 'preview': 'Fix bug', 'cwd': '.'}]}}) + '\\n')
     sys.stdout.flush()
@@ -359,7 +366,7 @@ for line in sys.stdin:
 
 
 HERMES_ACP_SCRIPT = """
-import sys, json, os
+import sys, json, os, time
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -381,11 +388,18 @@ for line in sys.stdin:
     elif m == 'session/load':
         sid = msg['params']['sessionId']
         assert msg['params']['cwd'] == os.getcwd()
-        for kind, text in [('user_message_chunk', 'Older question'), ('agent_message_chunk', 'Older answer')]:
+        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}), flush=True)
+        time.sleep(0.02)
+        for update in [
+            {'session_update': 'user_message_chunk', 'content': {'type': 'text', 'text': 'Older question'}},
+            {'session_update': 'agent_thought_chunk', 'content': {'type': 'text', 'text': 'check'}},
+            {'session_update': 'tool_call', 'tool_call_id': 'old-tool', 'title': 'read_file'},
+            {'session_update': 'tool_call_update', 'tool_call_id': 'old-tool', 'status': 'completed', 'raw_output': 'ok'},
+            {'session_update': 'agent_message_chunk', 'content': {'type': 'text', 'text': 'Older answer'}},
+        ]:
             print(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {
-                'sessionId': sid, 'update': {'sessionUpdate': kind, 'content': {'type': 'text', 'text': text}},
+                'session_id': sid, 'update': update,
             }}))
-        print(json.dumps({'jsonrpc': '2.0', 'id': mid, 'result': {}}))
     elif m == 'session/prompt':
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'agent_thought_chunk', 'content': {'text': 'plan step'}}}}) + '\\n')
         sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'herm-1', 'update': {'sessionUpdate': 'tool_call', 'title': 'read_file'}}}) + '\\n')
@@ -450,7 +464,10 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
         assert len(hist) == 2 and hist[1]["thought"] == "checking files"
         assert hist[1]["toolCalls"][0]["callId"] == "call-1"
         assert (await codex.rename_session(session_id="thr-1", title="New Title"))["title"] == "New Title"
-        assert (await codex.compact_session(session_id="thr-1"))["supported"] is True
+        compact = await codex.compact_session(session_id="thr-1")
+        assert compact["systemEvent"]["kind"] == "compacted"
+        after = await codex.get_history(session_id="thr-1")
+        assert after[:-1] == hist and after[-1]["id"] == compact["messageId"]
         codex_usage = next(e for e in events if e["type"] == "TokenUsage")
         assert codex_usage["scope"] == "cumulative"
         assert codex_usage["totalTokens"] == 690
@@ -477,7 +494,10 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
         assert listed[1]["updatedAt"] == "2026-11-19T16:00:00Z"
         assert await hermes.get_history(session_id="herm-older") == [
             {"role": "user", "text": "Older question"},
-            {"role": "assistant", "text": "Older answer"},
+            {"role": "assistant", "text": "Older answer", "thought": "check",
+             "parts": [{"type": "thought", "text": "check"}, {"type": "tool", "callId": "old-tool"},
+                       {"type": "text", "text": "Older answer"}],
+             "toolCalls": [{"callId": "old-tool", "name": "read_file", "status": "completed", "output": "ok"}]},
         ]
         outside = hermes._session_summaries([{"sessionId": "outside", "title": "Personal chat", "cwd": str(tmp_path.parent)}])
         assert outside[0]["title"] == "Personal chat" and outside[0]["cwd"] == ""
@@ -489,6 +509,10 @@ def test_codex_and_hermes_jsonrpc_adapters(tmp_path):
             h_events.append(ev)
 
         async def h_approve(sid: str, cid: str, cmd: str, risk: str) -> str:
+            history = await hermes.get_history(session_id=sid)
+            assert history[0] == {"role": "user", "text": "hi", "runId": "r-hermes"}
+            assert history[1]["thought"] == "plan step"
+            assert history[1]["toolCalls"][0]["status"] == "running"
             return "allow_session"
 
         await hermes.send_prompt(session_id="herm-1", text="hi", request_id="r-hermes", emit=h_emit, request_approval=h_approve)
@@ -686,6 +710,7 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
         fake_oc = FastAPI()
         renamed_titles: list[str] = []
         deleted_ids: list[str] = []
+        compaction_records: list[dict] = []
 
         @fake_oc.post("/session")
         def _create():
@@ -711,13 +736,20 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
             return {"ok": True}
 
         @fake_oc.post("/session/{sid}/summarize")
-        async def _compact(sid: str):
+        async def _compact(sid: str, request: Request):
+            assert await request.json() == {"providerID": "demo-provider", "modelID": "demo-model"}
+            compaction_records.extend([
+                {"info": {"id": "cmp-user", "role": "user"}, "parts": [{"type": "compaction"}]},
+                {"info": {"id": "cmp-assistant", "role": "assistant", "summary": True},
+                 "parts": [{"type": "text", "text": "Tests fixed and verified."}]},
+            ])
             return {"ok": True}
 
         @fake_oc.get("/session/{sid}/message")
         async def _messages(sid: str):
             return [
-                {"info": {"id": "m-u", "role": "user"}, "parts": [{"type": "text", "text": "fix tests"}]},
+                {"info": {"id": "m-u", "role": "user", "model": {"providerID": "demo-provider", "modelID": "demo-model"}},
+                 "parts": [{"type": "text", "text": "fix tests"}]},
                 {
                     "info": {"id": "m-a", "role": "assistant"},
                     "parts": [
@@ -736,6 +768,7 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
                         {"type": "text", "text": "All fixed."},
                     ],
                 },
+                *compaction_records,
             ]
 
         @fake_oc.get("/event")
@@ -786,11 +819,31 @@ def test_opencode_sse_dedup_user_echo_tools_and_history(tmp_path):
 
         assert (await adapter.rename_session(session_id="oc-rich", title="Renamed OC"))["title"] == "Renamed OC"
         assert renamed_titles == ["Renamed OC"]
-        assert (await adapter.compact_session(session_id="oc-rich"))["supported"] is True
+        compact = await adapter.compact_session(session_id="oc-rich")
+        assert compact["systemEvent"]["detail"]["summary"] == "Tests fixed and verified."
+        after = await adapter.get_history(session_id="oc-rich")
+        assert after[:-1] == hist and after[-1]["id"] == compact["messageId"]
         await adapter.delete_session(session_id="oc-rich")
         assert deleted_ids == ["oc-rich"]
 
     asyncio.run(_run())
+
+
+def test_hermes_gateway_history_preserves_structured_tools_and_order():
+    from agent_node.adapters.hermes import _gateway_history
+
+    history = _gateway_history([
+        {"role": "user", "content": "build it"},
+        {"role": "assistant", "id": "assistant-1", "content": "Checking.", "reasoning_content": "Plan",
+         "tool_calls": [{"id": "shell-1", "function": {"name": "shell", "arguments": {"command": "npm test"}}}],
+         "parts": [{"type": "text", "text": "Checking."}, {"type": "tool", "callId": "shell-1"}]},
+        {"role": "tool", "tool_call_id": "shell-1", "content": "passed"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Done."}]},
+    ])
+    assert [row["text"] for row in history] == ["build it", "Checking.", "Done."]
+    assert [part["type"] for part in history[1]["parts"]] == ["thought", "text", "tool"]
+    assert history[1]["toolCalls"] == [{"callId": "shell-1", "name": "shell", "input": {"command": "npm test"},
+                                       "output": "passed", "status": "completed"}]
 
 
 def test_opencode_v2_protocol_adapter(tmp_path):

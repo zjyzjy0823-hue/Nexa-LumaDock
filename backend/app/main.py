@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import api_keys, auth, client_runtime, clients, core, dashboard, ledger, settings, sync, workspace
+from .api.client_space_reads import router as client_space_reads_router
+from .api.core_space_reads import router as core_space_reads_router
 from .api.agents.routes import router as agents_router, legacy_router as legacy_agents_router, runtime_router as agent_runtime_router
 from .api.automation.routes import router as automation_router, v1_router as v1_automation_router, client_router as automation_client_router, event_router as automation_event_router
 from .api.data.routes import router as data_router, v1_router as v1_data_router
@@ -82,7 +84,7 @@ for router in (
     devices_router, legacy_devices_router, device_runtime_router, agents_router, legacy_agents_router, agent_runtime_router, data_router, automation_router,
     v1_data_router, v1_automation_router, automation_client_router, automation_event_router, settings.router, ledger.router,
     workspace.router, clients.router, client_runtime.router, core.router, sync.router, agent_actions_router,
-    fleet_router, fleet_ws_router, space_router, scheduler_router,
+    fleet_router, fleet_ws_router, space_router, client_space_reads_router, core_space_reads_router, scheduler_router,
 ):
     app.include_router(router)
 

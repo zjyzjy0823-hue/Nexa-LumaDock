@@ -5,6 +5,7 @@ set as in backend-postgres CI. No transport mocks or direct Core service calls.
 """
 
 from contextlib import contextmanager
+from helpers import migration_head
 from datetime import datetime, timezone
 from decimal import Decimal
 import os
@@ -233,7 +234,7 @@ def main(skip_agent_tools=False):
     core_engine = create_engine(CORE_URL)
     core_factory = sessionmaker(bind=core_engine)
     with core_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
     with TemporaryDirectory(prefix="studiolo-http-sync-") as temporary:
         directory = Path(temporary)
         a, b = Replica(directory, "local-a", 100001), Replica(directory, "local-b", 100002)

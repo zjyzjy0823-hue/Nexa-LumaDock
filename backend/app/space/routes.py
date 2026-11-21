@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..runtime_mode import require_core_mode
 from ..security import authenticate_user_jwt, bearer
 from ..workspaces import get_personal_workspace
 from . import service
@@ -20,6 +21,7 @@ from .schemas import (
     SpaceCapabilitiesOut,
     SpaceChangesPageOut,
     SpaceCreateInput,
+    SpaceDeviceGrantOut,
     SpaceEntryCreateInput,
     SpaceEntryDetailOut,
     SpaceEntrySummaryOut,
@@ -405,11 +407,27 @@ def revoke_token(
     return Response(status_code=204)
 
 
+@router.get("/{space_id}/device-grants", response_model=list[SpaceDeviceGrantOut], dependencies=[Depends(require_core_mode)])
+def list_device_grants(space_id: str, actor: service.SpaceActor = Depends(_space_actor), db: Session = Depends(get_db)):
+    return service.list_device_grants(db, actor, space_id)
+
+
+@router.put("/{space_id}/device-grants/{client_id}", status_code=204, dependencies=[Depends(require_core_mode)])
+@router.delete("/{space_id}/device-grants/{client_id}", status_code=204, dependencies=[Depends(require_core_mode)])
+def set_device_grant(
+    space_id: str, client_id: str, request: Request,
+    actor: service.SpaceActor = Depends(_space_actor), db: Session = Depends(get_db),
+):
+    service.set_device_grant(db, actor, space_id, client_id, allow=request.method == "PUT")
+    return Response(status_code=204)
+
+
 @router.get("/{space_id}/audit-logs", response_model=list[SpaceAuditLogOut])
 def list_audit_logs(
     space_id: str,
     limit: int = Query(default=100, ge=1, le=500),
+    action: str | None = Query(default=None, max_length=48),
     actor: service.SpaceActor = Depends(_space_actor),
     db: Session = Depends(get_db),
 ):
-    return service.list_audit_logs(db, actor, space_id, limit=limit)
+    return service.list_audit_logs(db, actor, space_id, limit=limit, action=action)

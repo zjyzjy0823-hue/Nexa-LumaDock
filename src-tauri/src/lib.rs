@@ -308,6 +308,8 @@ pub fn run() {
         android::android_sync_conflicts_list, android::android_sync_conflict_resolve,
         android::android_sync_rejected_list, android::android_sync_rejected_dismiss, android::android_sync_rejected_retry,
         android::android_notifications_enabled, android::android_set_notifications_enabled, android::android_show_fleet_notification,
+        android::android_show_fleet_approval, android::android_listen_fleet_approval,
+        android::android_read_device_space,
     ]);
     #[cfg(not(target_os = "android"))]
     let builder = builder.invoke_handler(tauri::generate_handler![desktop_platform, backend_status, open_external_url]);

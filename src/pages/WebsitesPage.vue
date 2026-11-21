@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { confirmAction } from '../composables/useConfirm'
 import { useCopyFeedback } from '../composables/useCopyFeedback'
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import ExternalLinkButton from '../components/ui/ExternalLink.vue'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import Modal from '../components/ui/Modal.vue'
+import WebsiteFormFields from '../components/websites/WebsiteFormFields.vue'
 import { useAuthStore } from '../stores/auth'
 import { isAndroidLocal } from '../desktop/androidLocal'
 import { useWebsitesStore } from '../stores/websites'
+import { websiteDraft, websiteInput } from '../services/websiteForm'
 import type { Website } from '../types/website'
 
 const props = defineProps<{ mobile?: boolean; search?: string }>()
@@ -37,11 +39,8 @@ const categoryDialog = ref(false)
 const categoryName = ref('')
 const editingCategoryId = ref<string | null>(null)
 const categoryError = ref('')
-const form = reactive({ name: '', url: '', icon: '', description: '', categoryId: '', favorite: false, order: 0 })
-const autoIconValue = ref('')
-const iconPreviewFailed = ref(false)
+const form = ref(websiteDraft())
 const failedIconIds = ref<Record<string, boolean>>({})
-const iconPreviewUrl = computed(() => /^https?:\/\//i.test(form.icon.trim()) ? form.icon.trim() : '')
 
 function hasValidIcon(item: Website): boolean {
   return Boolean(item.icon && /^https?:\/\//i.test(item.icon) && !failedIconIds.value[item.id])
@@ -51,47 +50,6 @@ function markIconFailed(id: string) {
   failedIconIds.value = { ...failedIconIds.value, [id]: true }
 }
 watch(() => store.websites, () => { failedIconIds.value = {} })
-let faviconTimer: ReturnType<typeof setTimeout> | undefined
-let faviconSequence = 0
-function imageAvailable(url: string) {
-  return new Promise<boolean>(resolve => {
-    const image = new Image()
-    const timer = window.setTimeout(() => { image.onload = null; image.onerror = null; resolve(false) }, 3500)
-    image.onload = () => { window.clearTimeout(timer); resolve(true) }
-    image.onerror = () => { window.clearTimeout(timer); resolve(false) }
-    image.src = url
-  })
-}
-async function detectFavicon() {
-  const candidate = form.url.trim()
-  const sequence = ++faviconSequence
-  if (!dialogMode.value || (form.icon.trim() && form.icon !== autoIconValue.value)) return
-  let origin: string
-  try {
-    const parsed = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`)
-    if (!parsed.hostname || (!/^https?:\/\//i.test(candidate) && !parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) return
-    origin = parsed.origin
-  } catch { return }
-  for (const path of ['/favicon.ico', '/apple-touch-icon.png']) {
-    const icon = `${origin}${path}`
-    if (await imageAvailable(icon) && sequence === faviconSequence && form.url.trim() === candidate) {
-      form.icon = icon
-      autoIconValue.value = icon
-      iconPreviewFailed.value = false
-      return
-    }
-  }
-}
-watch(() => form.url, () => {
-  if (faviconTimer) clearTimeout(faviconTimer)
-  faviconSequence++
-  if (autoIconValue.value && form.icon === autoIconValue.value) {
-    form.icon = ''
-    autoIconValue.value = ''
-  }
-  faviconTimer = setTimeout(() => { void detectFavicon() }, 500)
-})
-watch(() => form.icon, () => { iconPreviewFailed.value = false })
 const websiteCategories = computed(() => [{ id: 'all', name: '全部', order: -1 }, ...store.categories])
 function refresh() {
   if (websiteToken.value === null) return
@@ -111,16 +69,14 @@ watch(query, () => { if (searchTimer) clearTimeout(searchTimer); searchTimer = s
 function openDialog(item?: Website) {
   if (websiteToken.value === null) { emit('action', '请先登录。'); return }
   openMenuId.value = null; editingId.value = item?.id ?? null; dialogMode.value = item ? 'edit' : 'add'; formError.value = ''
-  Object.assign(form, { name: item?.name ?? '', url: item?.url ?? '', icon: item?.icon ?? '', description: item?.description ?? '',
-    categoryId: item?.categoryId ?? '', favorite: item?.favorite ?? false, order: item?.order ?? (Math.max(-1, ...store.websites.map(site => site.order)) + 1) })
-  autoIconValue.value = ''
-  iconPreviewFailed.value = false
+  form.value = websiteDraft(item)
+  if (!item) form.value.order = Math.max(-1, ...store.websites.map(site => site.order)) + 1
 }
 defineExpose({ openCreate: (value?: string) => {
   openDialog()
   if (value) {
-    form.url = value
-    form.name = value.replace(/^https?:\/\//i, '').split(/[/:]/)[0] ?? ''
+    form.value.url = value
+    form.value.name = value.replace(/^https?:\/\//i, '').split(/[/:]/)[0] ?? ''
   }
 } })
 function clearOrCreate() {
@@ -130,22 +86,13 @@ function clearOrCreate() {
 }
 function closeDialog() { if (!saving.value) { dialogMode.value = null; formError.value = '' } }
 async function saveWebsite() {
-  const name = form.name.trim(), candidate = form.url.trim()
-  if (!name || !candidate) { formError.value = '请填写网站名称和网址。'; return }
-  let url: string
-  try { if (/^[a-z][a-z0-9+.-]*:/i.test(candidate) && !/^https?:\/\//i.test(candidate)) throw new Error()
-    const parsed = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`)
-    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || /\s/.test(candidate)) throw new Error()
-    url = parsed.toString()
-  } catch { formError.value = '请输入有效的 HTTP 或 HTTPS 网址。'; return }
-  if (websiteToken.value === null) return
+  if (websiteToken.value === null || saving.value) return
   saving.value = true; formError.value = ''
   try {
-    const data = { name, url, icon: form.icon.trim() || null, description: form.description.trim() || null,
-      categoryId: form.categoryId || null, favorite: form.favorite, order: form.order }
+    const data = websiteInput(form.value)
     if (editingId.value) await store.update(websiteToken.value, editingId.value, data)
     else await store.create(websiteToken.value, data)
-    emit('action', editingId.value ? `已更新「${name}」。` : `已添加「${name}」。`)
+    emit('action', editingId.value ? `已更新「${data.name}」。` : `已添加「${data.name}」。`)
     dialogMode.value = null; selectedCategory.value = 'all'; query.value = ''; refresh()
   } catch (error) { formError.value = error instanceof Error ? error.message : '保存失败' }
   finally { saving.value = false }
@@ -222,7 +169,7 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown); document.addEventListener('keydown', onDocumentKeydown)
   refresh()
 })
-onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointerDown); document.removeEventListener('keydown', onDocumentKeydown); if (searchTimer) clearTimeout(searchTimer); if (faviconTimer) clearTimeout(faviconTimer); if (menuCloseTimer) clearTimeout(menuCloseTimer); faviconSequence++ })
+onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointerDown); document.removeEventListener('keydown', onDocumentKeydown); if (searchTimer) clearTimeout(searchTimer); if (menuCloseTimer) clearTimeout(menuCloseTimer) })
 </script>
 
 <template>
@@ -278,20 +225,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
 
     <Modal :open="!!dialogMode" :title="dialogMode === 'add' ? '添加网站' : '编辑网站'" @close="closeDialog">
       <form id="website-form" @submit.prevent="saveWebsite">
-        <div class="field"><label for="site-name">网站名称</label><input id="site-name" v-model="form.name" class="input" maxlength="120" placeholder="例如：我的工作台" required data-initial-focus /></div>
-        <div class="field"><label for="site-url">网址</label><input id="site-url" v-model="form.url" class="input" type="text" inputmode="url" placeholder="https://example.com" required /></div>
-        <div class="website-icon-field">
-          <div class="field"><label for="site-icon">图标（自动获取，也可手动修改）</label><input id="site-icon" v-model="form.icon" class="input" maxlength="500" placeholder="输入网址后自动获取 favicon" /></div>
-          <span class="website-icon-preview" aria-label="图标预览">
-            <img v-if="iconPreviewUrl && !iconPreviewFailed" :src="iconPreviewUrl" alt="" @error="iconPreviewFailed = true" />
-            <span v-else>{{ form.name.trim().slice(0, 1).toUpperCase() || '✦' }}</span>
-          </span>
-        </div>
-        <div class="field"><label for="site-desc">简介</label><textarea id="site-desc" v-model="form.description" class="input" maxlength="500" placeholder="用一句话描述这个网站" /></div>
-        <div class="field-grid" style="align-items:end">
-          <div class="field"><label for="site-cat">分类</label><select id="site-cat" v-model="form.categoryId" class="input"><option value="">未分类</option><option v-for="category in store.categories" :key="category.id" :value="category.id">{{ category.name }}</option></select></div>
-          <label class="dlg-check" style="height:36px"><input v-model="form.favorite" type="checkbox" /> 设为收藏</label>
-        </div>
+        <WebsiteFormFields v-if="dialogMode" v-model="form" :categories="store.categories" />
         <p v-if="formError" class="dlg-error" role="alert">{{ formError }}</p>
       </form>
       <template #footer>
@@ -331,10 +265,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', onDocumentPointe
 .opus-site-item .top, .opus-site-item .mrow { padding-right: 36px; }
 .website-menu { position: absolute; z-index: 10; top: 100%; right: 0; min-width: 132px; padding: 4px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--solid) 97%, transparent); backdrop-filter: var(--material-filter); -webkit-backdrop-filter: var(--material-filter); box-shadow: var(--shadow-2); }
 .website-menu .row { width: 100%; }
-.website-icon-field { display: grid; grid-template-columns: 1fr 40px; align-items: end; gap: 10px; }
 .fav--img { padding: 5px; background: #ffffff; border: 1px solid var(--line); overflow: hidden; }
-.website-icon-preview { display: grid; width: 40px; height: 36px; place-items: center; overflow: hidden; color: var(--accent); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: #ffffff; font-size: 16px; font-weight: 700; }
-.website-icon-preview img { width: 22px; height: 22px; object-fit: contain; }
 .website-category-form { display: flex; gap: 8px; }
 .website-category-form .input { flex: 1; }
 @media (hover: none) { .opus-site-menu { opacity: 1; } }

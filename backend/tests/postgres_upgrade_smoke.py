@@ -1,6 +1,7 @@
 """Verify 0008 user data survives the 0009 PostgreSQL migration."""
 
 import os
+from helpers import migration_head
 from pathlib import Path
 import subprocess
 import sys
@@ -136,7 +137,7 @@ try:
     engine = create_engine(upgrade_url)
     try:
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
             assert connection.execute(text("SELECT mutation_id, base_revision, status, depends_on_mutation_id "
                                            "FROM local_mutation_queue")).one() == ("old-mutation", 0, "pending", None)
             assert connection.scalar(text("SELECT payload_json FROM local_mutation_queue")) == outbox_payload

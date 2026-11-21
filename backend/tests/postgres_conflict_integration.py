@@ -6,6 +6,7 @@ never invokes /sync/run. Set STUDIOLO_BACKGROUND_SIDECAR to repeat with the nati
 packaged backend. Disconnecting B makes same-base edits and stale races precise.
 """
 
+from helpers import migration_head
 from contextlib import closing
 import json
 import os
@@ -207,7 +208,7 @@ def main():
     assert core_url.startswith("postgresql+psycopg://"), "Conflict integration requires isolated PostgreSQL"
     engine = create_engine(core_url)
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
     core_secret, password = secrets.token_hex(32), secrets.token_urlsafe(24)
     with TemporaryDirectory(prefix="studiolo-conflict-sync-") as temporary:
         directory = Path(temporary)

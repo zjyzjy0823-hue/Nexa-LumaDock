@@ -4,6 +4,7 @@ Repeat with STUDIOLO_BACKGROUND_SIDECAR for the final packaged Windows backend.
 No manual sync calls; process logs and actual PostgreSQL sync payloads are checked.
 """
 from contextlib import closing
+from helpers import migration_head
 import json
 import os
 from pathlib import Path
@@ -56,7 +57,7 @@ def main():
     assert database_url.startswith("postgresql+psycopg://")
     engine = create_engine(database_url)
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
     password, jwt = secrets.token_urlsafe(24), secrets.token_hex(32)
     credentials = [password, jwt]
     with TemporaryDirectory(prefix="studiolo-personal-state-") as temporary:

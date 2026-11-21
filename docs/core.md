@@ -1,4 +1,4 @@
-# Studiolo Core（当前 0.7.0；本文原始基线 v0.5.5）
+# Studiolo Core
 
 Studiolo 使用同一套 `backend/app` 业务代码、FastAPI 路由、模型和 Alembic 迁移。两个宿主独立运行：
 
@@ -16,7 +16,7 @@ Desktop Local Mode 与 Core Mode 是两个独立后端。Desktop 通过本地 Ba
 ```powershell
 Copy-Item .env.core.example .env.core
 # 编辑 .env.core 中的密码和 JWT_SECRET
-docker compose -f docker-compose.core.yml up --build -d
+docker compose --env-file .env.core -f docker-compose.core.yml up --build -d
 ```
 
 若数据库密码包含 URL 特殊字符，请在 `DATABASE_URL` 中进行 URL 编码。Compose 会先等待 PostgreSQL 的 `pg_isready`，Core 启动时执行同一套 Alembic `upgrade head`。两项服务各有 healthcheck。
@@ -26,7 +26,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 docker compose -f docker-compose.core.yml exec postgres psql -U studiolo -d studiolo -Atc 'SELECT version_num FROM alembic_version'
 ```
 
-预期健康接口返回 `status: ok`、产品版本 `0.7.0`，迁移版本为 `0020_fleet_nodes_and_blobs`。PostgreSQL 使用 `studiolo-postgres-data` 命名卷；普通 `docker compose -f docker-compose.core.yml down` 后数据仍保留。调整数据库用户名或库名时，相应修改上面的检查命令。Core 的多实体同步协议见 [sync.md](sync.md)。
+预期健康接口返回 `status: ok` 和当前应用版本。部署时会迁移到仓库的 Alembic head。PostgreSQL 数据保存在 `studiolo-postgres-data` 命名卷。Compose 默认将 Core 的宿主机端口绑定到 `127.0.0.1:8000`，PostgreSQL 和 Core 在主机重启后会自动启动。对外部署时通过 HTTPS 反向代理转发。需要绑定其他宿主机地址时，可通过 `.env.core` 中的 `STUDIOLO_CORE_BIND_ADDRESS` 指定。Core 的多实体同步协议见 [sync.md](sync.md)。
 
 ## Workspace 与 Client 身份
 
@@ -45,6 +45,12 @@ Desktop Local Backend 可用本地用户 JWT 调用 `POST /api/v1/core/connect`�
 本地连接元数据使用严格验证的 `schemaVersion: 1`，不包含凭证。旧版无版本字段的有效连接元数据会在读取时升级。凭证通过 `CredentialStore` 接口保存；当前实现为原子写入的 `FileCredentialStore`，未来可替换为系统 Credential Manager 或 Keychain。游标、outbox 和同步诊断保存在 Local SQLite 中，不写入连接元数据。
 
 公网 Core 必须通过 HTTPS 暴露。Local Backend 的 Core 同步连接也允许在可信 localhost/LAN 开发环境使用 HTTP。Desktop 由 Local Backend 执行同步，连接 Core 后，节点、Agent 对话和对话附件直接访问已连接的 Core。首次使用这些功能时，需要登录该 Core 工作区，用户 JWT 仅保留在当前应用会话中。同步 Client 凭证保存在受 AppData 用户权限保护的独立文件。`/connection/test` 对远端 401 统一报告 `unauthorized`。
+
+## 已配对设备只读共享空间
+
+在 Core 设置 `STUDIOLO_SPACE_DEVICE_READS=true` 后重新部署。默认允许当前工作区已配对的设备读取所有者的 standard 空间。要逐台授权，请同时设置 `STUDIOLO_SPACE_DEVICE_DEFAULT_GRANT=false`。所有者可在共享空间的「管理」页授予或撤销设备读取权限。显式撤销会覆盖默认授权。设备读取事件可在「审计」页按「设备读取」筛选。
+
+桌面客户端通过 Local Sidecar 代理读取。已配对的 Android 客户端在没有 Core 用户会话时通过原生命令读取，配对凭据保留在 Keystore。protected 和 e2ee 空间继续使用原来的登录与解锁流程。
 
 Android 首次启动时填写 Core 地址，例如 `https://studiolo.example`，连接成功后使用 Core 账号登录。Android 和 Desktop 的原生 Fleet 直连使用 HTTPS，开发测试可以用 HTTP 回环地址。Core Web 和 Android 直连时使用服务端数据，并隐藏 Desktop Local 专用的同步操作。
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from typing import Any
 
 from ..config import ensure_allowed_path
@@ -14,6 +15,23 @@ from ..worktree import create_session_worktree
 
 EventEmitter = Callable[[dict[str, Any]], Awaitable[None]]
 ApprovalCallback = Callable[[str, str, str, str], Awaitable[str]]
+
+
+def compaction_record(event_id: str, *, at: int | None = None, summary: str = "", retained_turns: int | None = None) -> dict[str, Any]:
+    detail: dict[str, Any] = {}
+    if summary:
+        detail["summary"] = summary
+    if type(retained_turns) is int and retained_turns >= 0:
+        detail["retainedTurns"] = retained_turns
+    at = int(time.time() * 1000) if at is None else at
+    return {
+        "id": f"sys-cmp-{event_id}", "role": "system", "text": "", "createdAt": at,
+        "systemEvents": [{"kind": "compacted", "at": at, "detail": detail}],
+    }
+
+
+def compaction_frame(row: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "SessionCompacted", "supported": True, "messageId": row["id"], "systemEvent": row["systemEvents"][0]}
 
 
 def safe_token_int(value: Any) -> int:

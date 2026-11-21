@@ -16,11 +16,12 @@ from app.database import Base, SessionLocal, engine
 from app.main import app, APP_VERSION
 from app import models  # noqa: F401
 from app.sync.service import apply_mutation
+from helpers import migration_head
 
 
 assert engine.dialect.name == "postgresql", "Core smoke requires PostgreSQL"
 with engine.connect() as connection:
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020_fleet_nodes_and_blobs"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == migration_head()
     inspector = inspect(connection)
     assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     assert {"workspaces", "clients"}.issubset(set(inspector.get_table_names()))

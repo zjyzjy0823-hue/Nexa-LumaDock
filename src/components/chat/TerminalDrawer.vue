@@ -10,6 +10,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  attach: [text: string]
 }>()
 
 const fleet = useFleetStore()
@@ -17,6 +18,8 @@ const cmdInput = ref('')
 const cmdHistory = ref<string[]>([])
 const historyCursor = ref(-1)
 const outEl = ref<HTMLElement | null>(null)
+const selectedOutput = ref('')
+const manualPort = ref<number>()
 
 const term = computed(() => (props.sessionKey ? fleet.terminalBySession[props.sessionKey] ?? null : null))
 
@@ -25,6 +28,35 @@ const renderedSpans = computed(() => {
   if (!txt) return []
   return hasAnsiSequences(txt) ? parseAnsiText(txt) : [{ text: txt }]
 })
+const outputText = computed(() => renderedSpans.value.map(span => span.text).join(''))
+const terminalKeys = [
+  { label: 'Esc', value: '\x1b' }, { label: '↑', value: '\x1b[A' }, { label: '↓', value: '\x1b[B' },
+  { label: '←', value: '\x1b[D' }, { label: '→', value: '\x1b[C' }, { label: '|', value: '|' }, { label: '~', value: '~' },
+]
+const previewPorts = computed(() => {
+  const ports = new Map<number, boolean>()
+  for (const match of outputText.value.matchAll(/\b(https?):\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{1,5})\b/g)) {
+    const port = Number(match[2])
+    if (port >= 1024 && port <= 65535) ports.set(port, match[1] === 'https')
+  }
+  for (const port of Object.keys(fleet.terminalPreviews[props.sessionKey] ?? {})) {
+    if (!ports.has(Number(port))) ports.set(Number(port), false)
+  }
+  return ports
+})
+watch(() => props.sessionKey, () => { selectedOutput.value = ''; manualPort.value = undefined })
+
+function rememberOutputSelection() {
+  const selection = window.getSelection()
+  selectedOutput.value = selection?.anchorNode && selection.focusNode &&
+    outEl.value?.contains(selection.anchorNode) && outEl.value.contains(selection.focusNode) ? selection.toString() : ''
+}
+
+function attachOutput() {
+  const text = selectedOutput.value || outEl.value?.innerText || ''
+  if (!outputText.value || !text.trim()) return
+  emit('attach', text.slice(-16_000))
+}
 
 watch(
   () => [props.sessionKey, term.value?.terminalId] as const,
@@ -147,7 +179,7 @@ function restartTerminal() {
       <code>{{ term.cwd }}</code>
     </div>
 
-    <pre ref="outEl" class="term-output" role="log" aria-live="polite"><template v-if="renderedSpans.length"><span
+    <pre ref="outEl" class="term-output" role="log" aria-live="polite" tabindex="0" @pointerup="rememberOutputSelection" @keyup="rememberOutputSelection"><template v-if="renderedSpans.length"><span
       v-for="(sp, idx) in renderedSpans"
       :key="idx"
       :style="{
@@ -158,6 +190,30 @@ function restartTerminal() {
       }"
     >{{ sp.text }}</span></template><span v-else class="faint">等待终端会话就绪… 输入命令按 Enter 执行，支持 ↑/↓ 历史记录与 Ctrl+C 中断。</span></pre>
 
+    <div class="term-shortcuts">
+      <template v-if="term?.pty && !term.closed">
+        <button v-for="key in terminalKeys" :key="key.label" type="button" class="btn btn-ghost btn-sm"
+          @click="fleet.sendTerminalInput(sessionKey, key.value)">{{ key.label }}</button>
+      </template>
+      <button type="button" class="btn btn-ghost btn-sm" :disabled="!outputText" @click="attachOutput">
+        {{ selectedOutput ? '附上所选输出' : '附上可见输出' }}
+      </button>
+    </div>
+    <div v-if="term && !term.closed" class="term-previews" aria-label="端口预览">
+      <form class="term-port-form" @submit.prevent="manualPort && fleet.requestTerminalPreview(sessionKey, manualPort, previewPorts.get(manualPort))">
+        <input v-model.number="manualPort" class="input" type="number" min="1024" max="65535" placeholder="端口" aria-label="预览端口号" />
+        <button type="submit" class="btn btn-ghost btn-sm" :disabled="!manualPort || manualPort < 1024 || manualPort > 65535">转发端口</button>
+      </form>
+      <div v-for="[port, tls] in previewPorts" :key="port" class="term-port-row">
+        <button type="button" class="btn btn-ghost btn-sm" :disabled="fleet.terminalPreviews[sessionKey]?.[port]?.pending"
+          @click="fleet.requestTerminalPreview(sessionKey, port, tls)">
+          {{ fleet.terminalPreviews[sessionKey]?.[port]?.pending ? '正在转发…' : `预览 ${port}` }}
+        </button>
+        <a v-if="fleet.terminalPreviews[sessionKey]?.[port]?.url" class="btn btn-primary btn-sm"
+          :href="fleet.terminalPreviews[sessionKey][port].url" target="_blank" rel="noopener noreferrer">打开预览 {{ port }}</a>
+        <span v-else-if="fleet.terminalPreviews[sessionKey]?.[port]?.error" class="faint" role="status">{{ fleet.terminalPreviews[sessionKey][port].error }}</span>
+      </div>
+    </div>
     <form class="term-input-bar" @submit.prevent="sendLine()">
       <span class="term-prompt">$</span>
       <input
@@ -175,6 +231,11 @@ function restartTerminal() {
 </template>
 
 <style scoped>
+.term-shortcuts { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px 8px; border-top: 1px solid var(--line); }
+.term-previews { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px 8px; align-items: center; }
+.term-port-row, .term-port-form { display: flex; gap: 4px; align-items: center; }
+.term-port-form .input { width: 84px; min-height: 29px; }
+.term-port-row a { text-decoration: none; }
 .term-drawer {
   display: flex;
   flex-direction: column;

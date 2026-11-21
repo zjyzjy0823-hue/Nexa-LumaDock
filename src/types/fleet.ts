@@ -2,7 +2,7 @@
  * Studiolo v0.7.0 多设备 Agent 协同调度（Fleet）与 E2EE 分块文件总线类型定义。
  */
 
-export type NodePlatform = 'macos' | 'windows' | 'linux' | 'android' | 'ios'
+export type NodePlatform = 'macos' | 'windows' | 'linux' | 'android' | 'ios' | 'unknown'
 
 export type AdapterProvider =
   | 'codex'
@@ -197,6 +197,8 @@ export interface AdapterInfo {
   version: string
   status: 'ready' | 'unavailable' | 'error'
   capabilities: string[]
+  supports?: Record<'chat' | 'history' | 'models' | 'approval' | 'forms' | 'worktree' | 'rollback' |
+    'readOnly' | 'fork' | 'steer' | 'usage' | 'thinking', boolean>
 }
 
 export interface AgentNode {
@@ -268,6 +270,8 @@ export interface ChatSession {
   title: string
   cwd: string
   worktreePath?: string | null
+  projectKey?: string
+  projectName?: string
   branch?: string
   model?: string
   updatedAt?: string | number
@@ -420,6 +424,12 @@ export interface PermissionRequestCard {
   createdAt: number
 }
 
+export interface ChatSystemEvent {
+  kind: 'compacted' | 'handoff' | 'reconnected'
+  at: number
+  detail: { summary?: string; retainedTurns?: number; sourceSessionKey?: string }
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -430,6 +440,8 @@ export interface ChatMessage {
   text: string
   thought?: string
   streaming?: boolean
+  interrupted?: boolean
+  liveProgress?: { type: 'thought' | 'text' } | { type: 'tool'; callId: string }
   error?: string
   toolCalls?: ToolCallBadge[]
   parts?: MessagePart[]
@@ -444,6 +456,7 @@ export interface ChatMessage {
   durationMs?: number
   turnTokens?: number
   modelLabel?: string
+  systemEvents?: ChatSystemEvent[]
   createdAt: number
 }
 
@@ -484,6 +497,11 @@ export interface FleetWsEvent {
   checkpointId?: string
   restoredFiles?: string[]
   supported?: boolean
+  systemEvent?: ChatSystemEvent
+  handoffSummary?: string
+  handoffSource?: string
+  port?: number
+  previewUrl?: string
   models?: FleetModel[]
   agents?: AgentModeOption[]
   servers?: McpServerInfo[]
@@ -491,8 +509,14 @@ export interface FleetWsEvent {
   skills?: WorkspaceSkill[]
   lines?: FileBlameLine[]
   seq?: number
+  sequence?: number
+  streamId?: string
   lastSeq?: number
   incremental?: boolean
+  snapshotRequired?: boolean
+  historyCursor?: string | null
+  beforeCursor?: string
+  cursorExpired?: boolean
   pty?: boolean
   formId?: string
   fields?: FormFieldSchema[]
@@ -509,6 +533,7 @@ export interface FleetWsEvent {
   mergedFiles?: string[]
   active?: boolean
   events?: FleetWsEvent[]
+  pendingApprovals?: FleetWsEvent[]
   relDir?: string
   entries?: WorkspaceTreeEntry[]
   patterns?: string[]
@@ -518,10 +543,15 @@ export interface FleetWsEvent {
   data?: string
   exitCode?: number
   nodes?: AgentNode[]
-  sessions?: Array<Pick<ChatSession, 'sessionId' | 'provider' | 'worktreePath' | 'branch' | 'model' | 'updatedAt'> & { title?: string; cwd?: string }>
+  sessions?: Array<Pick<ChatSession, 'sessionId' | 'provider' | 'worktreePath' | 'branch' | 'model' | 'updatedAt' | 'projectKey' | 'projectName'> & { title?: string; cwd?: string }>
   messages?: Array<{
+    id?: string
     role: string
     text: string
+    runId?: string
+    requestId?: string
+    createdAt?: number
+    systemEvents?: ChatSystemEvent[]
     thought?: string
     toolCalls?: ToolCallBadge[]
     media?: MessageMediaItem[]
@@ -529,6 +559,8 @@ export interface FleetWsEvent {
   }>
   cwd?: string
   worktreePath?: string | null
+  projectKey?: string
+  projectName?: string
   messageId?: string
   scope?: 'turn' | 'cumulative'
   inputTokens?: number

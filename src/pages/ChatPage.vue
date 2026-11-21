@@ -11,7 +11,7 @@ import WorkspaceTreeDrawer from '../components/chat/WorkspaceTreeDrawer.vue'
 import { getPlatformIcon, getProviderMeta } from '../components/chat/providerMeta'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import { isAndroidLocal } from '../desktop/androidLocal'
-import { searchSessionsAndMessages } from '../services/chatHelpers'
+import { searchSessionsAndMessages, sessionInboxProject } from '../services/chatHelpers'
 import {
   readStoredWidth,
   saveStoredWidth,
@@ -21,6 +21,8 @@ import {
 import { sessionKey, useFleetStore } from '../stores/fleet'
 import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import { chatBubbleStyleLabel, chatBubbleStyleOptions, useWorkbenchTheme } from '../composables/useWorkbenchTheme'
+import { useSessionOrganization, type SessionOrganization } from '../composables/useSessionOrganization'
+import { useInboxProjects } from '../composables/useInboxProjects'
 import type { AdapterProvider, AgentNode, ArtifactRef, ChatSession } from '../types/fleet'
 
 const props = defineProps<{ mobile?: boolean }>()
@@ -32,6 +34,8 @@ const emit = defineEmits<{
 }>()
 
 const fleet = useFleetStore()
+const organization = useSessionOrganization(computed(() => fleet.deviceSessionScope))
+const inboxProjects = useInboxProjects(computed(() => fleet.deviceSessionScope))
 const android = isAndroidLocal()
 const { bubbleStyle, setBubbleStyle } = useWorkbenchTheme()
 
@@ -140,6 +144,8 @@ const newSessionNodeId = ref('')
 const newSessionProvider = ref<AdapterProvider>('codex')
 const newSessionCwd = ref('')
 const newSessionWorktree = ref(false)
+type MobileCreateScope = { provider: AdapterProvider } | { projectKey: string; name: string }
+const mobileCreateScope = ref<MobileCreateScope>()
 
 const showHandoff = ref(false)
 const handoffTargetNode = ref('')
@@ -151,12 +157,26 @@ const showFanout = ref(false)
 const fanoutTargets = ref<Array<{ nodeId: string; provider: AdapterProvider }>>([])
 const fanoutPrompt = ref('')
 const mobileView = ref<'inbox' | 'thread'>('inbox')
+const mobileInboxNow = ref(Date.now())
 const mobileNodeFilter = ref<string>('all')
-const mobileStatusFilter = ref<'all' | 'running' | 'diff'>('all')
+const mobileStatusLabels = {
+  all: '全部状态', running: '运行中', approval: '待审批', input: '待回复', complete: '已完成',
+  waiting: '待发送', todo: '有待办', snoozed: '已暂缓', settled: '已整理', diff: '有代码改动',
+}
+const mobileStatusFilter = ref<keyof typeof mobileStatusLabels>('all')
 const mobileInboxQuery = ref('')
 const mobileSearchOpen = ref(false)
 const mobileSearchInputRef = ref<HTMLInputElement | null>(null)
 const mobileFilterMenuOpen = ref(false)
+const mobileMoreMenuOpen = ref(false)
+const showAddProject = ref(false)
+const newProjectNodeId = ref('')
+const newProjectDirectory = ref('')
+const newProjectError = ref('')
+const mobileCreateMenuOpen = ref(false)
+const mobileCreateButton = ref<HTMLButtonElement>()
+const mobileCreateMenu = ref<HTMLElement>()
+const mobileApprovalsExpanded = ref(false)
 const mobileFilterSub = ref<'node' | 'status' | null>(null)
 const mobileSessionSheetRef = ref<HTMLDialogElement | null>(null)
 const mobileRenameDraft = ref('')
@@ -172,13 +192,14 @@ const mobileActiveFilterLabel = computed(() => {
     const n = fleet.nodes.find(item => item.id === mobileNodeFilter.value)
     if (n) parts.push(n.name)
   }
-  if (mobileStatusFilter.value === 'running') parts.push('运行中')
-  else if (mobileStatusFilter.value === 'diff') parts.push('有改动')
+  if (mobileStatusFilter.value !== 'all') parts.push(mobileStatusLabels[mobileStatusFilter.value])
   return parts.join(' · ')
 })
 
 function toggleMobileSearch() {
   mobileFilterMenuOpen.value = false
+  mobileMoreMenuOpen.value = false
+  mobileCreateMenuOpen.value = false
   mobileSearchOpen.value = !mobileSearchOpen.value
   if (!mobileSearchOpen.value) {
     mobileInboxQuery.value = ''
@@ -188,6 +209,8 @@ function toggleMobileSearch() {
 }
 
 function toggleMobileFilterMenu() {
+  mobileMoreMenuOpen.value = false
+  mobileCreateMenuOpen.value = false
   mobileFilterMenuOpen.value = !mobileFilterMenuOpen.value
   if (!mobileFilterMenuOpen.value) {
     mobileFilterSub.value = null
@@ -210,8 +233,14 @@ function resetMobileFilters() {
 
 watch(
   [() => props.mobile, mobileView],
-  ([isMob, view]) => {
+  ([isMob, view], _, onCleanup) => {
     emit('mobileFullscreen', Boolean(isMob && view === 'thread'))
+    fleet.setSessionViewVisible(!isMob || view === 'thread')
+    if (isMob && view === 'inbox') {
+      mobileInboxNow.value = Date.now()
+      const clock = setInterval(() => { mobileInboxNow.value = Date.now() }, 15_000)
+      onCleanup(() => clearInterval(clock))
+    }
   },
   { immediate: true },
 )
@@ -249,6 +278,7 @@ watch(
 
 onUnmounted(() => {
   sharedChatOccupiedWidth.value = 0
+  fleet.setSessionViewVisible(true)
   emit('mobileFullscreen', false)
   if (typeof window !== 'undefined') window.removeEventListener('keydown', handleGlobalKeydown)
   if (typeof document !== 'undefined') {
@@ -401,7 +431,7 @@ const sortedNodes = computed(() => {
     if (n.status === 'online') return 1
     return 2
   }
-  return [...fleet.nodes].sort((a, b) => rank(a) - rank(b))
+  return [...fleet.chatNodes].sort((a, b) => rank(a) - rank(b))
 })
 
 const selectedNodeAdapters = computed(() => {
@@ -420,10 +450,132 @@ function readyAt(nodeId: string) {
   return node?.adapters.filter(a => a.status === 'ready') ?? []
 }
 
+const mobileReadyProviders = computed(() =>
+  [...new Set(sortedNodes.value.flatMap(node => readyAt(node.id).map(adapter => adapter.provider)))],
+)
+const projectNodes = computed(() => sortedNodes.value.filter(node => node.allowedRoots.length))
+const addProjectNode = computed(() => projectNodes.value.find(node => node.id === newProjectNodeId.value))
+
+function changeAddProjectNode() {
+  const roots = addProjectNode.value?.allowedRoots ?? []
+  newProjectDirectory.value = roots.length === 1 ? roots[0] : ''
+  newProjectError.value = ''
+}
+
+function openAddProject() {
+  mobileMoreMenuOpen.value = false
+  const node = projectNodes.value.find(item => item.id === mobileNodeFilter.value)
+    ?? projectNodes.value.find(item => item.id === fleet.selectedNode?.id)
+    ?? projectNodes.value[0]
+  newProjectNodeId.value = node?.id ?? ''
+  changeAddProjectNode()
+  showAddProject.value = true
+  void nextTick(() => document.getElementById('add-project-node')?.focus())
+}
+
+function projectDirectoryKey(nodeId: string, cwd: string) {
+  const path = cwd.replace(/\\/g, '/').replace(/\/+$/, '') || '/'
+  return JSON.stringify([nodeId, /^[a-z]:|^\/\//i.test(path) ? path.toLowerCase() : path])
+}
+
+function sessionProjectDirectory(session: ChatSession) {
+  return (session.worktreePath || session.cwd || '').split(/[/\\]\.studiolo-worktrees(?:[/\\]|$)/i, 1)[0]
+}
+
+const savedInboxProjects = computed(() => {
+  const existing = new Map(fleet.allSessions.filter(session => session.provider !== 'hermes').map(session => [
+    projectDirectoryKey(session.nodeId, sessionProjectDirectory(session)), sessionInboxProject(session),
+  ]))
+  return inboxProjects.directories.value.map(entry => ({
+    ...entry, project: existing.get(projectDirectoryKey(entry.nodeId, entry.cwd)) ?? sessionInboxProject(entry),
+  }))
+})
+
+function saveInboxProject() {
+  const node = addProjectNode.value
+  const cwd = newProjectDirectory.value.trim()
+  if (!node || !cwd || cwd.split(/[/\\]/).some(part => part === '..' || part === '.')
+    || !node.allowedRoots.some(root => sessionBelongsToRoot({ cwd }, root))) {
+    newProjectError.value = '请选择节点授权目录，或输入该目录下的完整路径。'
+    return
+  }
+  const directoryKey = projectDirectoryKey(node.id, cwd)
+  if (savedInboxProjects.value.some(entry => projectDirectoryKey(entry.nodeId, entry.cwd) === directoryKey)) {
+    newProjectError.value = '此项目目录已添加。'
+    return
+  }
+  const persisted = inboxProjects.save({ nodeId: node.id, cwd })
+  showAddProject.value = false
+  emit('action', persisted ? '已添加项目' : '已添加项目，当前设备存储不可用')
+}
+
+const createProjectDirectories = computed(() => {
+  const scope = mobileCreateScope.value
+  if (!scope || !('projectKey' in scope)) return
+  const directories = new Map<string, { cwd: string; activity: number }>()
+  for (const session of fleet.allSessions) {
+    if (session.provider === 'hermes' || sessionInboxProject(session).key !== scope.projectKey) continue
+    const node = fleet.nodes.find(item => item.id === session.nodeId)
+    const cwd = sessionProjectDirectory(session)
+    if (!cwd || !node || resolveAllowedSessionCwd(node, cwd) !== cwd) continue
+    const activity = activityAt(session, sessionKey(session.nodeId, session.provider, session.sessionId))
+    if (!directories.has(node.id) || activity > directories.get(node.id)!.activity) {
+      directories.set(node.id, { cwd, activity })
+    }
+  }
+  for (const entry of savedInboxProjects.value) {
+    if (entry.project.key !== scope.projectKey) continue
+    const node = fleet.nodes.find(item => item.id === entry.nodeId)
+    if (!node?.allowedRoots.some(root => sessionBelongsToRoot(entry, root))) continue
+    directories.set(entry.nodeId, { cwd: entry.cwd, activity: 0 })
+  }
+  return new Map([...directories].map(([nodeId, entry]) => [nodeId, entry.cwd]))
+})
+
+function adaptersForCreate(nodeId: string, scope = mobileCreateScope.value) {
+  const adapters = readyAt(nodeId)
+  if (!scope) return adapters
+  if ('provider' in scope) return adapters.filter(adapter => adapter.provider === scope.provider)
+  return adapters.filter(adapter => adapter.provider !== 'hermes')
+}
+
+const createNodes = computed(() => {
+  const scope = mobileCreateScope.value
+  if (!scope) return sortedNodes.value
+  return sortedNodes.value.filter(node =>
+    (!('projectKey' in scope) || createProjectDirectories.value?.has(node.id))
+    && adaptersForCreate(node.id).length,
+  )
+})
+const createAdapters = computed(() => adaptersForCreate(newSessionNodeId.value))
+
+function openMobileCreate(scope: MobileCreateScope) {
+  mobileCreateMenuOpen.value = false
+  mobileCreateScope.value = scope
+  const nodes = createNodes.value
+  const node = nodes.find(item => item.id === mobileNodeFilter.value)
+    ?? nodes.find(item => item.id === fleet.selectedNode?.id)
+    ?? nodes[0]
+  const provider = 'provider' in scope ? scope.provider : undefined
+  openCreateSession(node, node && createProjectDirectories.value?.get(node.id), provider, false, scope)
+}
+
+function closeMobileCreateMenu(restoreFocus = false) {
+  mobileCreateMenuOpen.value = false
+  if (restoreFocus) mobileCreateButton.value?.focus()
+}
+
+function toggleMobileCreateMenu() {
+  closeMobileFilterMenu()
+  mobileMoreMenuOpen.value = false
+  mobileCreateMenuOpen.value = !mobileCreateMenuOpen.value
+  if (mobileCreateMenuOpen.value) void nextTick(() => mobileCreateMenu.value?.querySelector('button')?.focus())
+}
+
 function changeCreateNode() {
-  const node = fleet.nodes.find(n => n.id === newSessionNodeId.value)
-  newSessionCwd.value = node?.allowedRoots[0] ?? ''
-  const adapters = readyAt(newSessionNodeId.value)
+  const node = createNodes.value.find(n => n.id === newSessionNodeId.value)
+  newSessionCwd.value = createProjectDirectories.value?.get(newSessionNodeId.value) ?? node?.allowedRoots[0] ?? ''
+  const adapters = createAdapters.value
   if (!adapters.some(adapter => adapter.provider === newSessionProvider.value)) {
     newSessionProvider.value = adapters[0]?.provider ?? 'codex'
   }
@@ -439,7 +591,7 @@ function normPath(pathStr: string): string {
   return path.replace(/\/+$/, '') || (path.startsWith('/') ? '/' : '')
 }
 
-function sessionBelongsToRoot(sess: ChatSession, root: string): boolean {
+function sessionBelongsToRoot(sess: Pick<ChatSession, 'cwd'>, root: string): boolean {
   const sc = normPath(sess.cwd || '')
   const rc = normPath(root)
   if (!sc || !rc) return false
@@ -485,6 +637,25 @@ function matchesTreeFilter(node: AgentNode): boolean {
 }
 
 const visibleNodes = computed(() => sortedNodes.value.filter(matchesTreeFilter))
+const showCachedCoreLogin = ref(false)
+watch(() => fleet.coreSignInUrl, url => { if (!url) showCachedCoreLogin.value = false })
+
+const sessionStatus = computed(() => {
+  const approvals = new Set(fleet.pendingApprovalsList.map(item => sessionKey(item.nodeId, item.provider, item.sessionId)))
+  const inputs = new Set(Object.values(fleet.pendingFormsById).filter(item => item.status === 'pending')
+    .map(item => sessionKey(item.nodeId, item.provider, item.sessionId)))
+  const waiting = new Set(fleet.outbox.map(item => item.sessionKey))
+  return (key: string) => {
+    if (approvals.has(key)) return { key: 'approval', label: '待审批', rank: 0 }
+    if (inputs.has(key)) return { key: 'input', label: '待输入', rank: 1 }
+    if (fleet.runningBySession[key]) return { key: 'running', label: '运行中', rank: 2 }
+    if (waiting.has(key)) return { key: 'waiting', label: '待发送', rank: 3 }
+    return { key: 'done', label: '已结束', rank: 4 }
+  }
+})
+function compareSessionRows(a: TreeSession, b: TreeSession): number {
+  return sessionStatus.value(a.key).rank - sessionStatus.value(b.key).rank || b.activity - a.activity
+}
 
 function activityAt(sess: ChatSession, key: string): number {
   const lastMessage = fleet.messagesBySession[key]?.at(-1)
@@ -542,14 +713,14 @@ const nodeTree = computed(() => visibleNodes.value.map(node => {
   if (loose.workspaces.length) visible.push(loose)
   if (hermes.workspaces.length || (hasHermes && showSection(hermes))) visible.push(hermes)
   const displayedSections = visible.map(section => {
-    for (const workspace of section.workspaces) workspace.rows.sort((a, b) => b.activity - a.activity)
+    for (const workspace of section.workspaces) workspace.rows.sort(compareSessionRows)
     section.workspaces.sort((a, b) => (b.rows[0]?.activity ?? 0) - (a.rows[0]?.activity ?? 0))
     const id = `tree-section-${encodeURIComponent(node.id)}:${encodeURIComponent(section.key)}`
     const rows = section.workspaces.flatMap(workspace => workspace.rows)
     const showAll = treeIsNarrowed.value || expandedTreeLists.value.has(id)
     let workspaces = section.workspaces
     if (!showAll && rows.length > TREE_SESSION_LIMIT) {
-      rows.sort((a, b) => b.activity - a.activity)
+      rows.sort(compareSessionRows)
       const latest = new Set(rows.slice(0, TREE_SESSION_LIMIT).map(row => row.key))
       workspaces = workspaces.map(workspace => {
         const rows = workspace.rows.filter(row => latest.has(row.key))
@@ -562,7 +733,7 @@ const nodeTree = computed(() => visibleNodes.value.map(node => {
       canShowMore: !treeIsNarrowed.value && rows.length > TREE_SESSION_LIMIT,
     }
   })
-  const historyAdapters = node.adapters.filter(adapter => adapter.status === 'ready' && adapter.capabilities.includes('history'))
+  const historyAdapters = node.adapters.filter(adapter => adapter.status === 'ready' && (adapter.supports?.history ?? adapter.capabilities.includes('history')))
   return { node, sections: displayedSections, count: all.length, hasHermes, historyAdapters }
 }))
 
@@ -578,16 +749,6 @@ function nodeIndicatorStatus(nodeId: string, rawStatus: string) {
 function nodeStatusText(nodeId: string, rawStatus: string) {
   if (fleet.nodesWithApprovalPending.has(nodeId)) return '待审批'
   return rawStatus === 'online' ? '在线' : rawStatus === 'revoked' ? '已吊销' : '离线'
-}
-
-function sessionDotClass(sess: ChatSession): string {
-  const sKey = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
-  const hasPending = fleet.pendingApprovalsList.some(
-    c => sessionKey(c.nodeId, c.provider, c.sessionId) === sKey,
-  )
-  if (hasPending) return 'is-approval'
-  if (fleet.runningBySession[sKey]) return 'is-running'
-  return 'is-ready'
 }
 
 function openSessionTab(sess: ChatSession) {
@@ -986,9 +1147,10 @@ function resetRightWidth() {
   saveStoredWidth('studiolo:chat-split-percent', 50)
 }
 
-function openCreateSession(node?: AgentNode, presetCwd?: string, presetProvider?: AdapterProvider, inSplit = false) {
+function openCreateSession(node?: AgentNode, presetCwd?: string, presetProvider?: AdapterProvider, inSplit = false, scope?: MobileCreateScope) {
   createInSplit.value = inSplit
-  const targetNode = node ?? fleet.selectedNode
+  mobileCreateScope.value = scope
+  const targetNode = scope ? node : node ?? fleet.selectedNode
   newSessionNodeId.value = targetNode?.id ?? ''
   if (presetProvider) {
     newSessionProvider.value = presetProvider
@@ -1004,6 +1166,7 @@ function openCreateSession(node?: AgentNode, presetCwd?: string, presetProvider?
     ? fleet.currentSession?.cwd
     : undefined
   newSessionCwd.value = presetCwd ?? resolveAllowedSessionCwd(targetNode, sameNodeCwd)
+  if (scope) newSessionWorktree.value = false
   showNewSession.value = true
 }
 
@@ -1013,31 +1176,30 @@ function submitNewSession() {
     emit('action', '请先选择在线节点')
     return
   }
-  const targetNode = fleet.nodes.find(n => n.id === targetId)
+  const targetNode = createNodes.value.find(n => n.id === targetId)
+  if (!targetNode || !createAdapters.value.some(adapter => adapter.provider === newSessionProvider.value)) return
   const sourceSessionKey = fleet.activeSessionKey || undefined
-  const resolvedCwd = resolveAllowedSessionCwd(targetNode, newSessionCwd.value.trim()) || undefined
-  if (!createInSplit.value) {
-    fleet.activeSessionKey = ''
+  const projectCwd = createProjectDirectories.value?.get(targetId)
+  const resolvedCwd = projectCwd || resolveAllowedSessionCwd(targetNode, newSessionCwd.value.trim()) || undefined
+  try {
+    fleet.openSession({
+      nodeId: targetId,
+      provider: newSessionProvider.value,
+      cwd: resolvedCwd,
+      useWorktree: newSessionProvider.value !== 'hermes' && newSessionWorktree.value,
+      inheritFromKey: sourceSessionKey,
+      onOpened: createInSplit.value
+        ? key => { secondaryTabKey.value = key }
+        : key => {
+            if (props.mobile) mobileOpenSession(key)
+            else fleet.activateSession(key)
+          },
+    })
+  } catch (error) {
+    emit('action', error instanceof Error ? error.message : '无法创建会话')
+    return
   }
-  fleet.openSession({
-    nodeId: targetId,
-    provider: newSessionProvider.value,
-    cwd: resolvedCwd,
-    useWorktree: newSessionProvider.value !== 'hermes' && newSessionWorktree.value,
-    inheritFromKey: sourceSessionKey,
-    onOpened: createInSplit.value
-      ? key => { secondaryTabKey.value = key }
-      : key => {
-          if (!openTabKeys.value.includes(key)) {
-            openTabKeys.value = [...openTabKeys.value, key]
-          }
-          fleet.activateSession(key)
-        },
-  })
   showNewSession.value = false
-  if (props.mobile) {
-    mobileView.value = 'thread'
-  }
   emit('action', `已请求创建 ${getProviderMeta(newSessionProvider.value).label} 会话`)
 }
 
@@ -1060,52 +1222,276 @@ const mobileBackgroundApprovals = computed(() =>
     }),
 )
 
+const showArchivedSessions = ref(false)
 const mobileInboxSessions = computed(() => {
   const term = mobileInboxQuery.value.trim().toLowerCase()
   const rows = fleet.allSessions
     .filter(sess => {
       if (mobileNodeFilter.value !== 'all' && sess.nodeId !== mobileNodeFilter.value) return false
       const k = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
-      if (mobileStatusFilter.value === 'running' && !fleet.runningBySession[k]) return false
-      if (mobileStatusFilter.value === 'diff' && !(sess.hasDiff || fleet.diffBySession[k]?.files?.length)) return false
       if (term) {
         const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? ''
-        const hay = `${sess.title} ${nodeName} ${sess.provider} ${sess.cwd || ''}`.toLowerCase()
-        if (!hay.includes(term)) return false
+        const hay = `${sess.title} ${nodeName} ${sess.provider} ${sess.projectName || ''} ${sess.cwd || ''}`.toLowerCase()
+        if (!hay.includes(term) && !searchHits.value.has(k)) return false
       }
       return true
     })
     .map(sess => {
       const key = sessionKey(sess.nodeId, sess.provider, sess.sessionId)
       const nodeName = fleet.nodes.find(n => n.id === sess.nodeId)?.name ?? sess.nodeId
-      const hasApproval = fleet.pendingApprovalsList.some(a => sessionKey(a.nodeId, a.provider, a.sessionId) === key)
-      const isRunning = Boolean(fleet.runningBySession[key])
+      const runtime = sessionStatus.value(key)
+      const preference = organization.get(key)
+      const queued = Boolean(fleet.queuedPromptsBySession[key]?.length)
       const unread = fleet.unreadCountBySession[key] ?? 0
+      const todos = sess.todoCount ?? 0
+      const status = runtime.key === 'input' ? { ...runtime, label: '待回复' }
+        : runtime.key !== 'done' ? runtime : queued ? { key: 'queued', label: '排队中', rank: 3 }
+        : preference.placement === 'snoozed' ? { key: 'snoozed', label: '已暂缓', rank: 5 }
+        : preference.placement === 'settled' ? { key: 'settled', label: '已整理', rank: 6 }
+        : preference.placement === 'archived' ? { key: 'archived', label: '已归档', rank: 7 }
+        : todos ? { key: 'todo', label: `${todos} 项待办`, rank: 4 }
+        : unread ? { key: 'complete', label: '已完成', rank: 4 }
+        : runtime
       const diff = fleet.diffBySession[key]
       const diffCount = diff?.summary?.filesChanged ?? (sess.hasDiff ? 1 : 0)
       const branchName = sess.provider !== 'hermes' ? sessionDisplayBranch(sess, key) || (sess.worktreePath ? leafPathName(sess.worktreePath) : '') : ''
-      const dirLabel = sess.provider !== 'hermes' && sess.cwd ? leafPathName(sess.cwd) : ''
       const lastAt = activityAt(sess, key)
-      return { key, session: sess, nodeName, hasApproval, isRunning, unread, diffCount, branchName, dirLabel, lastAt }
+      return { key, session: sess, nodeName, status, unread, diffCount, branchName, lastAt, preference }
+    })
+    .filter(row => {
+      if (row.status.key === 'archived' && !showArchivedSessions.value) return false
+      if (mobileStatusFilter.value === 'all') return true
+      if (mobileStatusFilter.value === 'diff') return row.diffCount > 0
+      return row.status.key === mobileStatusFilter.value
     })
 
   rows.sort((a, b) => {
-    if (a.hasApproval !== b.hasApproval) return a.hasApproval ? -1 : 1
-    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+    if (a.status.rank !== b.status.rank) return a.status.rank - b.status.rank
+    if (!!a.preference.pinned !== !!b.preference.pinned) return a.preference.pinned ? -1 : 1
     if ((a.unread > 0) !== (b.unread > 0)) return a.unread > 0 ? -1 : 1
     return b.lastAt - a.lastAt
   })
   return rows
 })
 
-const mobileSessionGroups = computed(() => [
-  { key: 'workspace', rows: mobileInboxSessions.value.filter(item => item.session.provider !== 'hermes') },
-  { key: 'hermes', rows: mobileInboxSessions.value.filter(item => item.session.provider === 'hermes') },
-].filter(group => group.rows.length))
+const MOBILE_SESSION_PREVIEW_LIMIT = 3
+type ProjectDisplay = 'closed' | 'preview' | 'all'
+const projectDisplay = ref<Record<string, ProjectDisplay>>({})
+const filteredProjectDisplay = ref<Record<string, ProjectDisplay>>({})
+const mobileInboxNarrowed = computed(() => Boolean(mobileInboxQuery.value.trim()) || mobileHasActiveFilter.value)
+const visibleProjectDisplay = computed(() => mobileInboxNarrowed.value ? filteredProjectDisplay.value : projectDisplay.value)
+const mobileManageDialog = ref<HTMLDialogElement>()
+const mobileManageKey = ref('')
+const snoozeHours = ref(1)
+const showSnoozeOptions = ref(false)
+const snoozeHoursInput = ref<HTMLInputElement>()
+const mobileManagePosition = ref({ left: '0px', top: '0px' })
+const mobileManagedSession = computed(() => fleet.sessionsByKey[mobileManageKey.value])
+const mobileManagedOrganization = computed(() => organization.get(mobileManageKey.value))
+const canOrganizeManagedSession = computed(() => sessionStatus.value(mobileManageKey.value).key === 'done')
+const undoOrganization = ref<{ key: string; previous?: SessionOrganization; message: string }>()
+let undoOrganizationTimer: ReturnType<typeof setTimeout> | undefined
+let sessionPress: { timer: ReturnType<typeof setTimeout>; x: number; y: number; pointerId: number } | undefined
+let suppressSessionClick = false
 
-function formatShortTime(ts?: number, compact = false): string {
+const mobileSessionGroups = computed(() => {
+  type InboxRow = typeof mobileInboxSessions.value[number]
+  const projects = new Map<string, { key: string; name: string; rows: InboxRow[] }>()
+  const hermes: InboxRow[] = []
+  for (const row of mobileInboxSessions.value) {
+    if (row.session.provider === 'hermes') {
+      hermes.push(row)
+      continue
+    }
+    const project = sessionInboxProject(row.session)
+    const group = projects.get(project.key)
+    if (group) group.rows.push(row)
+    else projects.set(project.key, { ...project, rows: [row] })
+  }
+  const searching = Boolean(mobileInboxQuery.value.trim())
+  const hermesRows = hermes.sort((a, b) => b.lastAt - a.lastAt)
+  if (mobileStatusFilter.value === 'all') {
+    const query = mobileInboxQuery.value.trim().toLowerCase()
+    for (const entry of savedInboxProjects.value) {
+      if (projects.has(entry.project.key)) continue
+      if (mobileNodeFilter.value !== 'all' && mobileNodeFilter.value !== entry.nodeId) continue
+      if (query && !`${entry.project.name} ${entry.cwd}`.toLowerCase().includes(query)) continue
+      projects.set(entry.project.key, { ...entry.project, rows: [] })
+    }
+  }
+  const groups = [...projects.values()]
+  if ((!mobileHasActiveFilter.value && !searching) || hermesRows.length) {
+    groups.unshift({ key: 'hermes', name: 'Hermes', rows: hermesRows })
+  }
+  return groups.map(project => {
+    const initialDisplay = mobileInboxNarrowed.value ? 'all' : project.key === 'hermes' ? 'preview' : 'closed'
+    const display = visibleProjectDisplay.value[project.key] ?? initialDisplay
+    return {
+      ...project, count: project.rows.length, display,
+      rows: display === 'all' ? project.rows
+        : display === 'preview' ? project.rows.slice(0, MOBILE_SESSION_PREVIEW_LIMIT) : [],
+    }
+  })
+})
+
+const mobileStatusIcons = {
+  approval: 'shield', input: 'chat', waiting: 'wifiOff', queued: 'tasks', todo: 'tasks', snoozed: 'moon',
+  settled: 'layers', archived: 'folder',
+} as const
+
+function statusIcon(key: string) {
+  return mobileStatusIcons[key as keyof typeof mobileStatusIcons] ?? 'check'
+}
+
+watch(() => new Set([...Object.keys(fleet.runningBySession), ...fleet.outbox.map(item => item.sessionKey)]), keys => {
+  for (const key of keys) {
+    const row = organization.get(key)
+    if (row.placement === 'settled') organization.set(key, { ...row, placement: 'active', changedAt: Date.now() })
+  }
+}, { immediate: true })
+
+watch(() => fleet.deviceSessionScope, () => {
+  undoOrganization.value = undefined
+  stopSessionPress()
+  mobileManageDialog.value?.close()
+  showArchivedSessions.value = false
+  showAddProject.value = false
+  mobileMoreMenuOpen.value = false
+  mobileCreateMenuOpen.value = false
+  showNewSession.value = false
+  mobileApprovalsExpanded.value = false
+  projectDisplay.value = {}
+  filteredProjectDisplay.value = {}
+})
+
+watch(mobileInboxNarrowed, () => {
+  filteredProjectDisplay.value = {}
+})
+
+function toggleSessionGroup(key: string, display: ProjectDisplay) {
+  visibleProjectDisplay.value[key] = display === 'closed'
+    ? (mobileInboxNarrowed.value ? 'all' : 'preview')
+    : 'closed'
+}
+
+function openMobileManage(key: string, row: EventTarget | null, point?: { x: number; y: number }) {
+  stopSessionPress()
+  const dialog = mobileManageDialog.value
+  if (!dialog || dialog.open || !(row instanceof HTMLElement)) return
+  mobileManageKey.value = key
+  snoozeHours.value = 1
+  showSnoozeOptions.value = false
+  void nextTick(() => {
+    if (!dialog.isConnected || !row.isConnected || dialog.open) return
+    const bounds = row.getBoundingClientRect()
+    const anchor = point ?? { x: bounds.left + 16, y: bounds.top + bounds.height / 2 }
+    const gap = 8
+    dialog.showModal()
+    const above = anchor.y - dialog.offsetHeight - gap
+    const below = anchor.y + gap
+    const bottom = window.innerHeight - dialog.offsetHeight - gap
+    const top = below <= bottom ? below : above
+    mobileManagePosition.value = {
+      left: `${Math.max(gap, Math.min(anchor.x, window.innerWidth - dialog.offsetWidth - gap))}px`,
+      top: `${Math.max(gap, Math.min(top, bottom))}px`,
+    }
+  })
+}
+
+function openSnoozeOptions() {
+  if (mobileManagedOrganization.value.placement === 'snoozed') {
+    organizeMobileSession('active')
+    return
+  }
+  showSnoozeOptions.value = true
+  void nextTick(() => snoozeHoursInput.value?.focus())
+}
+
+function stopSessionPress(event?: PointerEvent) {
+  if (!sessionPress || (event && event.pointerId !== sessionPress.pointerId)) return
+  clearTimeout(sessionPress.timer)
+  sessionPress = undefined
+}
+
+function beginSessionPress(event: PointerEvent, key: string) {
+  if (!event.isPrimary) return
+  suppressSessionClick = false
+  stopSessionPress()
+  if (event.button !== 0) return
+  const point = { x: event.clientX, y: event.clientY }
+  const row = event.currentTarget
+  const timer = setTimeout(() => {
+    suppressSessionClick = true
+    openMobileManage(key, row, point)
+  }, 500)
+  sessionPress = { ...point, pointerId: event.pointerId, timer }
+}
+
+function moveSessionPress(event: PointerEvent) {
+  if (sessionPress && Math.hypot(event.clientX - sessionPress.x, event.clientY - sessionPress.y) > 10) stopSessionPress(event)
+}
+
+function handleOrganizeClick(event: MouseEvent) {
+  if (suppressSessionClick && event.detail > 0) {
+    event.preventDefault()
+    event.stopPropagation()
+  } else if (event.target === event.currentTarget) {
+    mobileManageDialog.value?.close()
+  }
+}
+
+function openMobileInboxRow(event: MouseEvent, key: string) {
+  if (suppressSessionClick && event.detail > 0) return
+  if (!mobileManageDialog.value?.open) mobileOpenSession(key)
+}
+
+function organizeMobileSession(placement: SessionOrganization['placement'], pin = false) {
+  const key = mobileManageKey.value
+  if (!key || !mobileManagedSession.value || (!pin && placement !== 'active' && !canOrganizeManagedSession.value)) return
+  const previous = organization.rows.value[key]
+  const now = Date.now()
+  const hours = Number(snoozeHours.value)
+  if (!pin && placement === 'snoozed' && (!Number.isFinite(hours) || hours < 0.25 || hours > 720)) return
+  organization.set(key, {
+    placement, changedAt: now,
+    pinned: pin ? !mobileManagedOrganization.value.pinned : previous?.pinned,
+    ...(placement === 'snoozed' ? { until: pin ? previous?.until : now + hours * 3_600_000 } : {}),
+  })
+  mobileManageDialog.value?.close()
+  const message = pin ? (previous?.pinned ? '已取消置顶' : '已置顶会话')
+    : { active: '已恢复会话', snoozed: '已暂缓会话', settled: '已整理会话', archived: '已归档会话' }[placement]
+  clearTimeout(undoOrganizationTimer)
+  undoOrganization.value = { key, previous, message }
+  undoOrganizationTimer = setTimeout(() => { undoOrganization.value = undefined }, 5000)
+}
+
+function undoMobileOrganization() {
+  const change = undoOrganization.value
+  if (!change) return
+  organization.set(change.key, change.previous)
+  clearTimeout(undoOrganizationTimer)
+  undoOrganization.value = undefined
+}
+
+async function copyMobileSessionId() {
+  const id = fleet.currentSession?.sessionId
+  if (!id) return
+  try {
+    await navigator.clipboard.writeText(id)
+    emit('action', '已复制会话 ID')
+  } catch {
+    emit('action', '无法访问剪贴板')
+  }
+}
+
+onUnmounted(() => {
+  stopSessionPress()
+  clearTimeout(undoOrganizationTimer)
+})
+
+function formatShortTime(ts?: number, compact = false, now = Date.now()): string {
   if (!ts) return ''
-  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
+  const diffSec = Math.max(0, Math.floor((now - ts) / 1000))
   if (diffSec < 60) return '刚刚'
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} ${compact ? '分' : '分钟前'}`
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} ${compact ? '小时' : '小时前'}`
@@ -1119,52 +1505,30 @@ function mobileOpenSession(key: string) {
   mobileView.value = 'thread'
 }
 
+watch(() => {
+  const key = fleet.notificationSessionKey
+  return key && fleet.sessionsByKey[key] ? key : ''
+}, key => {
+  if (!key) return
+  if (props.mobile) mobileOpenSession(key)
+  else fleet.activateSession(key)
+  fleet.notificationSessionKey = ''
+}, { immediate: true })
+
+function attachTerminalOutput(text: string) {
+  const key = fleet.activeSessionKey
+  if (!key) return
+  const draft = fleet.composerDrafts[key] ?? { text: '', files: [] }
+  draft.files = [...draft.files, new File([text], 'terminal-output.txt', { type: 'text/plain' })]
+  fleet.composerDrafts[key] = draft
+  mobileWorkbench.value = 'none'
+  emit('action', '终端输出已加入草稿附件')
+}
+
 function mobileBackToInbox() {
   mobileWorkbench.value = 'none'
   closeMobileSessionSheet()
   mobileView.value = 'inbox'
-}
-
-function mobileQuickNewSession() {
-  const targetNode =
-    (mobileNodeFilter.value !== 'all'
-      ? fleet.nodes.find(n => n.id === mobileNodeFilter.value && n.status === 'online')
-      : null) ??
-    (fleet.selectedNode?.status === 'online' ? fleet.selectedNode : null) ??
-    fleet.nodes.find(n => n.status === 'online')
-  if (!targetNode) {
-    emit('action', '暂无在线节点，请先配置节点')
-    emit('navigate', 'Agents')
-    return
-  }
-  const prevSess = fleet.currentSession
-  const sourceKey = fleet.activeSessionKey || undefined
-  const preferredProv = prevSess?.provider ?? fleet.selectedProvider
-  const readyAdapter =
-    targetNode.adapters.find(a => a.provider === preferredProv && a.status === 'ready') ??
-    targetNode.adapters.find(a => a.status === 'ready')
-  if (!readyAdapter) {
-    openCreateSession(targetNode)
-    return
-  }
-  const sameNodeCwd = prevSess?.nodeId === targetNode.id ? prevSess?.cwd : undefined
-  const cwd = resolveAllowedSessionCwd(targetNode, sameNodeCwd) || undefined
-  closeMobileSessionSheet()
-  fleet.activeSessionKey = ''
-  fleet.openSession({
-    nodeId: targetNode.id,
-    provider: readyAdapter.provider,
-    cwd,
-    inheritFromKey: sourceKey,
-    onOpened: k => {
-      if (!openTabKeys.value.includes(k)) {
-        openTabKeys.value = [...openTabKeys.value, k]
-      }
-      fleet.activateSession(k)
-    },
-  })
-  mobileView.value = 'thread'
-  emit('action', `已创建 ${getProviderMeta(readyAdapter.provider).label} 新会话`)
 }
 
 function openMobileSessionSheet() {
@@ -1216,6 +1580,7 @@ function submitHandoff() {
     targetNodeId: handoffTargetNode.value,
     targetProvider: handoffTargetProvider.value,
     summary: handoffSummary.value.trim(),
+    sourceSessionKey: fleet.activeSessionKey,
     artifact: handoffArtifact.value,
   })
   showHandoff.value = false
@@ -1262,8 +1627,12 @@ function handleClearMemory() {
 </script>
 
 <template>
-  <FleetCoreSignIn v-if="fleet.coreSignInUrl" />
+  <template v-if="fleet.coreSignInUrl && (!fleet.allSessions.length || showCachedCoreLogin)">
+    <button v-if="fleet.allSessions.length" type="button" class="btn btn-ghost btn-sm" @click="showCachedCoreLogin = false">返回本机历史</button>
+    <FleetCoreSignIn />
+  </template>
   <template v-else>
+  <button v-if="fleet.coreSignInUrl" type="button" class="btn btn-ghost btn-sm" @click="showCachedCoreLogin = true">登录 Core 以恢复连接</button>
   <!-- 移动端（方案 B · 收件箱列表 → 全屏沉浸对话页，类似 Happy / Orca Mobile） -->
   <div v-if="mobile" class="mchat-root">
     <!-- 第一层：会话与审批收件箱（极简顶栏图标工具条 + 带状态微动画的会话卡片） -->
@@ -1353,64 +1722,25 @@ function handleClearMemory() {
                 <OpusIcon name="tasks" class="m-fmenu-ic" />
                 <span class="m-fmenu-lbl">会话状态</span>
                 <span class="m-fmenu-val">
-                  {{ mobileStatusFilter === 'all' ? '全部' : mobileStatusFilter === 'running' ? '运行中' : '有改动' }}
+                  {{ mobileStatusLabels[mobileStatusFilter] }}
                 </span>
                 <OpusIcon name="chevR" class="m-fmenu-chev" />
               </button>
               <div v-if="mobileFilterSub === 'status'" class="m-fmenu-sub" role="group" aria-label="选择状态">
                 <button
+                  v-for="(label, key) in mobileStatusLabels"
+                  :key="key"
                   type="button"
                   class="m-fmenu-subitem"
-                  :class="{ 'is-selected': mobileStatusFilter === 'all' }"
-                  @click="mobileStatusFilter = 'all'; closeMobileFilterMenu()"
+                  :class="{ 'is-selected': mobileStatusFilter === key }"
+                  @click="mobileStatusFilter = key; closeMobileFilterMenu()"
                 >
-                  <span>全部状态</span>
-                  <OpusIcon v-if="mobileStatusFilter === 'all'" name="check" class="m-fmenu-check" />
-                </button>
-                <button
-                  type="button"
-                  class="m-fmenu-subitem"
-                  :class="{ 'is-selected': mobileStatusFilter === 'running' }"
-                  @click="mobileStatusFilter = 'running'; closeMobileFilterMenu()"
-                >
-                  <span>运行中</span>
-                  <OpusIcon v-if="mobileStatusFilter === 'running'" name="check" class="m-fmenu-check" />
-                </button>
-                <button
-                  type="button"
-                  class="m-fmenu-subitem"
-                  :class="{ 'is-selected': mobileStatusFilter === 'diff' }"
-                  @click="mobileStatusFilter = 'diff'; closeMobileFilterMenu()"
-                >
-                  <span>有代码改动</span>
-                  <OpusIcon v-if="mobileStatusFilter === 'diff'" name="check" class="m-fmenu-check" />
+                  <span>{{ label }}</span>
+                  <OpusIcon v-if="mobileStatusFilter === key" name="check" class="m-fmenu-check" />
                 </button>
               </div>
 
               <div class="m-fmenu-sep" />
-
-              <button v-if="android" type="button" class="m-fmenu-item"
-                :aria-pressed="fleet.notificationsEnabled" @click="closeMobileFilterMenu(); handleToggleNotifications()">
-                <OpusIcon name="bell" class="m-fmenu-ic" />
-                <span class="m-fmenu-lbl">系统通知</span>
-                <span class="m-fmenu-val">{{ fleet.notificationsEnabled ? '已开启' : '已关闭' }}</span>
-              </button>
-              <button
-                type="button"
-                class="m-fmenu-item"
-                @click="closeMobileFilterMenu(); openCreateSession()"
-              >
-                <OpusIcon name="plus" class="m-fmenu-ic" />
-                <span class="m-fmenu-lbl">自定义目录 / Worktree</span>
-              </button>
-              <button
-                type="button"
-                class="m-fmenu-item"
-                @click="closeMobileFilterMenu(); showFanout = true"
-              >
-                <OpusIcon name="layers" class="m-fmenu-ic" />
-                <span class="m-fmenu-lbl">多模型并发对比</span>
-              </button>
               <button
                 v-if="mobileHasActiveFilter"
                 type="button"
@@ -1434,15 +1764,60 @@ function handleClearMemory() {
           </button>
         </div>
         <div class="m-inbox-toolbar-icons">
-          <button
-            type="button"
-            class="m-tool-ic-btn is-primary"
-            aria-label="快速新建对话"
-            title="快速新建对话"
-            @click="mobileQuickNewSession"
-          >
-            <OpusIcon name="plus" />
-          </button>
+          <div class="m-filter-anchor" @keydown.esc.stop="closeMobileCreateMenu(true)">
+            <button ref="mobileCreateButton" type="button" class="m-tool-ic-btn is-primary"
+              aria-label="新建对话" :aria-expanded="mobileCreateMenuOpen" @click="toggleMobileCreateMenu">
+              <OpusIcon name="plus" />
+            </button>
+            <div v-if="mobileCreateMenuOpen" class="m-filter-backdrop" @click="closeMobileCreateMenu()" />
+            <div v-if="mobileCreateMenuOpen" ref="mobileCreateMenu" class="m-filter-dropdown m-inbox-more-menu m-agent-picker"
+              aria-label="选择 Agent" role="group">
+              <button v-for="provider in mobileReadyProviders" :key="provider" type="button" class="m-fmenu-item"
+                @click="openMobileCreate({ provider })">
+                <OpusIcon :name="getProviderMeta(provider).icon" class="m-fmenu-ic" />
+                {{ getProviderMeta(provider).label }}
+              </button>
+              <p v-if="!mobileReadyProviders.length" class="m-create-empty">暂无可用的 Agent</p>
+              <button v-if="!mobileReadyProviders.length" type="button" class="m-fmenu-item"
+                @click="closeMobileCreateMenu(); emit('navigate', 'Agents')">
+                <OpusIcon name="server" class="m-fmenu-ic" />管理节点
+              </button>
+            </div>
+          </div>
+          <div class="m-filter-anchor">
+            <button type="button" class="m-tool-ic-btn" aria-label="更多会话选项" :aria-expanded="mobileMoreMenuOpen"
+              @click="closeMobileFilterMenu(); closeMobileCreateMenu(); mobileMoreMenuOpen = !mobileMoreMenuOpen">
+              <OpusIcon name="more" />
+              <span v-if="fleet.pendingApprovalsList.length" class="m-tool-dot" />
+            </button>
+            <div v-if="mobileMoreMenuOpen" class="m-filter-backdrop" @click="mobileMoreMenuOpen = false" />
+            <div v-if="mobileMoreMenuOpen" class="m-filter-dropdown m-inbox-more-menu" role="group" aria-label="更多会话选项"
+              @keydown.esc="mobileMoreMenuOpen = false">
+              <button type="button" class="m-fmenu-item" @click="showArchivedSessions = !showArchivedSessions; mobileMoreMenuOpen = false">
+                <OpusIcon name="folder" class="m-fmenu-ic" />
+                <span>{{ showArchivedSessions ? '隐藏已归档' : '显示已归档' }}</span>
+              </button>
+              <button v-if="fleet.pendingApprovalsList.length" type="button" class="m-fmenu-item"
+                @click="mobileApprovalsExpanded = !mobileApprovalsExpanded; mobileMoreMenuOpen = false">
+                <OpusIcon name="shield" class="m-fmenu-ic" />
+                <span>{{ mobileApprovalsExpanded ? '收起待审批' : '查看待审批' }} · {{ fleet.pendingApprovalsList.length }}</span>
+              </button>
+              <button v-if="android" type="button" class="m-fmenu-item" :aria-pressed="fleet.notificationsEnabled"
+                @click="mobileMoreMenuOpen = false; handleToggleNotifications()">
+                <OpusIcon name="bell" class="m-fmenu-ic" />
+                <span class="m-fmenu-lbl">系统通知</span>
+                <span class="m-fmenu-val">{{ fleet.notificationsEnabled ? '已开启' : '已关闭' }}</span>
+              </button>
+              <button type="button" class="m-fmenu-item" @click="openAddProject">
+                <OpusIcon name="plus" class="m-fmenu-ic" />
+                <span>添加项目</span>
+              </button>
+              <button type="button" class="m-fmenu-item" @click="mobileMoreMenuOpen = false; showFanout = true">
+                <OpusIcon name="layers" class="m-fmenu-ic" />
+                <span>多模型并发对比</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1472,7 +1847,7 @@ function handleClearMemory() {
       </div>
 
       <!-- 待审批优先收件箱（单手拇指秒批） -->
-      <section v-if="fleet.pendingApprovalsList.length" class="m-inbox-approvals" aria-label="待审批请求">
+      <section v-if="mobileApprovalsExpanded && fleet.pendingApprovalsList.length" class="m-inbox-approvals" aria-label="待审批请求">
         <div class="sec-t" style="margin-top:4px">
           <span>待审批 ({{ fleet.pendingApprovalsList.length }})</span>
           <span class="spacer" />
@@ -1503,57 +1878,116 @@ function handleClearMemory() {
         </div>
       </section>
 
-      <!-- 会话列表卡片（去头像绿点、去右箭头、精简副标题、角落带动画状态徽章） -->
+      <div v-if="undoOrganization" class="m-session-undo" role="status">
+        <span>{{ undoOrganization.message }}</span>
+        <button type="button" class="btn btn-ghost btn-sm" @click="undoMobileOrganization">撤销</button>
+      </div>
+      <dialog ref="mobileManageDialog" class="m-organize-menu" :class="{ 'is-snooze': showSnoozeOptions }"
+        :style="{ '--menu-left': mobileManagePosition.left, top: mobileManagePosition.top }"
+        aria-label="会话操作" closedby="closerequest" @pointerdown="suppressSessionClick = false"
+        @click.capture="handleOrganizeClick">
+        <div v-if="mobileManagedSession" class="m-organize-body">
+          <form v-if="showSnoozeOptions" class="m-organize-snooze" @submit.prevent="organizeMobileSession('snoozed')">
+            <label>暂缓时长
+              <input ref="snoozeHoursInput" v-model.number="snoozeHours" class="input" type="number" required min=".25" max="720" step=".25" /> 小时
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" @click="showSnoozeOptions = false">返回</button>
+            <button type="submit" class="btn btn-primary btn-sm">暂缓</button>
+          </form>
+          <template v-else>
+            <button type="button" class="m-fmenu-item" @click="organizeMobileSession(mobileManagedOrganization.placement, true)">
+              <OpusIcon name="pin" />{{ mobileManagedOrganization.pinned ? '取消置顶' : '置顶会话' }}
+            </button>
+            <button type="button" class="m-fmenu-item" :disabled="!canOrganizeManagedSession && mobileManagedOrganization.placement !== 'snoozed'"
+              @click="openSnoozeOptions"><OpusIcon name="moon" />{{ mobileManagedOrganization.placement === 'snoozed' ? '取消暂缓' : '暂缓会话' }}</button>
+            <button type="button" class="m-fmenu-item" :disabled="!canOrganizeManagedSession && mobileManagedOrganization.placement !== 'settled'"
+              @click="organizeMobileSession(mobileManagedOrganization.placement === 'settled' ? 'active' : 'settled')">
+              <OpusIcon name="layers" />{{ mobileManagedOrganization.placement === 'settled' ? '取消整理' : '整理会话' }}
+            </button>
+            <button type="button" class="m-fmenu-item" :disabled="!canOrganizeManagedSession && mobileManagedOrganization.placement !== 'archived'"
+              @click="organizeMobileSession(mobileManagedOrganization.placement === 'archived' ? 'active' : 'archived')">
+              <OpusIcon name="folder" />{{ mobileManagedOrganization.placement === 'archived' ? '取消归档' : '归档会话' }}
+            </button>
+          </template>
+        </div>
+      </dialog>
       <template v-if="mobileSessionGroups.length">
-        <section v-for="group in mobileSessionGroups" :key="group.key" :aria-label="group.key === 'hermes' ? 'Hermes' : '工作区会话'">
-          <div v-if="group.key === 'hermes'" class="sec-t m-hermes-title"><OpusIcon name="hermes" />Hermes</div>
-          <div class="mlist mat-solid m-inbox-list">
+        <section v-for="group in mobileSessionGroups" :key="group.key" class="m-project-section" :aria-label="group.name">
+          <div class="m-project-heading">
+            <h2>
+              <button type="button" class="m-project-trigger" :aria-expanded="group.display !== 'closed'"
+                @click="toggleSessionGroup(group.key, group.display)">
+                <OpusIcon :name="group.key === 'hermes' ? 'hermes' : 'folder'" />
+                <span class="m-project-name">{{ group.name }}</span>
+              </button>
+            </h2>
+            <button v-if="group.key === 'hermes'" type="button" class="m-project-add" aria-label="新建 Hermes 对话"
+              @click="openMobileCreate({ provider: 'hermes' })"><OpusIcon name="plus" /></button>
+            <button v-else-if="group.key !== 'no-project'" type="button" class="m-project-add" :aria-label="`在 ${group.name} 新建对话`"
+              @click="openMobileCreate({ projectKey: group.key, name: group.name })"><OpusIcon name="plus" /></button>
+          </div>
+          <p v-if="group.display !== 'closed' && !group.count" class="m-project-empty">暂无会话</p>
+          <div v-if="group.rows.length" class="m-inbox-list">
+            <div v-for="item in group.rows" :key="item.key" class="m-inbox-entry">
             <button
-              v-for="item in group.rows"
-              :key="item.key"
               type="button"
               class="mrow m-inbox-row"
-              @click="mobileOpenSession(item.key)"
+              @click="openMobileInboxRow($event, item.key)"
+              @contextmenu.prevent="!sessionPress && !suppressSessionClick && openMobileManage(item.key, $event.currentTarget, { x: $event.clientX, y: $event.clientY })"
+              @keydown.shift.f10.prevent="openMobileManage(item.key, $event.currentTarget)"
+              @pointerdown="beginSessionPress($event, item.key)"
+              @pointermove="moveSessionPress"
+              @pointerup="stopSessionPress"
+              @pointerleave="stopSessionPress"
+              @pointercancel="stopSessionPress"
             >
-              <span
-                class="m-sess-avatar"
-                :class="[
-                  getProviderMeta(item.session.provider).accentClass,
-                  { 'is-running': item.isRunning, 'is-approval': item.hasApproval },
-                ]"
-              >
+              <span class="m-sess-avatar" :class="getProviderMeta(item.session.provider).accentClass">
                 <OpusIcon :name="getProviderMeta(item.session.provider).icon" />
               </span>
               <span class="grow">
                 <span class="m-sess-top">
                   <span class="title">{{ item.session.title }}</span>
-                  <span v-if="item.lastAt" class="m-sess-time num">{{ formatShortTime(item.lastAt) }}</span>
+                  <OpusIcon v-if="item.preference.pinned" name="pin" class="m-session-pin" />
                 </span>
                 <span class="m-sess-bottom">
                   <span class="m-sess-sub-mini">
                     <span>{{ item.nodeName }}</span>
-                    <template v-if="item.branchName || item.dirLabel"> · {{ item.branchName || item.dirLabel }}</template>
+                    <span v-if="item.branchName"> · <code>{{ item.branchName }}</code></span>
                     <span v-if="item.diffCount > 0" class="m-sess-diff-num num"> · {{ item.diffCount }} 改动</span>
-                  </span>
-                  <span
-                    v-if="item.hasApproval || item.isRunning || item.unread > 0"
-                    class="m-sess-state-pill"
-                    :class="item.hasApproval ? 'is-approval' : item.isRunning ? 'is-running' : 'is-unread'"
-                  >
-                    <span v-if="item.isRunning" class="m-state-spinner" aria-hidden="true" />
-                    <OpusIcon v-else-if="item.hasApproval" name="shield" class="m-state-ic is-pulse" />
-                    <OpusIcon v-else name="check" class="m-state-ic is-pop" />
-                    <span>{{ item.hasApproval ? '待审批' : item.isRunning ? '运行中' : '已完成' }}</span>
                   </span>
                 </span>
               </span>
+              <span class="m-sess-trailing">
+                <span v-if="item.status.key !== 'done'" class="m-sess-state" :class="`is-${item.status.key}`">
+                  <svg v-if="item.status.key === 'running'" class="m-state-ic m-state-wave" viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="2" y="5" width="2.5" height="6" rx="1.25" />
+                    <rect x="6.75" y="2" width="2.5" height="12" rx="1.25" />
+                    <rect x="11.5" y="4" width="2.5" height="8" rx="1.25" />
+                  </svg>
+                  <svg v-else-if="item.status.key === 'complete'" class="m-state-ic m-state-check" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m3 8 3 3 7-7" pathLength="1" />
+                  </svg>
+                  <OpusIcon v-else :name="statusIcon(item.status.key)" class="m-state-ic" />
+                  {{ item.status.label }}
+                </span>
+                <span v-if="item.status.key === 'snoozed' && item.preference.until" class="m-sess-time">
+                  {{ new Date(item.preference.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+                </span>
+                <span v-else-if="item.status.key === 'done' && item.lastAt" class="m-sess-time num">{{ formatShortTime(item.lastAt, false, mobileInboxNow) }}</span>
+              </span>
+            </button>
+            </div>
+            <button v-if="group.count > MOBILE_SESSION_PREVIEW_LIMIT && !mobileInboxNarrowed"
+              class="m-project-more m-session-more" type="button" :aria-expanded="group.display === 'all'"
+              @click="projectDisplay[group.key] = group.display === 'all' ? 'preview' : 'all'">
+              {{ group.display === 'all' ? `仅显示前 ${MOBILE_SESSION_PREVIEW_LIMIT} 条` : `查看全部 ${group.count} 条` }}
             </button>
           </div>
         </section>
       </template>
 
       <!-- 空状态引导卡片 -->
-      <div v-else class="mcard mat-solid m-inbox-empty">
+      <div v-if="!mobileInboxSessions.length && !mobileSessionGroups.some(group => group.key !== 'hermes')" class="mcard mat-solid m-inbox-empty">
         <div class="m-empty-ic"><OpusIcon name="chat" /></div>
         <h3>{{ mobileInboxQuery || mobileHasActiveFilter ? '没有匹配的会话' : '开始你的 Agent 任务' }}</h3>
         <p class="faint">
@@ -1562,10 +1996,6 @@ function handleClearMemory() {
         <div class="m-empty-actions">
           <button v-if="mobileHasActiveFilter" type="button" class="btn btn-primary" @click="resetMobileFilters">
             <span>重置筛选</span>
-          </button>
-          <button v-else type="button" class="btn btn-primary" @click="mobileQuickNewSession">
-            <OpusIcon name="plus" />
-            <span>快速开始对话</span>
           </button>
           <button type="button" class="btn btn-ghost" @click="openCreateSession()">
             <span>选择目录 / Worktree</span>
@@ -1607,24 +2037,33 @@ function handleClearMemory() {
           <button
             type="button"
             class="m-bar-btn"
-            aria-label="新建会话"
-            title="新建会话"
-            @click="mobileQuickNewSession"
+            aria-label="打开终端"
+            title="终端"
+            :disabled="!fleet.currentSession"
+            @click="openMobileWorkbench('terminal')"
           >
-            <OpusIcon name="plus" />
+            <OpusIcon name="terminal" />
+          </button>
+          <button type="button" class="m-bar-btn" aria-label="打开文件" title="文件"
+            :disabled="!fleet.currentSession" @click="openMobileWorkbench('tree')">
+            <OpusIcon name="folder" />
           </button>
           <button
             type="button"
             class="m-bar-btn m-wb-trigger"
-            aria-label="打开工作台（Diff / 文件 / 终端）"
-            title="工作台（代码评审 · 目录 · 终端）"
+            aria-label="查看本会话 Diff"
+            title="代码评审"
             :disabled="!fleet.currentSession"
-            @click="openMobileWorkbench(fleet.currentDiff?.files?.length ? 'diff' : 'tree')"
+            @click="openMobileWorkbench('diff')"
           >
             <OpusIcon name="panel" />
             <span v-if="fleet.currentDiff?.summary?.filesChanged" class="m-wb-dot num">
               {{ fleet.currentDiff.summary.filesChanged }}
             </span>
+          </button>
+          <button type="button" class="m-bar-btn" aria-label="分享或交接会话" title="分享或交接"
+            aria-haspopup="dialog" :disabled="!fleet.currentSession" @click="openMobileSessionSheet">
+            <OpusIcon name="external" />
           </button>
         </div>
       </header>
@@ -1679,6 +2118,9 @@ function handleClearMemory() {
             <OpusIcon name="pencil" />
             <span class="msheet-row-text">{{ fleet.currentSession.title }}</span>
             <span class="faint">重命名</span>
+          </button>
+          <button type="button" class="msheet-row" @click="copyMobileSessionId">
+            <OpusIcon name="copy" />复制会话 ID
           </button>
         </div>
 
@@ -1867,6 +2309,7 @@ function handleClearMemory() {
         <TerminalDrawer
           v-else-if="mobileWorkbench === 'terminal'"
           :session-key="fleet.activeSessionKey"
+          @attach="attachTerminalOutput"
           @close="mobileWorkbench = 'none'"
         />
       </div>
@@ -2006,7 +2449,7 @@ function handleClearMemory() {
                     :key="row.key"
                     v-model:draft="renameDraft"
                     :session="row.session"
-                    :status="sessionDotClass(row.session)"
+                    :status="sessionStatus(row.key)"
                     :active="fleet.activeSessionKey === row.key"
                     :renaming="renamingSessionKey === row.key"
                     :snippet="searchSnippetFor(row.session)"
@@ -2034,7 +2477,7 @@ function handleClearMemory() {
               </div>
             </section>
           </section>
-          <div v-if="!fleet.nodes.length" class="tree-empty-state">
+          <div v-if="!fleet.chatNodes.length" class="tree-empty-state">
             <p class="faint">尚未注册任何控制节点。</p>
             <button type="button" class="btn btn-primary btn-sm" @click="emit('navigate', 'Agents')">签发 sn_live_ 凭证</button>
           </div>
@@ -2081,7 +2524,7 @@ function handleClearMemory() {
             @contextmenu="openTabContextMenu(tab.key, $event)"
           >
             <OpusIcon v-if="pinnedTabKeys.includes(tab.key)" name="pin" class="tab-pin-ic" />
-            <span v-else class="tree-dot" :class="sessionDotClass(tab.session)" />
+            <span v-else class="tree-dot" :class="`is-${sessionStatus(tab.key).key}`" :title="sessionStatus(tab.key).label" />
             <span class="chat-tab-label">{{ tab.session.title }}</span>
             <span v-if="fleet.unreadCountBySession[tab.key]" class="tab-unread-dot num">
               {{ fleet.unreadCountBySession[tab.key] }}
@@ -2441,6 +2884,7 @@ function handleClearMemory() {
           <TerminalDrawer
             v-else-if="rightMode === 'terminal'"
             :session-key="fleet.activeSessionKey"
+            @attach="attachTerminalOutput"
             @close="setRightPane('none')"
           />
 
@@ -2508,28 +2952,65 @@ function handleClearMemory() {
     </div>
   </div>
 
+  <div v-if="showAddProject" class="modal-scrim" @click.self="showAddProject = false">
+    <form class="modal-card card" role="dialog" aria-modal="true" aria-labelledby="add-project-heading"
+      @submit.prevent="saveInboxProject" @keydown.esc.stop="showAddProject = false">
+      <h3 id="add-project-heading">添加项目</h3>
+      <template v-if="projectNodes.length">
+        <div class="field">
+          <label for="add-project-node">目标机器节点</label>
+          <select id="add-project-node" v-model="newProjectNodeId" class="input" @change="changeAddProjectNode">
+            <option v-for="node in projectNodes" :key="node.id" :value="node.id">{{ node.name }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="add-project-directory">项目目录</label>
+          <input id="add-project-directory" v-model="newProjectDirectory" class="input" placeholder="输入节点上的完整路径"
+            :aria-invalid="Boolean(newProjectError)" :aria-describedby="newProjectError ? 'add-project-error' : undefined"
+            @input="newProjectError = ''" />
+          <div class="mchat-chips" aria-label="授权目录">
+            <button v-for="root in addProjectNode?.allowedRoots" :key="root" type="button" class="chip" :title="root"
+              @click="newProjectDirectory = root; newProjectError = ''">{{ leafPathName(root) }}</button>
+          </div>
+          <p v-if="newProjectError" id="add-project-error" class="faint" role="alert">{{ newProjectError }}</p>
+        </div>
+      </template>
+      <p v-else class="faint">暂无已授权项目目录的节点。</p>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" @click="showAddProject = false">取消</button>
+        <button type="submit" class="btn btn-primary" :disabled="!addProjectNode || !newProjectDirectory.trim()">添加项目</button>
+      </div>
+    </form>
+  </div>
+
   <!-- 桌面与移动端共用弹窗（新建会话 / @Handoff / 群发对比） -->
   <!-- 新建会话弹窗 -->
   <div v-if="showNewSession" class="modal-scrim" @click.self="showNewSession = false">
-      <div class="modal-card card">
-        <h3>{{ newSessionProvider === 'hermes' ? '新建 Hermes 对话' : '新建工作会话' }}</h3>
+      <div class="modal-card card" role="dialog" aria-modal="true" aria-labelledby="new-chat-heading"
+        @keydown.esc.stop="showNewSession = false">
+        <h3 id="new-chat-heading">
+          {{ mobileCreateScope && 'projectKey' in mobileCreateScope ? `在 ${mobileCreateScope.name} 新建对话`
+            : mobileCreateScope || newSessionProvider === 'hermes' ? `新建 ${getProviderMeta(newSessionProvider).label} 对话` : '新建工作会话' }}
+        </h3>
         <div class="field">
-          <label>目标机器节点</label>
-          <select v-model="newSessionNodeId" @change="changeCreateNode" class="input">
-            <option v-for="n in sortedNodes" :key="n.id" :value="n.id">{{ n.name }} ({{ nodeStatusText(n.id, n.status) }})</option>
+          <label for="new-chat-node">目标机器节点</label>
+          <select v-if="createNodes.length" id="new-chat-node" v-model="newSessionNodeId" @change="changeCreateNode" class="input">
+            <option v-for="n in createNodes" :key="n.id" :value="n.id">{{ n.name }} ({{ nodeStatusText(n.id, n.status) }})</option>
           </select>
+          <p v-else class="m-create-empty">{{ createProjectDirectories ? '这个项目暂无可用的在线机器。' : '暂无可用的在线机器。' }}</p>
         </div>
-        <div class="field">
-          <label>执行代理引擎</label>
-          <select v-if="readyAt(newSessionNodeId).length" v-model="newSessionProvider" class="input">
-            <option v-for="ad in readyAt(newSessionNodeId)" :key="ad.provider" :value="ad.provider">{{ getProviderMeta(ad.provider).label }}</option>
+        <div v-if="createNodes.length && !(mobileCreateScope && 'provider' in mobileCreateScope)" class="field">
+          <label for="new-chat-agent">执行代理引擎</label>
+          <select v-if="createAdapters.length" id="new-chat-agent" v-model="newSessionProvider" class="input">
+            <option v-for="ad in createAdapters" :key="ad.provider" :value="ad.provider">{{ getProviderMeta(ad.provider).label }}</option>
           </select>
           <p v-else class="faint" style="margin:0;font-size:12.5px">当前节点暂无就绪的代理引擎，请确认本地 CLI / 服务运行且鉴权正常。</p>
         </div>
-        <div class="field">
-          <label>{{ newSessionProvider === 'hermes' ? '运行目录' : '工作目录（须在节点 allowedRoots 内）' }}</label>
-          <input v-model="newSessionCwd" class="input" placeholder="例如 /Users/you/Projects/Studiolo" />
-          <div v-if="fleet.nodes.find(n => n.id === newSessionNodeId)?.allowedRoots.length" class="mchat-chips">
+        <div v-if="createNodes.length" class="field">
+          <label for="new-chat-directory">{{ newSessionProvider === 'hermes' ? '运行目录' : '工作目录' }}</label>
+          <input id="new-chat-directory" v-model="newSessionCwd" class="input" :readonly="Boolean(createProjectDirectories)"
+            placeholder="例如 /Users/you/Projects/Studiolo" />
+          <div v-if="!createProjectDirectories && fleet.nodes.find(n => n.id === newSessionNodeId)?.allowedRoots.length" class="mchat-chips">
             <button
               v-for="r in fleet.nodes.find(n => n.id === newSessionNodeId)?.allowedRoots"
               :key="r"
@@ -2541,13 +3022,13 @@ function handleClearMemory() {
             </button>
           </div>
         </div>
-        <label v-if="newSessionProvider !== 'hermes'" class="toggle-row">
+        <label v-if="createNodes.length && newSessionProvider !== 'hermes'" class="toggle-row">
           <input v-model="newSessionWorktree" type="checkbox" />
           <span>自动创建隔离 Git Worktree（`.studiolo-worktrees/`）防止并发冲突</span>
         </label>
         <div class="modal-foot">
           <button type="button" class="btn btn-ghost" @click="showNewSession = false">取消</button>
-          <button type="button" class="btn btn-primary" :disabled="!readyAt(newSessionNodeId).some(a => a.provider === newSessionProvider)" @click="submitNewSession">{{ newSessionProvider === 'hermes' ? '开始对话' : '启动会话' }}</button>
+          <button type="button" class="btn btn-primary" :disabled="!createNodes.length || !createAdapters.some(a => a.provider === newSessionProvider)" @click="submitNewSession">{{ newSessionProvider === 'hermes' ? '开始对话' : '启动会话' }}</button>
         </div>
       </div>
     </div>
@@ -3502,9 +3983,12 @@ function handleClearMemory() {
   cursor: pointer;
 }
 .m-fmenu-item:active,
-.m-fmenu-item.is-open {
+.m-fmenu-item.is-open,
+.m-fmenu-item:focus-visible {
   background: var(--surface-2);
 }
+.m-fmenu-item:disabled { opacity: .45; cursor: default; }
+.m-create-empty { margin: 0; padding: 8px 10px; font-size: 13px; color: var(--text-3); }
 .m-fmenu-item.is-reset {
   color: var(--accent);
 }
@@ -3733,49 +4217,134 @@ function handleClearMemory() {
 }
 .m-fanout-link:active { background: var(--surface-3); }
 
-.m-hermes-title { display: flex; align-items: center; gap: 7px; }
-.m-hermes-title .i { width: 16px; height: 16px; }
-.m-inbox-list {
-  margin-bottom: 14px;
+.m-filter-dropdown.m-inbox-more-menu { inset-inline-start: auto; inset-inline-end: 0; width: 152px; }
+.m-filter-dropdown.m-agent-picker { width: 120px; }
+.m-agent-picker .m-fmenu-item { padding-inline: 8px; }
+.m-project-section { margin-block: 4px 14px; }
+.m-project-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  width: 100%;
+  padding: 0 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  background: transparent;
+  text-align: start;
 }
+.m-project-trigger > .i { width: 17px; height: 17px; flex: none; color: var(--text-3); }
+.m-project-heading h2 { flex: 1; min-width: 0; margin: 0; }
+.m-project-name { min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-project-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+.m-project-add {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+}
+.m-project-add .i { width: 16px; height: 16px; }
+.m-project-add:hover, .m-project-add:focus-visible { color: var(--accent); background: var(--surface-2); }
+.m-project-more, .m-project-empty { font-size: 12px; color: var(--text-3); }
+.m-project-more { padding: 4px 5px; min-height: 30px; border: 0; background: transparent; cursor: pointer; }
+.m-project-trigger:hover, .m-project-more:hover { color: var(--accent); }
+.m-project-empty { margin: 0; padding: 12px 6px; }
+.m-session-undo { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; padding: 3px 12px; background: var(--solid); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.m-session-pin { width: 12px; height: 12px; flex: none; color: var(--text-3); }
+.m-inbox-entry { display: flex; align-items: center; width: 100%; }
+.m-inbox-entry + .m-inbox-entry { border-top: 1px solid var(--line); }
+.m-session-more { width: 100%; min-height: 38px; border-top: 1px solid var(--line); }
+.m-organize-menu {
+  position: fixed;
+  inset: auto;
+  left: var(--menu-left);
+  width: min(152px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--solid);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+.m-organize-menu::backdrop { background: rgb(0 0 0 / .14); }
+.m-organize-menu.is-snooze { width: min(240px, calc(100vw - 16px)); left: min(var(--menu-left), max(8px, calc(100vw - 248px))); }
+.m-organize-body { padding: 6px; }
+.m-organize-body .m-fmenu-item { min-height: 42px; }
+.m-organize-body .m-fmenu-item .i { width: 16px; height: 16px; flex: none; }
+.m-organize-snooze { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; padding: 8px; }
+.m-organize-snooze label { flex-basis: 100%; }
+.m-organize-snooze input { width: 72px; }
 .m-inbox-row {
-  min-height: 82px;
-  padding: 16px 16px;
-  gap: 14px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  min-height: 72px;
+  padding: 12px 12px 12px 6px;
+  gap: 11px;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
 }
+.m-inbox-row .grow { flex: 1; min-width: 0; }
+.m-inbox-row:hover { background: var(--surface-2); }
 .m-inbox-row .title {
-  font-size: 15.5px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .m-sess-avatar {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 13px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   background: var(--surface-2);
   color: var(--text);
   flex: none;
 }
-.m-sess-avatar .i { width: 22px; height: 22px; }
+.m-sess-avatar .i { width: 24px; height: 24px; }
 .m-sess-avatar.oc-opencode {
   background: #141416;
   color: #eeeeee;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
 }
-.m-sess-avatar.is-approval {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-.m-sess-avatar.is-running:not(.oc-opencode) {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
 .m-sess-top {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 .m-sess-time {
@@ -3788,7 +4357,7 @@ function handleClearMemory() {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 3px;
   min-width: 0;
 }
 .m-sess-sub-mini {
@@ -3803,69 +4372,62 @@ function handleClearMemory() {
 .m-sess-diff-num {
   color: var(--ok);
 }
-.m-sess-state-pill {
+.m-sess-trailing {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+  flex: none;
+}
+.m-sess-state {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 560;
-  padding: 2px 7px;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 9px;
   border-radius: 999px;
-  line-height: 1.3;
-}
-.m-sess-state-pill.is-done {
-  color: var(--text-3);
   background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.3;
+  white-space: nowrap;
+  color: var(--text-2);
 }
-.m-sess-state-pill.is-unread {
-  color: var(--ok);
-  background: var(--ok-soft);
-}
-.m-sess-state-pill.is-running {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.m-sess-state-pill.is-approval {
-  color: var(--warn);
-  background: var(--warn-soft);
-}
+.m-sess-state.is-complete { color: var(--ok); background: var(--ok-soft); }
+.m-sess-state.is-running, .m-sess-state.is-input { color: var(--accent); background: var(--accent-soft); }
+.m-sess-state.is-approval { color: var(--warn); background: var(--warn-soft); }
+.m-sess-sub-mini code { font-family: var(--mono); }
 .m-state-ic {
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
   flex: none;
 }
-.m-state-spinner {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.6px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-top-color: currentColor;
-  animation: m-state-spin .85s linear infinite;
-  flex: none;
+.m-state-wave { fill: currentColor; }
+.m-state-check { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+@media (prefers-reduced-motion: no-preference) {
+  .m-state-wave rect { transform-box: fill-box; transform-origin: center; animation: m-status-wave 1.05s ease-in-out infinite; }
+  .m-state-wave rect:nth-child(2) { animation-delay: -.23s; }
+  .m-state-wave rect:nth-child(3) { animation-delay: -.46s; }
+  .m-sess-state.is-input .m-state-ic,
+  .m-sess-state.is-approval .m-state-ic { animation: m-status-attention 2.1s ease-in-out infinite; }
+  .m-state-check path { animation: m-status-check .48s ease-out both; }
 }
-.m-state-ic.is-pulse {
-  animation: m-state-pulse 1.6s ease-in-out infinite;
+@keyframes m-status-wave {
+  0%, 100% { transform: scaleY(.58); opacity: .65; }
+  50% { transform: scaleY(1); opacity: 1; }
 }
-.m-state-ic.is-pop {
-  animation: m-state-breathe 2.2s ease-in-out infinite;
+@keyframes m-status-attention {
+  0%, 75%, 100% { transform: scale(1); }
+  25% { transform: scale(1.14); }
 }
-@keyframes m-state-spin {
-  to { transform: rotate(360deg); }
+@keyframes m-status-check {
+  from { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  to { stroke-dasharray: 1; stroke-dashoffset: 0; }
 }
-@keyframes m-state-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .55; transform: scale(.88); }
-}
-@keyframes m-state-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .6; }
-}
-:global([data-motion="reduced"]) .m-state-spinner,
-:global([data-motion="reduced"]) .m-state-ic.is-pulse,
-:global([data-motion="reduced"]) .m-state-ic.is-pop {
-  animation: none;
-}
+:global([data-motion="reduced"]) .m-state-wave rect,
+:global([data-motion="reduced"]) .m-sess-state .m-state-ic,
+:global([data-motion="reduced"]) .m-state-check path { animation: none; }
 
 .m-inbox-empty {
   display: grid;

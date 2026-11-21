@@ -34,7 +34,7 @@ interface ToastItem {
 }
 
 const props = defineProps<{ page: string; mobile: boolean; hideMobileTabbar?: boolean; toast: string; toastKey?: number; theme: WorkbenchTheme; mode: string; reducedMotion?: boolean }>()
-const emit = defineEmits<{ navigate: [page: string]; create: [kind: string]; action: [message: string]; syncSettings: []; back: []; toggleMode: []; toggleTheme: []; setTheme: [theme: WorkbenchTheme]; toggleReducedMotion: [] }>()
+const emit = defineEmits<{ navigate: [page: string]; create: [kind: string]; action: [message: string]; openSpace: [spaceId?: string]; syncSettings: []; back: []; toggleMode: []; toggleTheme: []; setTheme: [theme: WorkbenchTheme]; toggleReducedMotion: [] }>()
 const auth = useAuthStore()
 const automation = useAutomationStore()
 const fleet = useFleetStore()
@@ -153,6 +153,10 @@ const palette = ref<HTMLDialogElement>()
 const query = ref('')
 const commandIndex = ref(0)
 const add = ref('')
+function openQuickSpace(spaceId?: string) {
+  add.value = ''
+  emit('openSpace', spaceId)
+}
 const toasts = ref<ToastItem[]>([])
 let toastSeq = 0
 const navGroups = [...navigation, { section: '', items: footer }]
@@ -378,7 +382,7 @@ onUnmounted(() => {
             </button>
           </template>
         </nav>
-        <OpusQuickAdd :kind="add" :offline="syncKind === 'offline'" @change="add = $event" @create="add = ''; emit('create', $event)" @action="emit('action', $event)" @open-share="go('Space')" />
+        <OpusQuickAdd :kind="add" :offline="syncKind === 'offline'" @change="add = $event" @create="add = ''; emit('create', $event)" @action="emit('action', $event)" @open-share="openQuickSpace" />
         <div class="toast-host mtoast"><div v-for="item in toasts" :key="item.id" class="toast" :class="{ out: item.out }" role="status">{{ item.text }}</div></div>
       </div>
     </template>

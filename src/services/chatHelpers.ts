@@ -3,6 +3,7 @@
  * 包含工具调用增量合并、消息分支（编辑重发/切换分支）、跨会话消息检索与 Markdown 导出。
  */
 
+import { hasAnsiSequences, parseAnsiText } from './ansiParser.ts'
 import type {
   ChatMessage,
   ChatSession,
@@ -14,6 +15,15 @@ import type {
   ToolCallBadge,
   ToolCallStatus,
 } from '../types/fleet'
+
+export function sessionInboxProject(session: Pick<ChatSession, 'cwd' | 'worktreePath' | 'projectKey' | 'projectName'>) {
+  const path = (session.worktreePath || session.cwd || '').replace(/\\/g, '/')
+  const base = path.split(/\/\.studiolo-worktrees(?:\/|$)/i, 1)[0]
+  const folder = base.split('/').filter(part => part && !/^[a-z]:$/i.test(part)).at(-1)
+  const name = session.projectName || folder
+  return name ? { key: session.projectKey || `folder:${name.toLowerCase()}`, name }
+    : { key: 'no-project', name: '未关联项目' }
+}
 
 /**
  * 将流式碎片按时间轴顺序追加到消息的 `parts` 序列中：
@@ -299,6 +309,9 @@ export function buildSessionMarkdown(
     const roleLabel = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? `Assistant (${msg.provider})` : 'System'
     lines.push(`## ${roleLabel}`)
     lines.push('')
+    for (const event of msg.systemEvents ?? []) {
+      lines.push(systemEventLabel(event), '', event.detail.summary ?? '', '')
+    }
     if (msg.parts?.length) {
       const toolMap = new Map((msg.toolCalls ?? []).map(tc => [tc.callId || tc.id, tc]))
       for (const part of msg.parts) {
@@ -378,6 +391,55 @@ export function buildSessionMarkdown(
   return lines.join('\n')
 }
 
+export function systemEventLabel(event: NonNullable<ChatMessage['systemEvents']>[number]) {
+  if (event.kind === 'handoff') return '已交接会话'
+  if (event.kind === 'reconnected') return '已重连 · 切换至快照'
+  return Number.isInteger(event.detail.retainedTurns)
+    ? `上下文已压缩 · 保留最近 ${event.detail.retainedTurns} 轮`
+    : '上下文已压缩'
+}
+
+export function mergeHistoryBoundaries(existing: ChatMessage[], snapshot: ChatMessage[]) {
+  if (!existing.some(row => row.systemEvents?.length || row.interrupted)) return snapshot
+  const snapshotIds = new Set(snapshot.map(row => row.id))
+  const anchors = new Map<number, number>()
+  let cursor = snapshot.length
+  for (let i = existing.length - 1; i >= 0 && cursor > 0; i--) {
+    const row = existing[i]
+    const sameMessage = (candidate: ChatMessage) => candidate.role === row.role && (
+      candidate.id === row.id ||
+      (row.role !== 'system' && (row.runId && candidate.runId
+        ? row.runId === candidate.runId
+        : (row.text ? row.text === candidate.text : Boolean(row.thought) && row.thought === candidate.thought)))
+    )
+    for (let j = cursor - 1; j >= 0; j--) {
+      if (!sameMessage(snapshot[j])) continue
+      anchors.set(i, j)
+      cursor = j
+      break
+    }
+  }
+
+  const firstAnchor = [...anchors].at(-1)
+  const older = firstAnchor?.[1] === 0
+    ? existing.slice(0, firstAnchor[0]).filter(row => !snapshotIds.has(row.id))
+    : []
+  const inserts = new Map<number, ChatMessage[]>()
+  let previous: number | undefined
+  const firstSnapshotAnchor = firstAnchor?.[1] ?? snapshot.length
+  for (let i = 0; i < existing.length; i++) {
+    const anchor = anchors.get(i)
+    if (anchor !== undefined) previous = anchor
+    const row = existing[i]
+    if (i < older.length || anchor !== undefined || (!row.systemEvents?.length && !row.interrupted) || snapshotIds.has(row.id)) continue
+    const at = previous === undefined ? firstSnapshotAnchor : previous + 1
+    const bucket = inserts.get(at) ?? []
+    bucket.push(row)
+    inserts.set(at, bucket)
+  }
+  return [...older, ...snapshot.flatMap((row, i) => [...(inserts.get(i) ?? []), row]), ...(inserts.get(snapshot.length) ?? [])]
+}
+
 export interface GroupedToolRun {
   type: 'tool-group'
   id: string
@@ -395,14 +457,86 @@ export type GroupedMessagePart =
   | { type: 'tool'; callId: string; tool: ToolCallBadge }
   | GroupedToolRun
 
-function classifyToolKind(name: string): 'read' | 'edit' | 'cmd' | 'search' | 'subagent' | 'other' {
-  const n = name.toLowerCase()
+export function classifyToolKind(tool: Pick<ToolCallBadge, 'name' | 'subagentSessionId'>): 'browser' | 'read' | 'edit' | 'cmd' | 'search' | 'subagent' | 'other' {
+  const n = tool.name.toLowerCase()
+  if (tool.subagentSessionId) return 'subagent'
+  if (/browser|playwright/.test(n)) return 'browser'
   if (n.includes('subagent') || n.includes('agent') || n.includes('delegate') || n.includes('task')) return 'subagent'
-  if (n.includes('edit') || n.includes('write') || n.includes('patch') || n.includes('replace') || n.includes('create')) return 'edit'
+  if (n.includes('edit') || n.includes('write') || n.includes('patch') || n.includes('replace') || n.includes('create') || n.includes('filechange')) return 'edit'
   if (n.includes('bash') || n.includes('shell') || n.includes('command') || n.includes('exec') || n.includes('run')) return 'cmd'
   if (n.includes('grep') || n.includes('search') || n.includes('glob') || n.includes('find') || n.includes('list')) return 'search'
   if (n.includes('read') || n.includes('view') || n.includes('cat') || n.includes('file')) return 'read'
   return 'other'
+}
+
+const toolOperations = {
+  browser: { icon: 'globe', action: '使用浏览器' },
+  read: { icon: 'file', action: '读取文件' },
+  edit: { icon: 'pencil', action: '编辑文件' },
+  cmd: { icon: 'terminal', action: '运行命令' },
+  search: { icon: 'search', action: '检索内容' },
+  subagent: { icon: 'branch', action: '调用子代理' },
+} as const
+
+export function describeToolCall(tool: ToolCallBadge) {
+  const kind = classifyToolKind(tool)
+  const operation = kind === 'other' ? { icon: 'api' as const, action: `调用 ${tool.name}` } : toolOperations[kind]
+  const input = tool.input
+  const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  const path = fields.filePath ?? fields.path ?? fields.file ?? fields.target_file ?? fields.filename
+  const filePath = typeof path === 'string' && !path.includes('://') ? path.trim() : ''
+  const title = tool.title?.trim()
+  const argument = typeof input === 'string' ? input : fields.command ?? fields.url ?? fields.query ?? fields.pattern ?? fields.resource
+  const target = ((kind === 'read' || kind === 'edit') && filePath)
+    || (title !== tool.name && title)
+    || filePath
+    || (typeof argument === 'string' && argument)
+    || tool.detail
+    || tool.output
+    || ''
+  const line = target.trimStart().split(/\r?\n/, 1)[0].trim()
+  const plain = hasAnsiSequences(line) ? parseAnsiText(line).map(span => span.text).join('') : line
+  const excerpt = plain.length > 180 ? `${plain.slice(0, 180)}…` : plain
+  const label = tool.status === 'error'
+    ? `${operation.action}失败`
+    : `${tool.status === 'running' ? '正在' : '已'}${operation.action}`
+  return { icon: operation.icon, filePath, label: excerpt ? `${label} · ${excerpt}` : label }
+}
+
+export function readTurnTestResult(tools: ToolCallBadge[] = []) {
+  for (const tool of [...tools].reverse()) {
+    if (!tool.output || (tool.status !== 'completed' && tool.status !== 'error')) continue
+    const command = typeof tool.input === 'string' ? tool.input
+      : (tool.input as { command?: string } | undefined)?.command || tool.title || ''
+    if (!/\b(?:pytest|vitest|jest|cargo\s+test|node\s+--test|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test)\b/i.test(command)) continue
+    const output = hasAnsiSequences(tool.output) ? parseAnsiText(tool.output).map(span => span.text).join('') : tool.output
+    const lines = output.trim().split(/\r?\n/).slice(-40)
+    const summary = lines.reverse().find(line =>
+      /^\s*(?:=+\s*(?=\d|no tests)|Tests\s*(?::|\d)|test result:\s*(?:ok|FAILED)\.)/i.test(line) ||
+      /^\s*\d+\s+(?:passed|failed)\b.*\bin\s+\d+(?:\.\d+)?s\s*$/i.test(line),
+    )
+    if (summary) {
+      const passed = summary.match(/\b(\d+)\s+passed\b/i)?.[1]
+      const failed = summary.match(/\b(\d+)\s+failed\b/i)?.[1]
+      if (passed !== undefined || failed !== undefined) {
+        return { passed: Number(passed ?? 0), failed: Number(failed ?? 0), successful: tool.status === 'completed' }
+      }
+    }
+    const passed = output.match(/^\s*[#ℹ]\s*pass\s+(\d+)\s*$/m)?.[1]
+    const failed = output.match(/^\s*[#ℹ]\s*fail\s+(\d+)\s*$/m)?.[1]
+    if (passed !== undefined && failed !== undefined) {
+      return { passed: Number(passed), failed: Number(failed), successful: tool.status === 'completed' }
+    }
+  }
+  return undefined
+}
+
+function countWorkTools(tools: ToolCallBadge[]) {
+  const counts = { browser: 0, read: 0, edit: 0, cmd: 0, search: 0, subagent: 0, other: 0 }
+  for (const tool of tools) {
+    counts[classifyToolKind(tool)] += 1
+  }
+  return counts
 }
 
 /**
@@ -425,13 +559,11 @@ export function groupMessageParts(
       toolBucket = []
       return
     }
-    const counts = { read: 0, edit: 0, cmd: 0, search: 0, subagent: 0, other: 0 }
+    const counts = countWorkTools(toolBucket.map(item => item.tool))
     let totalDurationMs = 0
     let hasRunning = false
     let hasError = false
     for (const item of toolBucket) {
-      const k = item.tool.subagentSessionId ? 'subagent' : classifyToolKind(item.tool.name)
-      counts[k] += 1
       if (typeof item.tool.durationMs === 'number' && !Number.isNaN(item.tool.durationMs)) {
         totalDurationMs += item.tool.durationMs
       }
@@ -439,6 +571,7 @@ export function groupMessageParts(
       if (item.tool.status === 'error') hasError = true
     }
     const parts: string[] = []
+    if (counts.browser) parts.push(`浏览器 ${counts.browser}`)
     if (counts.read) parts.push(`读取 ${counts.read}`)
     if (counts.search) parts.push(`检索 ${counts.search}`)
     if (counts.edit) parts.push(`修改 ${counts.edit}`)

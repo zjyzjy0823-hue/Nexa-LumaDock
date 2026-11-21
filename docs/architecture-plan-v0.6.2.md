@@ -107,7 +107,7 @@
   2. 每个节点本地配置不可从远端覆盖的 **工作区目录白名单（`allowedRoots`）**，任何会话只能在白名单目录（及其隔离 worktree）内启动；
   3. 远端节点默认开启人工审批（等价于 Codex `on-request` / `untrusted`），严禁默认放行 `--full-auto` 或 `danger-full-access`。
 - **网络状态与流事件**：状态区分从未连接、连接中、鉴权失效、在线、重连、所在设备离线、不可达、协议不兼容和能力缺失。在线由已认证握手加心跳／近期请求确认，和旧 Agent Runtime 心跳独立。流事件规范化为 `Accepted`、`ThoughtDelta`、`TextDelta`、`ToolCall`、`PermissionRequest`、`Snapshot`、`Completed`、`Failed`、`ConnectionState`，保留上游 run/message ID 与受支持 sequence/cursor，限制内存和渲染大小。中断与取消语义分开；发送确认丢失先查回执、活跃 run 或历史，仅在上游明示幂等时复用 `requestId` 重发。
-- **零正文持久化（含 Coding CLI 会话）**：只在内存保存草稿、流片段、审批卡与临时回执；离开会话、退出或切换账号后释放。重新打开会话时，直接向目标设备上的上游 Harness 拉取历史（例如 OpenCode `/session`、Codex Thread、Hermes history 或本机 CLI 自管 session），Studiolo 数据库与 Core 中继仅保留设备/节点注册元数据、白名单操作审计与状态摘要。验收哨兵扫描覆盖 Core/Local/Android 数据库、缓存、日志、诊断、通知、任务表与 Outbox。
+- **Core 零正文持久化**：在线历史由目标节点的上游 Harness 提供。客户端在当前设备用 AES-GCM 加密保存最近打开的会话和待发消息，按 Core 和账号隔离。浏览器或 WebView 使用不可导出的本地密钥。草稿、审批卡和历史附件的传输密钥保留在内存。Agent Node 的命令回执只存命令 ID 的摘要和时间，Core 中继不保存聊天正文。
 - **凭据与隐私隔离**：模型订阅凭据与网关密钥留在跑 Agent 的节点系统凭据库或本地配置内，Core 不代管用户的 Claude/OpenAI/DeepSeek 订阅密钥，只在 Core ↔ Node 间维护连接身份凭证；禁止将入站 `na_live_` 直接用作上游密钥。Shared Space 的密码和内容严禁进入聊天、Agent 凭据例外或自动化。部署拓扑与协议基线见 TBD-05；附件、Diff 预览与多 Agent 协作房范围见 TBD-07。
 
 ## Unified Scheduler Design · 定时任务管理

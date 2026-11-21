@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 use studiolo_local_core::{
-    Binding, Category, CategoryPatch, ConflictStrategy, CredentialKey, CredentialVault, Error,
+    Binding, Category, CategoryPatch, ConflictStrategy, CredentialKey, CredentialVault, DeviceSpaceRead, Error,
     LocalCore, PairingPreview, PairingRequest, PendingPairing, Result, Secret, SyncReport,
     SyncStatus, Website, WebsiteFilters, WebsitePatch,
 };
@@ -164,12 +164,41 @@ pub(crate) async fn android_show_fleet_notification(
     state: State<'_, AndroidNotifications>,
     title: String,
     body: String,
+    session_key: Option<String>,
+    ongoing: Option<bool>,
+    clear: Option<bool>,
 ) -> CommandResult<bool> {
-    state.invoke("show", json!({ "title": title, "body": body })).await
+    state.invoke("show", json!({
+        "title": title, "body": body, "sessionKey": session_key,
+        "ongoing": ongoing.unwrap_or(false), "clear": clear.unwrap_or(false)
+    })).await
+}
+
+#[tauri::command]
+pub(crate) async fn android_show_fleet_approval(
+    state: State<'_, AndroidNotifications>, count: u32, call_id: Option<String>,
+) -> CommandResult<bool> {
+    state.invoke("showApproval", json!({ "count": count, "callId": call_id })).await
+}
+
+#[tauri::command]
+pub(crate) async fn android_listen_fleet_approval(
+    state: State<'_, AndroidNotifications>, channel: tauri::ipc::Channel<Value>,
+) -> CommandResult<bool> {
+    state.invoke("listenApproval", json!({ "channel": channel })).await
 }
 
 fn command_error(error: Error) -> String {
     error.to_string()
+}
+
+#[tauri::command]
+pub(crate) async fn android_read_device_space(
+    state: State<'_, AndroidLocal>, request: DeviceSpaceRead,
+) -> CommandResult<tauri::ipc::Response> {
+    let db = state.database().await.map_err(command_error)?;
+    let body = db.read_device_space(&state.vault, request).await.map_err(command_error)?;
+    Ok(tauri::ipc::Response::new(body))
 }
 
 macro_rules! local_command {

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     env_file: .env.core
     volumes:
       - studiolo-postgres-data:/var/lib/postgresql/data
@@ -11,6 +12,7 @@ services:
       retries: 12
 
   studiolo-core:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile.core
@@ -19,7 +21,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "${STUDIOLO_CORE_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).close()"]
       interval: 10s

@@ -1,13 +1,15 @@
 /**
- * Studiolo Fleet 状态容器（纯内存多设备会话总线，聊天正文与 E2EE 密钥绝不落盘）。
+ * Studiolo Fleet 状态容器。Core 只转发聊天，设备端可加密保存历史和待发消息。
  */
 
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { Channel } from '@tauri-apps/api/core'
+import { computed, nextTick, ref, watch } from 'vue'
 import { apiRequest, ApiError } from '../api/client'
 import { androidInvoke, isAndroidLocal } from '../desktop/androidLocal'
 import { downloadAndDecryptBlob, encryptAndUploadFile } from '../services/blobTransfer'
 import { normalizeCoreOrigin } from '../services/fleetUrl'
+import { FleetLocalStore, type FleetOutboxItem } from '../services/fleetLocal'
 import {
   buildFleetWsUrl,
   createFleetNode,
@@ -25,6 +27,7 @@ import type {
   ArtifactRef,
   ChatMessage,
   ChatSession,
+  ChatSystemEvent,
   CheckpointInfo,
   ComposerMode,
   DiffAnnotation,
@@ -62,6 +65,7 @@ import {
   redactSessionTitleCredentials,
   isGenericSessionTitle,
   mergeToolCallUpdate,
+  mergeHistoryBoundaries,
   switchMessageBranch,
 } from '../services/chatHelpers'
 import { loadSoundPref, playCueSound, saveSoundPref } from '../services/soundCue'
@@ -108,6 +112,12 @@ export const useFleetStore = defineStore('fleet', () => {
     if (!target) return null
     return previous?.token === target.token && previous.origin === target.origin
       ? previous : { origin: target.origin, token: target.token }
+  })
+  const localCacheScope = computed(() => {
+    if (!auth.token || (useLinkedCore.value && !auth.coreConnection)) return ''
+    const account = auth.replicaAccount
+    if (!account) return ''
+    return JSON.stringify([linkedCore.value?.coreUrl ?? getApiBaseUrl(), linkedCore.value?.workspaceId ?? '', account])
   })
   const coreSignInUrl = computed(() => linkedCore.value && !fleetRoute.value ? linkedCore.value.coreUrl : '')
   const usageOrigin = computed(() => fleetRoute.value?.origin ?? null)
@@ -200,7 +210,17 @@ export const useFleetStore = defineStore('fleet', () => {
   const pendingApprovalsByCall = ref<Record<string, PermissionRequestCard>>({})
   const runningBySession = ref<Record<string, string>>({}) // sessionKey -> active runId
   const composerDrafts = ref<Record<string, { text: string; files: File[] }>>({})
-  const DRAFT_SESSION_KEY = 'studiolo:fleet-drafts:v1'
+  const outbox = ref<FleetOutboxItem[]>([])
+  const pendingOutboxWrites = new Set<string>()
+  const transmittingOutbox = new Map<string, object>()
+  const deliveredOutbox = new Map<string, FleetOutboxItem>()
+  const cachedHistoryKeys = new Set<string>()
+  const cachedHistoryTimes = new Map<string, number>()
+  const queuedHistoryWrites = new Set<string>()
+  let historyTimer: ReturnType<typeof setTimeout> | undefined
+  let historyWrites: Promise<void> = Promise.resolve()
+  let storage: FleetLocalStore | undefined
+  const localCacheRequested = ref(false)
   const SEND_SHORTCUT_KEY = 'studiolo:fleet-send-shortcut:v1'
   const sendShortcut = ref<'enter' | 'ctrl-enter'>(
     typeof window !== 'undefined' && window.localStorage?.getItem(SEND_SHORTCUT_KEY) === 'ctrl-enter'
@@ -209,42 +229,7 @@ export const useFleetStore = defineStore('fleet', () => {
   )
   const soundEnabled = ref<boolean>(loadSoundPref())
 
-  // 从 sessionStorage 恢复当前标签页未发出的文本草稿（仅内存标签生命周期，登出/清理立即销毁）
-  if (typeof window !== 'undefined' && window.sessionStorage) {
-    try {
-      const raw = window.sessionStorage.getItem(DRAFT_SESSION_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, string>
-        if (parsed && typeof parsed === 'object') {
-          const restored: Record<string, { text: string; files: File[] }> = {}
-          for (const [k, txt] of Object.entries(parsed)) {
-            if (typeof txt === 'string' && txt.trim()) restored[k] = { text: txt, files: [] }
-          }
-          composerDrafts.value = restored
-        }
-      }
-    } catch {
-      // 忽略解析异常
-    }
-  }
-
-  watch(
-    composerDrafts,
-    drafts => {
-      if (typeof window === 'undefined' || !window.sessionStorage) return
-      try {
-        const slim: Record<string, string> = {}
-        for (const [k, v] of Object.entries(drafts)) {
-          if (v?.text?.trim()) slim[k] = v.text
-        }
-        if (Object.keys(slim).length) window.sessionStorage.setItem(DRAFT_SESSION_KEY, JSON.stringify(slim))
-        else window.sessionStorage.removeItem(DRAFT_SESSION_KEY)
-      } catch {
-        // 存储配额受限时静默忽略
-      }
-    },
-    { deep: true },
-  )
+  try { window.sessionStorage.removeItem('studiolo:fleet-drafts:v1') } catch { /* Storage may be unavailable. */ }
 
   function toggleSendShortcut() {
     sendShortcut.value = sendShortcut.value === 'enter' ? 'ctrl-enter' : 'enter'
@@ -272,13 +257,22 @@ export const useFleetStore = defineStore('fleet', () => {
   const treeCacheByTarget = ref<Record<string, WorkspaceTreeEntry[]>>({})
   const trustPatternsByNode = ref<Record<string, string[]>>({})
   const terminalBySession = ref<Record<string, TerminalSessionState>>({})
+  const terminalPreviews = ref<Record<string, Record<number, { requestId: string; pending?: boolean; url?: string; error?: string }>>>({})
   const bookmarkedIdsBySession = ref<Record<string, string[]>>({})
   const diffAnnotationsBySession = ref<Record<string, DiffAnnotation[]>>({})
   const unreadCountBySession = ref<Record<string, number>>({})
+  let sessionViewVisible = true
   const firstUnreadMsgIdBySession = ref<Record<string, string>>({})
   const interruptedBySession = ref<Record<string, boolean>>({})
+  const stopStatusBySession = ref<Record<string, { requestId?: string; state: 'requested' | 'accepted' | 'reusable' | 'unknown' | 'error'; message?: string }>>({})
   const historyLimitBySession = ref<Record<string, number>>({})
+  const historyCursorBySession = ref<Record<string, string | null>>({})
+  const pendingHistoryPages = ref<Record<string, string>>({})
+  const historyStateBySession = ref<Record<string, { state: 'empty' | 'ready' | 'body-only' | 'error'; message?: string }>>({})
   const lastSeqBySession = ref<Record<string, number>>({})
+  const streamIdBySession = new Map<string, string>()
+  const pendingStreamResync = new Map<string, string>()
+  const forcedHistoryRequests = new Set<string>()
   const forkSeedBySession = ref<Record<string, string>>({})
   const sideChatSessionKeyByParent = ref<Record<string, string>>({})
   const composerModeBySession = ref<Record<string, ComposerMode>>({})
@@ -307,7 +301,6 @@ export const useFleetStore = defineStore('fleet', () => {
   const autoPulledProviders = new Map<string, Set<AdapterProvider>>()
   const pendingSessionLists = new Map<string, string>()
   const sessionListStates = ref<Record<string, { loading?: boolean; error?: string }>>({})
-  const sentRequestIds = new Set<string>()
   const steerSessionKeys = new Set<string>()
   const pendingOpenQueue: Array<{
     nodeId: string
@@ -317,6 +310,7 @@ export const useFleetStore = defineStore('fleet', () => {
     options?: RunOptions
     initialPrompt?: string
     initialAttachments?: ArtifactRef[]
+    initialHandoff?: { summary: string; artifact?: ArtifactRef; sourceSessionKey?: string }
   }> = []
 
   // ---------------- Computed Views ----------------
@@ -351,6 +345,45 @@ export const useFleetStore = defineStore('fleet', () => {
   const pendingApprovalsList = computed<PermissionRequestCard[]>(() =>
     Object.values(pendingApprovalsByCall.value).filter(c => c.decision === 'pending'),
   )
+  const notificationSessionKey = ref('')
+
+  function openNotifiedSession(key?: string) {
+    notificationSessionKey.value = key ?? ''
+    if (key && sessionsByKey.value[key]) activateSession(key)
+    window.dispatchEvent(new Event('studiolo:open-chat'))
+  }
+
+  if (android) {
+    const channel = new Channel<{ action: 'open' | 'allow_once' | 'deny'; callId?: string; sessionKey?: string }>()
+    channel.onmessage = ({ action, callId, sessionKey: target }) => {
+      const card = callId ? pendingApprovalsByCall.value[callId] : undefined
+      if (card?.decision === 'pending' && action !== 'open' && wsState.value === 'online') respondPermission(card.callId, action)
+      openNotifiedSession(card ? sessionKey(card.nodeId, card.provider, card.sessionId) : target)
+    }
+    void androidInvoke('android_listen_fleet_approval', { channel }).catch(() => {})
+    watch(() => [notificationsEnabled.value, pendingApprovalsList.value.map(card => card.callId).sort().join('|')], () => {
+      const pending = pendingApprovalsList.value
+      const count = notificationsEnabled.value ? pending.length : 0
+      if (!count || document.hidden) {
+        void androidInvoke('android_show_fleet_approval', { count, callId: count === 1 ? pending[0].callId : null }).catch(() => {})
+      }
+    })
+    watch(() => {
+      const attention = new Set([
+        ...pendingApprovalsList.value.map(card => sessionKey(card.nodeId, card.provider, card.sessionId)),
+        ...Object.values(pendingFormsById.value).filter(form => form.status === 'pending')
+          .map(form => sessionKey(form.nodeId, form.provider, form.sessionId)),
+      ])
+      const active = Object.keys(runningBySession.value).filter(key => !attention.has(key))
+      return { attention: [...attention], active, enabled: notificationsEnabled.value && wsState.value === 'online' }
+    }, ({ attention, active, enabled }) => {
+      const count = attention.length + active.length
+      void androidInvoke('android_show_fleet_notification', {
+        title: 'Studiolo 任务状态', body: `${active.length} 个运行中 · ${attention.length} 个待处理`,
+        sessionKey: attention[0] ?? active[0] ?? null, ongoing: true, clear: !enabled || count === 0,
+      }).catch(() => {})
+    }, { immediate: true })
+  }
 
   const nodesWithApprovalPending = computed(() => {
     const set = new Set<string>()
@@ -397,12 +430,18 @@ export const useFleetStore = defineStore('fleet', () => {
     pendingApprovalsByCall.value = {}
     runningBySession.value = {}
     activeSessionKey.value = ''
-    sentRequestIds.clear()
     steerSessionKeys.clear()
     composerDrafts.value = {}
-    if (typeof window !== 'undefined' && window.sessionStorage) {
-      try { window.sessionStorage.removeItem(DRAFT_SESSION_KEY) } catch { /* ignore */ }
-    }
+    outbox.value = []
+    pendingOutboxWrites.clear()
+    transmittingOutbox.clear()
+    deliveredOutbox.clear()
+    cachedHistoryKeys.clear()
+    cachedHistoryTimes.clear()
+    queuedHistoryWrites.clear()
+    clearTimeout(historyTimer)
+    historyTimer = undefined
+    storage = undefined
     runSettings.value = {}
     catalogs.value = {}
     agentsByTarget.value = {}
@@ -417,13 +456,21 @@ export const useFleetStore = defineStore('fleet', () => {
     treeCacheByTarget.value = {}
     trustPatternsByNode.value = {}
     terminalBySession.value = {}
+    terminalPreviews.value = {}
     bookmarkedIdsBySession.value = {}
     diffAnnotationsBySession.value = {}
     unreadCountBySession.value = {}
     firstUnreadMsgIdBySession.value = {}
     interruptedBySession.value = {}
+    stopStatusBySession.value = {}
     historyLimitBySession.value = {}
+    historyCursorBySession.value = {}
+    pendingHistoryPages.value = {}
+    historyStateBySession.value = {}
     lastSeqBySession.value = {}
+    streamIdBySession.clear()
+    pendingStreamResync.clear()
+    forcedHistoryRequests.clear()
     forkSeedBySession.value = {}
     sideChatSessionKeyByParent.value = {}
     composerModeBySession.value = {}
@@ -492,9 +539,94 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   })
 
+  watch([localCacheScope, fleetRoute, localCacheRequested], async ([scope, , requested]) => {
+    if (storage && storage.scope !== scope) clearSessionMemory()
+    if (!requested || !scope || !FleetLocalStore.available()) return
+    const local = new FleetLocalStore(scope)
+    storage = local
+    const [cached, unsent] = await Promise.allSettled([local.history(), local.outbox()])
+    if (storage !== local || localCacheScope.value !== scope) return
+    if (cached.status === 'fulfilled') {
+      for (const { id, value } of cached.value) {
+        cachedHistoryTimes.set(id, value.savedAt)
+        if (!sessionsByKey.value[id]) sessionsByKey.value[id] = value.session
+        const existing = messagesBySession.value[id]
+        if (!existing?.length) {
+          cachedHistoryKeys.add(id)
+          messagesBySession.value[id] = value.messages
+        } else if (value.messages.some(row => row.systemEvents?.length || row.interrupted)) {
+          messagesBySession.value = {
+            ...messagesBySession.value,
+            [id]: mergeHistoryBoundaries(value.messages, existing).slice(-MAX_MESSAGES_PER_SESSION),
+          }
+        }
+      }
+    }
+    if (unsent.status === 'fulfilled') {
+      const newIds = new Set(outbox.value.map(item => item.id))
+      outbox.value = [...unsent.value.filter(item => !newIds.has(item.id)), ...outbox.value]
+      for (const item of unsent.value) {
+        if (item.session && !sessionsByKey.value[item.sessionKey]) sessionsByKey.value[item.sessionKey] = item.session
+      }
+      void flushOutbox()
+    }
+  }, { immediate: true })
+
+  const chatNodes = computed<AgentNode[]>(() => {
+    const byId = new Map(nodes.value.map(node => [node.id, node]))
+    const unavailableRoots = new Map<string, Set<string>>()
+    for (const session of Object.values(sessionsByKey.value)) {
+      if (byId.has(session.nodeId)) continue
+      const roots = unavailableRoots.get(session.nodeId) ?? new Set<string>()
+      if (session.cwd) roots.add(session.cwd)
+      unavailableRoots.set(session.nodeId, roots)
+    }
+    for (const [id, roots] of unavailableRoots) {
+      byId.set(id, {
+        id, workspaceId: '', name: id, platform: 'unknown', hostname: null, status: 'offline',
+        tokenLast4: null, tokenCreatedAt: null, revokedAt: null, allowedRoots: [...roots],
+        adapters: [], transferEndpoints: [], lastSeenAt: null, createdAt: '', updatedAt: '',
+      })
+    }
+    return [...byId.values()]
+  })
+
+  watch(messagesBySession, (rows, previous) => {
+    if (!storage) return
+    for (const [key, messages] of Object.entries(rows)) {
+      if (messages !== previous[key] && messages.length && !cachedHistoryKeys.has(key)) queuedHistoryWrites.add(key)
+    }
+    if (queuedHistoryWrites.size && !historyTimer) historyTimer = setTimeout(persistHistory, 500)
+  })
+
+  function persistHistory() {
+    historyTimer = undefined
+    const local = storage
+    if (!local) return
+    const keys = [...queuedHistoryWrites]
+    queuedHistoryWrites.clear()
+    historyWrites = historyWrites.then(async () => {
+      for (const key of keys) {
+        if (storage !== local) return
+        const session = sessionsByKey.value[key]
+        const rows = messagesBySession.value[key]
+        if (!session || !rows?.length) continue
+        await local.saveHistory(key, session, rows)
+        cachedHistoryTimes.set(key, Date.now())
+      }
+      if (storage !== local) return
+      const oldKeys = [...cachedHistoryTimes].sort((a, b) => b[1] - a[1]).slice(24)
+      for (const [key] of oldKeys) {
+        await local.remove('history', key)
+        cachedHistoryTimes.delete(key)
+      }
+    }).catch(() => { /* The provider remains the source of online history. */ })
+  }
+
   // ---------------- REST Node Lifecycle ----------------
   async function loadNodes() {
     fleetRequested = true
+    localCacheRequested.value = true
     const route = fleetRoute.value
     if (!route) return
     nodesLoading.value = true
@@ -510,7 +642,10 @@ export const useFleetStore = defineStore('fleet', () => {
           syncProviderForNode(firstOnline)
         }
       }
-      if (wsState.value === 'online') fetched.forEach(autoPullSessionsForNode)
+      if (wsState.value === 'online') {
+        fetched.forEach(autoPullSessionsForNode)
+        void flushOutbox()
+      }
     } catch (err) {
       if (fleetRoute.value !== route) return
       if (linkedCore.value && err instanceof ApiError && err.status === 401) coreSession.value = null
@@ -573,6 +708,7 @@ export const useFleetStore = defineStore('fleet', () => {
   // ---------------- WebSocket 连接与首帧认证 ----------------
   function connectSocket() {
     fleetRequested = true
+    localCacheRequested.value = true
     const route = fleetRoute.value
     if (!route) return
     const { token, origin } = route
@@ -613,6 +749,10 @@ export const useFleetStore = defineStore('fleet', () => {
       if (socket !== ws || fleetRoute.value !== route) return
       socket = null
       autoPulledProviders.clear()
+      pendingStreamResync.clear()
+      forcedHistoryRequests.clear()
+      pendingHistoryPages.value = {}
+      transmittingOutbox.clear()
       for (const target of pendingSessionLists.values()) sessionListStates.value[target] = {}
       pendingSessionLists.clear()
       if (intentionalClose || ev.code === 4401) {
@@ -656,6 +796,15 @@ export const useFleetStore = defineStore('fleet', () => {
       ? [...prev.slice(prev.length - MAX_MESSAGES_PER_SESSION + 1), msg]
       : [...prev, msg]
     messagesBySession.value = { ...messagesBySession.value, [sKey]: next }
+  }
+
+  function appendSystemEvent(sKey: string, nodeId: string, provider: AdapterProvider, id: string, event: ChatSystemEvent) {
+    if (messagesBySession.value[sKey]?.some(row => row.id === id)) return
+    cachedHistoryKeys.delete(sKey)
+    appendMessage(sKey, {
+      id, role: 'system', nodeId, provider, text: '',
+      systemEvents: [event], createdAt: event.at,
+    })
   }
 
   function ensureStreamingAssistantMessage(
@@ -724,7 +873,7 @@ export const useFleetStore = defineStore('fleet', () => {
     if (node.status !== 'online') return
     const pulled = autoPulledProviders.get(node.id) ?? new Set<AdapterProvider>()
     for (const adapter of node.adapters) {
-      if (adapter.status !== 'ready' || !adapter.capabilities.includes('history') || pulled.has(adapter.provider)) continue
+      if (adapter.status !== 'ready' || !(adapter.supports?.history ?? adapter.capabilities.includes('history')) || pulled.has(adapter.provider)) continue
       if (requestSessionsList(node.id, adapter.provider)) pulled.add(adapter.provider)
     }
     autoPulledProviders.set(node.id, pulled)
@@ -759,6 +908,11 @@ export const useFleetStore = defineStore('fleet', () => {
       if (activeSessionKey.value) {
         subscribeSession(activeSessionKey.value)
       }
+      for (const key of Object.keys(runningBySession.value)) {
+        if (key !== activeSessionKey.value && runningBySession.value[key]) subscribeSession(key)
+      }
+      if (activeSessionKey.value) loadSessionHistory(activeSessionKey.value, cachedHistoryKeys.has(activeSessionKey.value))
+      void flushOutbox()
       return
     }
 
@@ -784,10 +938,41 @@ export const useFleetStore = defineStore('fleet', () => {
       })
       const liveNode = nodes.value.find(n => n.id === frame.nodeId)
       if (liveNode && liveStatus === 'online') autoPullSessionsForNode(liveNode)
+      if (liveStatus === 'online') {
+        for (const key of new Set([activeSessionKey.value, ...Object.keys(runningBySession.value)])) {
+          if (sessionsByKey.value[key]?.nodeId === frame.nodeId) subscribeSession(key)
+        }
+        void flushOutbox()
+      }
       return
     }
 
     if (frame.requestId && ['Failed', 'NodeUnavailable', 'Error'].includes(etype)) {
+      const pendingPrompt = outbox.value.find(item => item.id === frame.requestId)
+      if (pendingPrompt) {
+        transmittingOutbox.delete(pendingPrompt.id)
+        if (etype !== 'NodeUnavailable') {
+          restoreOutboxDraft(pendingPrompt)
+          void removeOutboxPrompt(pendingPrompt)
+          const rows = messagesBySession.value[pendingPrompt.sessionKey] ?? []
+          messagesBySession.value = { ...messagesBySession.value, [pendingPrompt.sessionKey]: rows.filter(row => row.id !== `user-${pendingPrompt.id}`) }
+          lastError.value = frame.message || '发送失败，消息已还原到输入框'
+        }
+        return
+      }
+      const streamRequest = [...pendingStreamResync].find(([, requestId]) => requestId === frame.requestId)
+      if (streamRequest) {
+        pendingStreamResync.delete(streamRequest[0])
+        return
+      }
+      const forcedHistory = forcedHistoryRequests.delete(frame.requestId)
+      const historyRequest = Object.keys(pendingHistoryPages.value).find(key => pendingHistoryPages.value[key] === frame.requestId)
+      if (historyRequest) {
+        delete pendingHistoryPages.value[historyRequest]
+        historyStateBySession.value[historyRequest] = { state: 'error', message: frame.message || '无法读取历史消息' }
+        return
+      }
+      if (forcedHistory) return
       const listTarget = pendingSessionLists.get(frame.requestId)
       if (listTarget) {
         pendingSessionLists.delete(frame.requestId)
@@ -806,6 +991,16 @@ export const useFleetStore = defineStore('fleet', () => {
         lastError.value = frame.message || '无法创建会话'
         return
       }
+    }
+
+    if (etype === 'DuplicateIgnored' && frame.requestId) {
+      const pending = outbox.value.find(item => item.id === frame.requestId)
+      if (pending) {
+        void removeOutboxPrompt(pending)
+        subscribeSession(pending.sessionKey)
+        loadSessionHistory(pending.sessionKey, true)
+      }
+      return
     }
     const nodeId = frame.nodeId ?? selectedNode.value?.id ?? ''
     const provider = (frame.provider ?? selectedProvider.value) as AdapterProvider
@@ -920,6 +1115,8 @@ export const useFleetStore = defineStore('fleet', () => {
           title: resolvedTitle,
           cwd: s.cwd || next[k]?.cwd || '',
           worktreePath: s.worktreePath || next[k]?.worktreePath,
+          projectKey: s.projectKey || next[k]?.projectKey,
+          projectName: s.projectName || next[k]?.projectName,
           branch: s.branch || next[k]?.branch,
           model: s.model || next[k]?.model,
           updatedAt: s.updatedAt ?? next[k]?.updatedAt,
@@ -935,6 +1132,7 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'SessionOpened' && nodeId && frame.sessionId) {
       const k = sessionKey(nodeId, provider, frame.sessionId)
+      const existing = sessionsByKey.value[k]
       const initialTitle =
         frame.title && !isGenericSessionTitle(frame.title) ? redactSessionTitleCredentials(frame.title) : '新对话'
       sessionsByKey.value = {
@@ -946,6 +1144,10 @@ export const useFleetStore = defineStore('fleet', () => {
           title: initialTitle,
           cwd: frame.cwd || '',
           worktreePath: frame.worktreePath ?? null,
+          projectKey: frame.projectKey,
+          projectName: frame.projectName,
+          branch: frame.branch,
+          updatedAt: existing?.updatedAt ?? Date.now(),
         },
       }
       if (!messagesBySession.value[k]) {
@@ -965,7 +1167,9 @@ export const useFleetStore = defineStore('fleet', () => {
           applyDefaultModelPref(k, nodeId, provider)
         }
         item.onOpened?.(k)
-        if (item.initialPrompt) {
+        if (item.initialHandoff) {
+          sendHandoff({ targetNodeId: nodeId, targetProvider: provider, targetSessionId: frame.sessionId, ...item.initialHandoff })
+        } else if (item.initialPrompt) {
           void sendPromptToSession(k, item.initialPrompt, item.initialAttachments ?? [], runSettings.value[k] ?? item.options)
         }
       } else {
@@ -976,10 +1180,37 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'SessionHistory' && nodeId && frame.sessionId && Array.isArray(frame.messages)) {
       const k = sessionKey(nodeId, provider, frame.sessionId)
-      const existingLen = messagesBySession.value[k]?.length ?? 0
+      if (pendingHistoryPages.value[k] === frame.requestId) delete pendingHistoryPages.value[k]
+      if (frame.cursorExpired) {
+        delete historyCursorBySession.value[k]
+        loadSessionHistory(k, true)
+        return
+      }
+      if (frame.historyCursor !== undefined) historyCursorBySession.value[k] = frame.historyCursor
+      if (frame.messages.length) {
+        const hasDetails = frame.messages.some(row => row.thought || row.toolCalls?.length || row.parts?.some(part => part.type !== 'text'))
+        if (!frame.beforeCursor || historyStateBySession.value[k]?.state !== 'ready') {
+          historyStateBySession.value[k] = { state: provider === 'hermes' && !hasDetails ? 'body-only' : 'ready' }
+        }
+      } else if (!frame.beforeCursor) {
+        historyStateBySession.value[k] = { state: 'empty' }
+      }
+      const existing = messagesBySession.value[k] ?? []
+      const liveRunId = runningBySession.value[k]
+      const hasLiveHistory = frame.messages.some(m => m.runId || m.thought || m.toolCalls?.length)
+      const forced = Boolean(frame.requestId && forcedHistoryRequests.delete(frame.requestId))
       // 支持向上分页加载更早历史：当新拉取条数多于当前内存条数时允许替换刷新
-      if (existingLen > 0 && frame.messages.length <= existingLen) return
+      const hasSystemHistory = frame.messages.some(m => m.systemEvents?.length)
+      if (!forced && !frame.beforeCursor && !hasLiveHistory && !hasSystemHistory && existing.some(m => m.role !== 'system') &&
+        frame.messages.length <= existing.length) return
+      if (!frame.messages.length) return
+      cachedHistoryKeys.delete(k)
       const hydrated: ChatMessage[] = frame.messages.map((m, idx) => {
+        const live = (m.runId || m.requestId) && existing.find(row => row.role === m.role && (
+          Boolean(m.runId && (row.runId === m.runId || row.requestId === m.runId)) || Boolean(m.requestId && row.requestId === m.requestId)
+        ))
+        if (live && live.text.length >= (m.text?.length ?? 0) && (live.thought?.length ?? 0) >= (m.thought?.length ?? 0) &&
+          (live.toolCalls?.length ?? 0) >= (m.toolCalls?.length ?? 0)) return live
         const mappedTools = Array.isArray(m.toolCalls) && m.toolCalls.length
           ? m.toolCalls.map((tc, tIdx) => ({
               id: tc.callId || tc.id || `hist-tc-${idx}-${tIdx}`,
@@ -1013,20 +1244,41 @@ export const useFleetStore = defineStore('fleet', () => {
             }, [])
           : undefined
         return {
-          id: `hist-${idx}-${Date.now()}`,
-          role: m.role === 'user' ? 'user' : 'assistant',
+          id: m.id || (m.runId ? `hist-${m.role}-${m.runId}` : `hist-${frame.requestId ?? createRequestId()}-${idx}`),
+          role: m.role === 'user' || m.role === 'system' ? m.role : 'assistant',
           nodeId,
           provider,
+          runId: m.runId,
+          requestId: m.requestId,
           text: m.text ?? '',
+          ...(m.systemEvents?.length ? { systemEvents: m.systemEvents } : {}),
           ...(m.thought ? { thought: m.thought } : {}),
           ...(mappedTools ? { toolCalls: mappedTools } : {}),
           ...(mappedParts?.length ? { parts: mappedParts } : {}),
           ...(combinedMedia.length ? { media: combinedMedia } : {}),
-          streaming: false,
-          createdAt: Date.now(),
+          streaming: Boolean(m.runId && m.role === 'assistant' && m.runId === liveRunId),
+          createdAt: m.createdAt ?? Date.now(),
         }
       })
-      messagesBySession.value = { ...messagesBySession.value, [k]: hydrated.slice(-MAX_MESSAGES_PER_SESSION) }
+      if (frame.beforeCursor) {
+        const existingIds = new Set(existing.map(row => row.id))
+        messagesBySession.value = { ...messagesBySession.value, [k]: [
+          ...hydrated.filter(row => !existingIds.has(row.id)), ...existing,
+        ].slice(-MAX_MESSAGES_PER_SESSION) }
+        return
+      }
+      if (liveRunId) {
+        for (const message of existing) {
+          if ((message.runId === liveRunId || message.requestId === liveRunId)
+            && !hydrated.some(row => row.role === message.role && (row.runId === liveRunId || row.requestId === liveRunId))) {
+            hydrated.push(message)
+          }
+        }
+      }
+      messagesBySession.value = {
+        ...messagesBySession.value,
+        [k]: mergeHistoryBoundaries(existing, hydrated).slice(-MAX_MESSAGES_PER_SESSION),
+      }
       const curSess = sessionsByKey.value[k]
       if (curSess && isGenericSessionTitle(curSess.title)) {
         const firstUser = hydrated.find(x => x.role === 'user' && x.text.trim())
@@ -1058,18 +1310,58 @@ export const useFleetStore = defineStore('fleet', () => {
 
     const effProvider = sessionsByKey.value[sKey]?.provider ?? provider
 
-    if (typeof frame.seq === 'number' && frame.seq > (lastSeqBySession.value[sKey] ?? 0)) {
+    if (typeof frame.sequence === 'number' && frame.streamId) {
+      const prior = streamIdBySession.get(sKey)
+      const cursor = lastSeqBySession.value[sKey] ?? 0
+      if (prior === frame.streamId && frame.sequence <= cursor) return
+      if (prior === frame.streamId && frame.sequence > cursor + 1 && subscribeSession(sKey)) return
+      streamIdBySession.set(sKey, frame.streamId)
+      lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.sequence }
+    } else if (typeof frame.seq === 'number' && frame.seq > (lastSeqBySession.value[sKey] ?? 0)) {
       lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.seq }
     }
 
     if (etype === 'SessionStreamReplay' && sid && Array.isArray(frame.events)) {
-      if (frame.active && frame.events.length) {
+      pendingStreamResync.delete(sKey)
+      const refreshApprovals = () => {
+        if (!Array.isArray(frame.pendingApprovals)) return
+        dismissSessionApprovals(sKey, new Set(frame.pendingApprovals.map(evt => evt.callId)))
+        for (const approval of frame.pendingApprovals) handleWsEvent({ ...approval, nodeId, provider: effProvider, sessionId: sid })
+      }
+      if (frame.snapshotRequired) {
+        const at = Date.now()
+        appendSystemEvent(sKey, nodeId, effProvider, `sys-reconnect-${frame.requestId ?? createRequestId()}`, {
+          kind: 'reconnected', at, detail: { summary: '实时记录无法接续，已请求节点返回会话快照。' },
+        })
+        if (frame.streamId) streamIdBySession.set(sKey, frame.streamId)
+        else streamIdBySession.delete(sKey)
+        lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.lastSeq ?? 0 }
+        if (frame.active && frame.runId) {
+          runningBySession.value = { ...runningBySession.value, [sKey]: frame.runId }
+        } else if (!frame.active) {
+          const runs = { ...runningBySession.value }
+          delete runs[sKey]
+          runningBySession.value = runs
+          messagesBySession.value = { ...messagesBySession.value, [sKey]: (messagesBySession.value[sKey] ?? [])
+            .map(message => message.streaming ? { ...message, streaming: false, liveProgress: undefined } : message) }
+        }
+        loadSessionHistory(sKey, true)
+        requestSessionDiff(sKey)
+        refreshApprovals()
+        return
+      }
+      if (frame.events.length) {
         // 仅在全量重放（非 lastSeq 增量模式）时清理半截占位，避免增量续传造成内容闪断
         if (!frame.incremental) {
           const prevMsgs = messagesBySession.value[sKey] ?? []
-          const trimmed = prevMsgs.filter(m => !(m.role === 'assistant' && m.streaming))
+          const replayRunIds = new Set(frame.events.map(event => event.runId || event.requestId).filter(Boolean))
+          const trimmed = prevMsgs.filter(m => !(m.role === 'assistant' && (m.streaming || (m.runId && replayRunIds.has(m.runId)))))
           if (trimmed.length !== prevMsgs.length) {
             messagesBySession.value = { ...messagesBySession.value, [sKey]: trimmed }
+          }
+          if (frame.streamId && typeof frame.events[0].sequence === 'number') {
+            streamIdBySession.set(sKey, frame.streamId)
+            lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.events[0].sequence - 1 }
           }
         }
         for (const sub of frame.events) {
@@ -1077,8 +1369,13 @@ export const useFleetStore = defineStore('fleet', () => {
         }
       }
       if (typeof frame.lastSeq === 'number') {
-        lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: frame.lastSeq }
+        const sameStream = streamIdBySession.get(sKey) === frame.streamId
+        if (frame.streamId) streamIdBySession.set(sKey, frame.streamId)
+        const cursor = sameStream ? Math.max(lastSeqBySession.value[sKey] ?? 0, frame.lastSeq) : frame.lastSeq
+        lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: cursor }
       }
+      refreshApprovals()
+      void flushOutbox()
       return
     }
 
@@ -1176,12 +1473,23 @@ export const useFleetStore = defineStore('fleet', () => {
 
     if (etype === 'Accepted') {
       const rid = frame.runId || frame.requestId || createRequestId()
+      const delivered = outbox.value.find(item => item.id === frame.requestId)
+      if (delivered) {
+        deliveredOutbox.set(rid, delivered)
+        void removeOutboxPrompt(delivered)
+      }
       lastError.value = null
       if (frame.requestId && frame.runId && frame.runId !== frame.requestId) {
         const promptMeta = pendingRunPrompts.get(`${sKey}::${frame.requestId}`)
         if (promptMeta) pendingRunPrompts.set(`${sKey}::${frame.runId}`, promptMeta)
       }
       runningBySession.value = { ...runningBySession.value, [sKey]: rid }
+      delete stopStatusBySession.value[sKey]
+      if (frame.handoffSummary) {
+        appendSystemEvent(sKey, nodeId, effProvider, `sys-handoff-${frame.requestId || rid}`, {
+          kind: 'handoff', at: Date.now(), detail: { summary: frame.handoffSummary, sourceSessionKey: frame.handoffSource },
+        })
+      }
       if (interruptedBySession.value[sKey]) {
         const nextInt = { ...interruptedBySession.value }
         delete nextInt[sKey]
@@ -1189,6 +1497,15 @@ export const useFleetStore = defineStore('fleet', () => {
       }
       lastSeqBySession.value = { ...lastSeqBySession.value, [sKey]: typeof frame.seq === 'number' ? frame.seq : 0 }
       ensureStreamingAssistantMessage(sKey, nodeId, effProvider, rid, frame.requestId)
+      return
+    }
+
+    if (etype === 'RunStopStatus') {
+      if (frame.requestId && stopStatusBySession.value[sKey]?.requestId === frame.requestId &&
+        (frame.status === 'accepted' || frame.status === 'error')) {
+        stopStatusBySession.value[sKey] = { requestId: frame.status === 'accepted' ? frame.requestId : undefined,
+          state: frame.status, message: frame.message }
+      }
       return
     }
 
@@ -1207,6 +1524,7 @@ export const useFleetStore = defineStore('fleet', () => {
         ...msg,
         thought: (msg.thought ?? '') + deltaText,
         parts: appendMessagePart(msg.parts, { type: 'thought', text: deltaText }),
+        liveProgress: { type: 'thought' },
       }))
       return
     }
@@ -1217,6 +1535,7 @@ export const useFleetStore = defineStore('fleet', () => {
         ...msg,
         text: msg.text + deltaText,
         parts: appendMessagePart(msg.parts, { type: 'text', text: deltaText }),
+        liveProgress: { type: 'text' },
       }))
       return
     }
@@ -1234,6 +1553,7 @@ export const useFleetStore = defineStore('fleet', () => {
           ...msg,
           toolCalls: mergeToolCallUpdate(msg.toolCalls, frame),
           parts: appendMessagePart(msg.parts, { type: 'tool', callId: callKey }),
+          liveProgress: { type: 'tool', callId: callKey },
           ...(nextMedia ? { media: nextMedia } : {}),
         }
       })
@@ -1260,7 +1580,7 @@ export const useFleetStore = defineStore('fleet', () => {
           forms: exists ? prev.map(f => (f.formId === formCard.formId ? formCard : f)) : [...prev, formCard],
         }
       })
-      notifyBackgroundEvent('Studiolo 智能体提问', formCard.title)
+      notifyBackgroundEvent('Studiolo 智能体提问', formCard.title, 'approval', false, sKey)
       return
     }
 
@@ -1309,6 +1629,16 @@ export const useFleetStore = defineStore('fleet', () => {
         createdAt: Date.now(),
       })
       requestSessionDiff(sKey)
+      return
+    }
+
+    if (etype === 'TerminalPreview' && frame.port && frame.requestId) {
+      const pending = terminalPreviews.value[sKey]?.[frame.port]
+      if (pending?.requestId === frame.requestId) {
+        const valid = frame.previewUrl && /^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:\d+\/__studiolo_preview\/[\w-]+$/.test(frame.previewUrl)
+        terminalPreviews.value[sKey][frame.port] = valid ? { requestId: frame.requestId, url: frame.previewUrl }
+          : { requestId: frame.requestId, error: frame.error || '未收到有效的节点预览地址' }
+      }
       return
     }
 
@@ -1465,6 +1795,12 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'SessionDeleted') {
+      const local = storage
+      cachedHistoryKeys.delete(sKey)
+      cachedHistoryTimes.delete(sKey)
+      queuedHistoryWrites.delete(sKey)
+      historyWrites = historyWrites.then(() => local?.remove('history', sKey)).catch(() => {})
+      for (const item of outbox.value.filter(row => row.sessionKey === sKey)) void removeOutboxPrompt(item)
       const nextSessions = { ...sessionsByKey.value }
       delete nextSessions[sKey]
       sessionsByKey.value = nextSessions
@@ -1506,6 +1842,10 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'SessionCompacted') {
+      if (frame.systemEvent) {
+        appendSystemEvent(sKey, nodeId, effProvider, frame.messageId ?? `sys-${frame.systemEvent.kind}-${frame.systemEvent.at}`, frame.systemEvent)
+        return
+      }
       appendMessage(sKey, {
         id: `sys-cmp-${Date.now()}`,
         role: 'system',
@@ -1520,6 +1860,7 @@ export const useFleetStore = defineStore('fleet', () => {
     }
 
     if (etype === 'PermissionRequest' && frame.callId) {
+      const wasPending = pendingApprovalsByCall.value[frame.callId]?.decision === 'pending'
       const card: PermissionRequestCard = {
         callId: frame.callId,
         nodeId,
@@ -1534,9 +1875,9 @@ export const useFleetStore = defineStore('fleet', () => {
       pendingApprovalsByCall.value = { ...pendingApprovalsByCall.value, [card.callId]: card }
       updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
         ...msg,
-        approvals: [...(msg.approvals ?? []), card],
+        approvals: [...(msg.approvals ?? []).filter(approval => approval.callId !== card.callId), card],
       }))
-      notifyBackgroundEvent('Studiolo 待执行审批', card.command || card.title)
+      if (!wasPending) notifyBackgroundEvent('Studiolo 待执行审批', '有待审批请求', 'approval', true, sKey)
       return
     }
 
@@ -1556,6 +1897,9 @@ export const useFleetStore = defineStore('fleet', () => {
       const active = runningBySession.value[sKey]
       const knownRequest = frame.requestId && pendingRunPrompts.has(`${sKey}::${frame.requestId}`)
       if (active && frame.runId && active !== frame.runId && !knownRequest) return
+      if (stopStatusBySession.value[sKey]?.requestId) {
+        stopStatusBySession.value[sKey] = { state: 'unknown', message: '本轮已结束，代理未确认是否由停止请求触发' }
+      }
       const promptMeta =
         (frame.runId ? pendingRunPrompts.get(`${sKey}::${frame.runId}`) : undefined) ??
         (frame.requestId ? pendingRunPrompts.get(`${sKey}::${frame.requestId}`) : undefined)
@@ -1567,6 +1911,8 @@ export const useFleetStore = defineStore('fleet', () => {
       updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
         ...msg,
         streaming: false,
+        liveProgress: undefined,
+        toolCalls: msg.toolCalls?.map(tool => tool.status === 'running' ? { ...tool, status: 'error', error: '本轮已结束，工具未返回最终状态' } : tool),
         ...(durationMs !== undefined ? { durationMs } : {}),
         ...(modelLabel ? { modelLabel } : {}),
       }))
@@ -1609,11 +1955,13 @@ export const useFleetStore = defineStore('fleet', () => {
       }
       if (frame.runId) pendingRunPrompts.delete(`${sKey}::${frame.runId}`)
       if (frame.requestId) pendingRunPrompts.delete(`${sKey}::${frame.requestId}`)
+      if (frame.runId || frame.requestId) deliveredOutbox.delete((frame.runId || frame.requestId)!)
       const copy = { ...runningBySession.value }
       delete copy[sKey]
       runningBySession.value = copy
+      dismissSessionApprovals(sKey)
       steerSessionKeys.delete(sKey)
-      if (sKey !== activeSessionKey.value) {
+      if (sKey !== activeSessionKey.value || !sessionViewVisible) {
         unreadCountBySession.value = {
           ...unreadCountBySession.value,
           [sKey]: (unreadCountBySession.value[sKey] ?? 0) + 1,
@@ -1630,8 +1978,11 @@ export const useFleetStore = defineStore('fleet', () => {
         'Studiolo 任务已完成',
         sessionsByKey.value[sKey]?.title || '代理回复已就绪',
         'complete',
+        false,
+        sKey,
       )
       void drainNextQueuedPrompt(sKey)
+      void flushOutbox()
       return
     }
 
@@ -1668,9 +2019,21 @@ export const useFleetStore = defineStore('fleet', () => {
         return
       }
       lastError.value = errText
+      const deliveryId = frame.runId || frame.requestId
+      const failedPrompt = (frame.runId ? pendingRunPrompts.get(`${sKey}::${frame.runId}`) : undefined)
+        ?? (frame.requestId ? pendingRunPrompts.get(`${sKey}::${frame.requestId}`) : undefined)
+      if (deliveryId) {
+        const delivered = deliveredOutbox.get(deliveryId)
+        deliveredOutbox.delete(deliveryId)
+        if (delivered && frame.code !== 'cancelled') restoreOutboxDraft(delivered)
+      }
       updateAssistantMessage(sKey, nodeId, effProvider, frame.runId, frame.requestId, msg => ({
         ...msg,
         streaming: false,
+        liveProgress: undefined,
+        ...(failedPrompt?.startedAt ? { durationMs: Math.max(0, Date.now() - failedPrompt.startedAt) } : {}),
+        ...(frame.code === 'cancelled' || frame.code === 'stream_closed' ? { interrupted: true } : {}),
+        toolCalls: msg.toolCalls?.map(tool => tool.status === 'running' ? { ...tool, status: 'error', error: errText } : tool),
         error: errText,
       }))
       if (frame.runId) pendingRunPrompts.delete(`${sKey}::${frame.runId}`)
@@ -1678,10 +2041,16 @@ export const useFleetStore = defineStore('fleet', () => {
       const copy = { ...runningBySession.value }
       delete copy[sKey]
       runningBySession.value = copy
+      dismissSessionApprovals(sKey)
       if (frame.code === 'cancelled' || frame.code === 'stream_closed') {
         interruptedBySession.value = { ...interruptedBySession.value, [sKey]: true }
       }
-      notifyBackgroundEvent('Studiolo 任务异常', errText)
+      if (frame.code === 'cancelled') {
+        stopStatusBySession.value[sKey] = { state: 'reusable', message: '已停止，可以继续当前会话' }
+      } else if (stopStatusBySession.value[sKey]?.requestId) {
+        stopStatusBySession.value[sKey] = { state: 'unknown', message: '代理未确认会话能否继续' }
+      }
+      notifyBackgroundEvent('Studiolo 任务异常', errText, 'approval', false, sKey)
       if (steerSessionKeys.has(sKey)) {
         steerSessionKeys.delete(sKey)
         void drainNextQueuedPrompt(sKey)
@@ -1897,7 +2266,7 @@ export const useFleetStore = defineStore('fleet', () => {
       selectedNodeId.value = sess.nodeId
       selectedProvider.value = sess.provider
       applyDefaultModelPref(sKey, sess.nodeId, sess.provider)
-      loadSessionHistory(sKey)
+      loadSessionHistory(sKey, cachedHistoryKeys.has(sKey))
       subscribeSession(sKey)
       if (!diffBySession.value[sKey]) {
         requestSessionDiff(sKey)
@@ -1919,50 +2288,79 @@ export const useFleetStore = defineStore('fleet', () => {
     }
   }
 
+  function setSessionViewVisible(visible: boolean) {
+    sessionViewVisible = visible
+  }
+
   function subscribeSession(sKey: string) {
     const sess = sessionsByKey.value[sKey]
     if (!sess || wsState.value !== 'online') return false
+    if (pendingStreamResync.has(sKey)) return true
     const lastSeq = lastSeqBySession.value[sKey] ?? 0
-    return sendWsCommand({
+    const requestId = createRequestId()
+    const sent = sendWsCommand({
       type: 'session.subscribe',
       nodeId: sess.nodeId,
       provider: sess.provider,
       sessionId: sess.sessionId,
-      ...(lastSeq > 0 ? { lastSeq } : {}),
-      requestId: createRequestId(),
+      ...(lastSeq > 0 ? { lastSeq, afterSequence: lastSeq } : {}),
+      streamId: streamIdBySession.get(sKey),
+      requestId,
     })
+    if (sent) pendingStreamResync.set(sKey, requestId)
+    return sent
   }
 
-  function loadSessionHistory(sKey: string) {
+  function loadSessionHistory(sKey: string, force = false) {
     const sess = sessionsByKey.value[sKey]
-    if (sess && !messagesBySession.value[sKey]?.length) {
+    if (wsState.value === 'online' && sess && !pendingHistoryPages.value[sKey] && (force || !messagesBySession.value[sKey]?.length)) {
       const limit = historyLimitBySession.value[sKey] ?? 60
       historyLimitBySession.value = { ...historyLimitBySession.value, [sKey]: limit }
-      sendWsCommand({
+      const requestId = createRequestId()
+      const sent = sendWsCommand({
         type: 'session.history',
         nodeId: sess.nodeId,
         provider: sess.provider,
         sessionId: sess.sessionId,
         limit,
-        requestId: createRequestId(),
+        pagination: true,
+        requestId,
       })
+      if (sent) {
+        pendingHistoryPages.value[sKey] = requestId
+        if (force) forcedHistoryRequests.add(requestId)
+      }
     }
   }
 
   function requestOlderHistory(sKey: string) {
     const sess = sessionsByKey.value[sKey]
-    if (!sess) return false
+    if (!sess || pendingHistoryPages.value[sKey] || historyCursorBySession.value[sKey] === null) return false
+    const beforeCursor = historyCursorBySession.value[sKey]
     const curLimit = historyLimitBySession.value[sKey] ?? Math.max(60, messagesBySession.value[sKey]?.length ?? 60)
     const nextLimit = Math.min(MAX_MESSAGES_PER_SESSION, curLimit + 60)
-    historyLimitBySession.value = { ...historyLimitBySession.value, [sKey]: nextLimit }
-    return sendWsCommand({
+    const requestId = createRequestId()
+    const sent = sendWsCommand({
       type: 'session.history',
       nodeId: sess.nodeId,
       provider: sess.provider,
       sessionId: sess.sessionId,
-      limit: nextLimit,
-      requestId: createRequestId(),
+      limit: beforeCursor ? 60 : nextLimit,
+      pagination: true,
+      ...(beforeCursor ? { beforeCursor } : {}),
+      requestId,
     })
+    if (sent) {
+      historyLimitBySession.value[sKey] = nextLimit
+      pendingHistoryPages.value[sKey] = requestId
+    }
+    return sent
+  }
+
+  function searchOlderHistory(sKey: string) {
+    if (wsState.value !== 'online' || pendingHistoryPages.value[sKey]) return
+    historyLimitBySession.value[sKey] = MAX_MESSAGES_PER_SESSION
+    loadSessionHistory(sKey, true)
   }
 
   async function sendPromptToSession(
@@ -1971,26 +2369,13 @@ export const useFleetStore = defineStore('fleet', () => {
     attachments: ArtifactRef[] = [],
     options?: RunOptions,
     appendUser = true,
+    queued?: FleetOutboxItem,
   ) {
     const sess = sessionsByKey.value[sKey]
     if (!sess) throw new Error('目标会话不存在')
-    const reqId = createRequestId()
-    if (sentRequestIds.has(reqId)) return
-    sentRequestIds.add(reqId)
-
-    // 消费真语义分叉的上下文种子（若存在），以及 Plan 模式约束前缀（前端气泡仍仅展示用户原话）
-    let wireText = text
-    const seed = forkSeedBySession.value[sKey]
-    if (seed) {
-      wireText = `${seed}\n\n---\n${wireText}`
-      const nextSeeds = { ...forkSeedBySession.value }
-      delete nextSeeds[sKey]
-      forkSeedBySession.value = nextSeeds
-    }
-    const mode = composerModeBySession.value[sKey]
-    if ((options?.planMode || mode === 'plan') && !wireText.startsWith('[Plan Mode]')) {
-      wireText = `[Plan Mode] 请先分析涉及的文件与影响范围，输出清晰的分步执行计划，待我确认后再修改代码或执行破坏性命令。\n\n${wireText}`
-    }
+    const reqId = queued?.id ?? createRequestId()
+    const seed = queued ? undefined : forkSeedBySession.value[sKey]
+    const wireText = queued?.wireText ?? preparePromptText(sKey, text, options, seed)
 
     if (interruptedBySession.value[sKey]) {
       const nextInt = { ...interruptedBySession.value }
@@ -2009,8 +2394,10 @@ export const useFleetStore = defineStore('fleet', () => {
       text: wireText,
       attachments: attachments.length ? attachments : undefined,
       requestId: reqId,
-    })
+      commandId: reqId,
+    }, !queued)
     if (!sent) throw new Error(lastError.value || '节点连接不可用')
+    if (seed && forkSeedBySession.value[sKey] === seed) delete forkSeedBySession.value[sKey]
     pendingRunPrompts.set(`${sKey}::${reqId}`, { text: wireText, model: options?.model, startedAt: Date.now() })
 
     // 首句发出瞬间乐观命名默认标题，并通知上游代理同步持久化，避免新标签长时间显示原始 sessionId
@@ -2032,7 +2419,7 @@ export const useFleetStore = defineStore('fleet', () => {
       }
     }
 
-    if (appendUser) {
+    if (appendUser && !messagesBySession.value[sKey]?.some(row => row.id === `user-${reqId}`)) {
       appendMessage(sKey, {
         id: `user-${reqId}`,
         role: 'user',
@@ -2043,6 +2430,66 @@ export const useFleetStore = defineStore('fleet', () => {
         artifacts: attachments.length ? attachments : undefined,
         createdAt: Date.now(),
       })
+    }
+  }
+
+  function preparePromptText(sKey: string, text: string, options: RunOptions | undefined, seed?: string) {
+    const wireText = seed ? `${seed}\n\n---\n${text}` : text
+    if ((options?.planMode || composerModeBySession.value[sKey] === 'plan') && !wireText.startsWith('[Plan Mode]')) {
+      return `[Plan Mode] 请先分析涉及的文件与影响范围，输出清晰的分步执行计划，待我确认后再修改代码或执行破坏性命令。\n\n${wireText}`
+    }
+    return wireText
+  }
+
+  function restoreOutboxDraft(item: FleetOutboxItem) {
+    const draft = composerDrafts.value[item.sessionKey] ?? { text: '', files: [] }
+    draft.text = [item.text === '[发送了加密文件附件]' ? '' : item.text, draft.text].filter(Boolean).join('\n\n')
+    draft.files = [...item.files, ...draft.files]
+    composerDrafts.value[item.sessionKey] = draft
+  }
+
+  async function removeOutboxPrompt(item: FleetOutboxItem) {
+    const local = storage
+    transmittingOutbox.delete(item.id)
+    outbox.value = outbox.value.filter(row => row.id !== item.id)
+    try { await local?.remove('outbox', item.id) }
+    catch { if (local === storage) lastError.value = '无法更新本机待发队列' }
+  }
+
+  function cancelDeferredPrompt(id: string) {
+    const item = outbox.value.find(row => row.id === id)
+    if (!item || transmittingOutbox.has(id)) return false
+    restoreOutboxDraft(item)
+    void removeOutboxPrompt(item).then(flushOutbox)
+    return true
+  }
+
+  async function flushOutbox() {
+    const route = fleetRoute.value
+    if (!route || wsState.value !== 'online') return
+    const busySessions = new Set<string>()
+    for (const item of outbox.value) {
+      const session = sessionsByKey.value[item.sessionKey]
+      if (busySessions.has(item.sessionKey)) continue
+      busySessions.add(item.sessionKey)
+      if (!session || nodes.value.find(node => node.id === session.nodeId)?.status !== 'online'
+        || runningBySession.value[item.sessionKey] || transmittingOutbox.has(item.id)) continue
+      const attempt = {}
+      transmittingOutbox.set(item.id, attempt)
+      void (async () => {
+        try {
+          const attachments = await uploadFilesWithPreview(item.files)
+          if (fleetRoute.value !== route || transmittingOutbox.get(item.id) !== attempt) return
+          await sendPromptToSession(item.sessionKey, item.text, attachments, item.options, true, item)
+        } catch (cause) {
+          if (fleetRoute.value !== route || transmittingOutbox.get(item.id) !== attempt) return
+          transmittingOutbox.delete(item.id)
+          if (wsState.value !== 'online' || nodes.value.find(node => node.id === session.nodeId)?.status !== 'online') return
+          restoreOutboxDraft(item)
+          await removeOutboxPrompt(item)
+          lastError.value = cause instanceof Error ? cause.message : '发送失败，消息已还原到输入框'
+        }
+      })()
     }
   }
 
@@ -2139,24 +2586,46 @@ export const useFleetStore = defineStore('fleet', () => {
   async function sendPromptToSpecificSession(sKey: string, text: string, files: File[] = [], options?: RunOptions) {
     const clean = text.trim()
     if (!clean && !files.length) return
-    const uploadedRefs = await uploadFilesWithPreview(files)
-    await sendPromptToSession(sKey, clean || '[发送了加密文件附件]', uploadedRefs, options)
+    const body = clean || '[发送了加密文件附件]'
+    if (!localCacheRequested.value) {
+      localCacheRequested.value = true
+      await nextTick()
+    }
+    const local = storage
+    const session = sessionsByKey.value[sKey]
+    if (!session) throw new Error('目标会话不存在')
+    if (!local) {
+      if (runningBySession.value[sKey]) { enqueuePrompt(sKey, body, files, options); return }
+      if (wsState.value !== 'online') throw new Error('当前环境无法加密保存待发送消息')
+      const uploadedRefs = await uploadFilesWithPreview(files)
+      await sendPromptToSession(sKey, body, uploadedRefs, options)
+      return
+    }
+    if (outbox.value.length + pendingOutboxWrites.size >= 32) throw new Error('待发送队列已满')
+    if (files.reduce((total, file) => total + file.size, 0) > 20 * 1024 * 1024) throw new Error('待发送附件合计不能超过 20 MB')
+    const id = createRequestId()
+    const seed = forkSeedBySession.value[sKey]
+    const item: FleetOutboxItem = { id, sessionKey: sKey, session, text: body, files: [...files], options: options && { ...options },
+      wireText: preparePromptText(sKey, body, options, seed), createdAt: Date.now() }
+    pendingOutboxWrites.add(id)
+    try { await local.savePrompt(item) }
+    finally { pendingOutboxWrites.delete(id) }
+    if (storage !== local) throw new Error('对话账号已切换，消息已保存在原账号的待发队列')
+    if (seed && forkSeedBySession.value[sKey] === seed) delete forkSeedBySession.value[sKey]
+    outbox.value = [...outbox.value, item].sort((left, right) => left.createdAt - right.createdAt)
+    void flushOutbox()
   }
 
   async function sendPrompt(text: string, files: File[] = [], options?: RunOptions) {
     const clean = text.trim()
     if (!clean && !files.length) return
+    const targetKey = activeSessionKey.value
+    if (targetKey && sessionsByKey.value[targetKey]) return sendPromptToSpecificSession(targetKey, clean, files, options)
     const nid = selectedNode.value?.id
     if (!nid) throw new Error('当前没有可用的节点')
-    const targetKey = activeSessionKey.value
     const prov = selectedProvider.value
 
     const uploadedRefs = await uploadFilesWithPreview(files)
-
-    if (targetKey && sessionsByKey.value[targetKey]) {
-      await sendPromptToSession(targetKey, clean || '[发送了加密文件附件]', uploadedRefs, options)
-      return
-    }
 
     // 尚无活跃会话时，自动为当前节点 + Provider 打开会话并在 SessionOpened 后发出首条消息
     const requestId = createRequestId()
@@ -2175,16 +2644,23 @@ export const useFleetStore = defineStore('fleet', () => {
     if (!targetKey) return
     const sess = sessionsByKey.value[targetKey]
     const runId = runningBySession.value[targetKey]
-    if (!sess) return
-    interruptedBySession.value = { ...interruptedBySession.value, [targetKey]: true }
-    sendWsCommand({
+    if (!sess || !runId || stopStatusBySession.value[targetKey]?.requestId) return
+    const requestId = createRequestId()
+    const sent = sendWsCommand({
       type: 'prompt.cancel',
       nodeId: sess.nodeId,
       provider: sess.provider,
       sessionId: sess.sessionId,
       ...(runId ? { runId } : {}),
-      requestId: createRequestId(),
+      requestId,
     })
+    stopStatusBySession.value[targetKey] = sent ? { requestId, state: 'requested' }
+      : { state: 'error', message: '连接不可用，停止请求未送达' }
+    if (sent) setTimeout(() => {
+      if (stopStatusBySession.value[targetKey]?.requestId === requestId) {
+        stopStatusBySession.value[targetKey] = { state: 'error', message: '代理尚未确认停止，可以重试' }
+      }
+    }, 12_000)
   }
 
   function reorderQueuedPrompt(sKey: string, queueId: string, delta: -1 | 1) {
@@ -2216,7 +2692,8 @@ export const useFleetStore = defineStore('fleet', () => {
 
   function respondPermission(callId: string, decision: ApprovalDecision) {
     const card = pendingApprovalsByCall.value[callId]
-    if (!card) return
+    if (!card || card.decision !== 'pending') return
+    if (!sendWsCommand({ type: 'permission.respond', nodeId: card.nodeId, provider: card.provider, callId, decision })) return
     const updatedCard: PermissionRequestCard = { ...card, decision }
     pendingApprovalsByCall.value = { ...pendingApprovalsByCall.value, [callId]: updatedCard }
 
@@ -2236,13 +2713,17 @@ export const useFleetStore = defineStore('fleet', () => {
       }
     }
 
-    sendWsCommand({
-      type: 'permission.respond',
-      nodeId: card.nodeId,
-      provider: card.provider,
-      callId,
-      decision,
-    })
+  }
+
+  function dismissSessionApprovals(sKey: string, keep = new Set<string | undefined>()) {
+    const expired = pendingApprovalsList.value.filter(card =>
+      sessionKey(card.nodeId, card.provider, card.sessionId) === sKey && !keep.has(card.callId))
+    if (!expired.length) return
+    for (const card of expired) delete pendingApprovalsByCall.value[card.callId]
+    const ids = new Set(expired.map(card => card.callId))
+    messagesBySession.value[sKey] = (messagesBySession.value[sKey] ?? []).map(message => message.approvals?.some(card => ids.has(card.callId))
+      ? { ...message, approvals: message.approvals.filter(card => !ids.has(card.callId)) }
+      : message)
   }
 
   function sendHandoff(options: {
@@ -2251,6 +2732,7 @@ export const useFleetStore = defineStore('fleet', () => {
     targetSessionId?: string
     summary: string
     artifact?: ArtifactRef
+    sourceSessionKey?: string
   }) {
     const targetKey = options.targetSessionId
       ? sessionKey(options.targetNodeId, options.targetProvider, options.targetSessionId)
@@ -2265,24 +2747,24 @@ export const useFleetStore = defineStore('fleet', () => {
         requestId,
         nodeId: options.targetNodeId,
         provider: options.targetProvider,
-        initialPrompt: options.summary,
-        initialAttachments: options.artifact ? [options.artifact] : undefined,
+        initialHandoff: { summary: options.summary, artifact: options.artifact, sourceSessionKey: options.sourceSessionKey },
       })
       openSession({ nodeId: options.targetNodeId, provider: options.targetProvider, requestId })
       return
     }
 
     const reqId = createRequestId()
-    sendWsCommand({
+    const sent = sendWsCommand({
       type: 'handoff.send',
       nodeId: options.targetNodeId,
       provider: options.targetProvider,
       sessionId: sid,
       summary: options.summary,
+      sourceSessionKey: options.sourceSessionKey,
       ...(options.artifact ? { artifact: options.artifact } : {}),
       requestId: reqId,
     })
-    if (targetKey) {
+    if (sent && targetKey) {
       appendMessage(targetKey, {
         id: `handoff-${reqId}`,
         role: 'user',
@@ -2293,7 +2775,7 @@ export const useFleetStore = defineStore('fleet', () => {
         artifacts: options.artifact ? [options.artifact] : undefined,
         createdAt: Date.now(),
       })
-      activeSessionKey.value = targetKey
+      activateSession(targetKey)
     }
   }
 
@@ -3060,6 +3542,25 @@ export const useFleetStore = defineStore('fleet', () => {
     })
   }
 
+  function requestTerminalPreview(key: string, port: number, tls = false) {
+    const session = sessionsByKey.value[key]
+    const terminal = terminalBySession.value[key]
+    if (!session || !terminal || terminal.closed || !Number.isInteger(port) || port < 1024 || port > 65535) return
+    const requestId = createRequestId()
+    const sent = sendWsCommand({
+      type: 'terminal.preview', nodeId: session.nodeId, provider: session.provider, sessionId: session.sessionId,
+      terminalId: terminal.terminalId, port, tls, requestId,
+    })
+    const previews = terminalPreviews.value[key] ??= {}
+    previews[port] = sent ? { requestId, pending: true } : { requestId, error: '节点连接不可用' }
+    if (sent) setTimeout(() => {
+      const current = terminalPreviews.value[key]?.[port]
+      if (current?.pending && current.requestId === requestId) {
+        terminalPreviews.value[key][port] = { requestId, error: '等待节点响应超时' }
+      }
+    }, 6000)
+  }
+
   function sendTerminalInput(sKey: string, data: string) {
     const sess = sessionsByKey.value[sKey]
     const term = terminalBySession.value[sKey]
@@ -3151,7 +3652,7 @@ export const useFleetStore = defineStore('fleet', () => {
     })
   }
 
-  function notifyBackgroundEvent(title: string, body: string, cueKind: 'complete' | 'approval' = 'approval') {
+  function notifyBackgroundEvent(title: string, body: string, cueKind: 'complete' | 'approval' = 'approval', isPermission = false, target?: string) {
     if (soundEnabled.value && (cueKind === 'approval' || (typeof document !== 'undefined' && document.hidden))) {
       playCueSound(cueKind)
     }
@@ -3159,10 +3660,11 @@ export const useFleetStore = defineStore('fleet', () => {
     if (document.hidden) {
       unreadNotifyTitle.value = title
       if (android && notificationsEnabled.value) {
-        void androidInvoke('android_show_fleet_notification', { title, body: body.slice(0, 120) }).catch(() => {})
+        if (!isPermission) void androidInvoke('android_show_fleet_notification', { title, body: body.slice(0, 120), sessionKey: target }).catch(() => {})
       } else if (notificationsEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try {
-          new Notification(title, { body: body.slice(0, 120) })
+          const notice = new Notification(title, { body: body.slice(0, 120) })
+          notice.onclick = () => { window.focus(); openNotifiedSession(target) }
         } catch {
           // 浏览器禁止桌面弹窗时静默降级
         }
@@ -3210,6 +3712,9 @@ export const useFleetStore = defineStore('fleet', () => {
     selectNode,
     selectProvider,
     composerDrafts,
+    chatNodes,
+    outbox,
+    cancelDeferredPrompt,
     runSettings,
     catalogs,
     agentsByTarget,
@@ -3222,16 +3727,20 @@ export const useFleetStore = defineStore('fleet', () => {
     treeCacheByTarget,
     trustPatternsByNode,
     terminalBySession,
+    terminalPreviews,
+    requestTerminalPreview,
     bookmarkedIdsBySession,
     diffAnnotationsBySession,
     unreadCountBySession,
     firstUnreadMsgIdBySession,
     interruptedBySession,
+    stopStatusBySession,
     sideChatSessionKeyByParent,
     composerModeBySession,
     sendShortcut,
     soundEnabled,
     notificationsEnabled,
+    notificationSessionKey,
     unreadNotifyTitle,
     tokenUsageBySession,
     recordedTokenUsage: recordedUsage.entries,
@@ -3269,7 +3778,13 @@ export const useFleetStore = defineStore('fleet', () => {
     replyForm,
     subscribeSession,
     markSessionRead,
+    setSessionViewVisible,
     requestOlderHistory,
+    searchOlderHistory,
+    historyCursorBySession,
+    historyStateBySession,
+    deviceSessionScope: localCacheScope,
+    pendingHistoryPages,
     applyDefaultModelPref,
     setModelPreference,
     setComposerMode,

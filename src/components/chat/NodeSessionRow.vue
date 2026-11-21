@@ -6,7 +6,7 @@ import { getProviderMeta } from './providerMeta'
 
 const props = defineProps<{
   session: ChatSession
-  status: string
+  status: { key: string; label: string }
   active: boolean
   renaming: boolean
   snippet?: string
@@ -38,13 +38,14 @@ const provider = computed(() => getProviderMeta(props.session.provider))
       :title="session.title"
       @click="emit('open')"
     >
-      <span class="node-session-status" :class="status" :title="status === 'is-running' ? '运行中' : status === 'is-approval' ? '待审批' : '空闲'" />
+      <span class="node-session-status" :class="`is-${status.key}`" aria-hidden="true" />
       <OpusIcon :name="provider.icon" class="node-session-icon" :title="provider.label" />
       <span class="node-session-name">
         <span class="node-session-title">{{ session.title }}</span>
         <span v-if="snippet || branch" class="node-session-subtitle" :title="snippet || branch">{{ snippet || branch }}</span>
       </span>
-      <span v-if="session.model || time" class="node-session-facts">
+      <span class="node-session-facts">
+        <span class="node-session-badge" :class="`is-${status.key}`">{{ status.label }}</span>
         <span v-if="session.model" class="node-session-model" :title="session.model">{{ session.model }}</span>
         <span v-if="time" class="node-session-time">{{ time }}</span>
       </span>
@@ -88,6 +89,8 @@ const provider = computed(() => getProviderMeta(props.session.provider))
 }
 .node-session-status.is-running { border: 2px solid var(--warn); border-right-color: transparent; }
 .node-session-status.is-approval { background: var(--warn); border-color: var(--warn); }
+.node-session-status.is-input, .node-session-status.is-waiting { border-color: var(--text-3); }
+.node-session-badge.is-approval, .node-session-badge.is-running { color: var(--warn); }
 .node-session-icon { width: 16px; height: 16px; }
 .node-session-name { display: grid; min-width: 0; }
 .node-session-title, .node-session-subtitle, .node-session-model {

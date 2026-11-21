@@ -251,6 +251,14 @@ class SpaceTokenCreatedOut(SpaceTokenOut):
     token: str
 
 
+class SpaceDeviceGrantOut(StrictModel):
+    clientId: str
+    deviceName: str
+    platform: str
+    canRead: bool
+    explicit: bool
+
+
 class SpaceAuditLogOut(StrictModel):
     id: str
     spaceId: str

@@ -29,6 +29,7 @@ ALLOWED_CLIENT_COMMANDS = frozenset({
     "trust.add",
     "trust.remove",
     "terminal.open",
+    "terminal.preview",
     "terminal.input",
     "terminal.signal",
     "terminal.resize",
@@ -94,8 +95,11 @@ ALLOWED_NODE_EVENTS = frozenset({
     "SessionHistory",
     "SessionStreamReplay",
     "SessionCompacted",
+    "TerminalPreview",
+    "RunStopStatus",
     "SessionRenamed",
     "SessionDeleted",
+    "DuplicateIgnored",
     "Completed",
     "Failed",
     "NodeHeartbeat",
@@ -124,7 +128,8 @@ class FleetRelayHub:
         self._lock = asyncio.Lock()
         self._nodes: dict[tuple[str, str], ConnectedNode] = {}
         self._clients: dict[str, dict[str, WebSocket]] = {}
-        self._seen_requests: OrderedDict[tuple[str, str], bool] = OrderedDict()
+        self._seen_requests: OrderedDict[tuple[str, str, str], bool] = OrderedDict()
+        self._forwarding_requests: dict[tuple[str, str, str], asyncio.Future[bool]] = {}
         # Core REST -> AgentNode 同步 RPC 挂起表（纯内存，不落盘）
         self._pending_rpcs: dict[str, tuple[str, str, asyncio.Future[dict[str, Any]]]] = {}
 
@@ -276,16 +281,25 @@ class FleetRelayHub:
                         out.append({"nodeId": conn.node_id, **ep})
             return out
 
-    async def _mark_request_once(self, workspace_id: str, request_id: str) -> bool:
-        key = (workspace_id, request_id)
-        async with self._lock:
-            if key in self._seen_requests:
-                self._seen_requests.move_to_end(key)
+    async def _begin_forward(self, key: tuple[str, str, str]) -> bool:
+        while True:
+            async with self._lock:
+                if key in self._seen_requests:
+                    self._seen_requests.move_to_end(key)
+                    return False
+                pending = self._forwarding_requests.get(key)
+                if pending is None:
+                    self._forwarding_requests[key] = asyncio.get_running_loop().create_future()
+                    return True
+            if await asyncio.shield(pending):
                 return False
+
+    def _finish_forward(self, key: tuple[str, str, str], delivered: bool) -> None:
+        if delivered:
             self._seen_requests[key] = True
             while len(self._seen_requests) > MAX_DEDUP_KEYS:
                 self._seen_requests.popitem(last=False)
-            return True
+        self._forwarding_requests.pop(key).set_result(delivered)
 
     async def forward_client_command(
         self,
@@ -305,16 +319,9 @@ class FleetRelayHub:
         if not target_node_id:
             return {"type": "Error", "code": "missing_node_id", "message": "nodeId is required"}
 
-        request_id = str(frame.get("requestId") or "").strip()
-        if cmd_type in ("prompt.send", "handoff.send") and request_id:
-            if not await self._mark_request_once(workspace_id, request_id):
-                return {
-                    "type": "DuplicateIgnored",
-                    "nodeId": target_node_id,
-                    "requestId": request_id,
-                }
-
         node = await self.get_online_node(workspace_id, target_node_id)
+        command_id = str(frame.get("commandId") or frame.get("requestId") or "").strip()
+        request_id = str(frame.get("requestId") or command_id).strip()
         if node is None:
             return {
                 "type": "NodeUnavailable",
@@ -324,9 +331,21 @@ class FleetRelayHub:
                 "message": "Target device node is offline",
             }
 
+        key = None
+        if cmd_type in ("prompt.send", "handoff.send") and command_id:
+            if len(command_id) > 128:
+                return {"type": "Error", "code": "invalid_command_id", "requestId": request_id}
+            key = (workspace_id, target_node_id, command_id)
+            if not await self._begin_forward(key):
+                return {"type": "DuplicateIgnored", "nodeId": target_node_id, "requestId": request_id, "commandId": command_id}
+
         forwarded = {**frame, "_clientConnId": client_conn_id}
+        if key:
+            forwarded.update(requestId=request_id, commandId=command_id)
+        delivered = False
         try:
             await node.websocket.send_json(forwarded)
+            delivered = True
         except Exception:
             await self.unregister_node(workspace_id, target_node_id, node.websocket)
             return {
@@ -336,6 +355,9 @@ class FleetRelayHub:
                 "requestId": request_id or None,
                 "message": "Target device node disconnected",
             }
+        finally:
+            if key:
+                self._finish_forward(key, delivered)
         return None
 
     async def broadcast_workspace(

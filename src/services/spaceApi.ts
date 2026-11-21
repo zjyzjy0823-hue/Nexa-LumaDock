@@ -3,12 +3,19 @@
  */
 
 import { apiRequest, ApiError } from '../api/client'
+import { androidInvoke, AndroidLocalError } from '../desktop/androidLocal'
 import { getApiBaseUrl } from './fleetUrl'
 import type { KeyEnvelope, SpaceEntryType, WrappedDek } from './spaceCrypto'
 
 export type SpaceTier = 'standard' | 'protected' | 'e2ee'
 export type SpaceTokenKind = 'standard' | 'vault'
 export type SpaceTokenScope = 'read' | 'write'
+
+export function inferSpaceTextTitle(text: string): string {
+  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean)
+  if (!firstLine) return '未命名文本'
+  return firstLine.length > 42 ? `${firstLine.slice(0, 42)}…` : firstLine
+}
 
 export interface SpaceCapabilities {
   enabled: boolean
@@ -153,8 +160,38 @@ export interface SpaceAuditLogItem {
 }
 
 export interface SpaceRouteConfig {
+  kind?: 'user' | 'device-read'
   token: string
   origin?: string
+  androidDevice?: boolean
+}
+
+async function nativeDeviceRead(request: Record<string, unknown>): Promise<ArrayBuffer> {
+  try { return await androidInvoke<ArrayBuffer>('android_read_device_space', { request }) }
+  catch (cause) {
+    const code = cause instanceof AndroidLocalError ? cause.code : ''
+    const status = { unauthorized: 401, not_found: 404, disconnected: 409, connection_binding_mismatch: 409, network_error: 0 }[code] ?? 502
+    throw new ApiError(status, status === 0 ? '无法连接 Core' : '设备无法读取共享空间')
+  }
+}
+
+async function nativeDeviceJson<T>(request: Record<string, unknown>): Promise<T> {
+  return JSON.parse(new TextDecoder().decode(await nativeDeviceRead(request))) as T
+}
+
+export const deviceReadCapabilities: SpaceCapabilities = {
+  enabled: true,
+  protectedAvailable: false,
+  maxFileBytes: 0,
+  defaultQuotaBytes: 0,
+  defaultChunkSize: 0,
+  tiers: ['standard'],
+}
+
+function spaceApiPath(route: SpaceRouteConfig, path: string): string {
+  return route.kind === 'device-read'
+    ? path.replace(/^\/api\/v1\/spaces(?=\/|\?|$)/, '/api/v1/core/space-reads/spaces')
+    : path
 }
 
 function resolveOrigin(route: SpaceRouteConfig): string {
@@ -166,12 +203,14 @@ export function fetchSpaceCapabilities(route: SpaceRouteConfig): Promise<SpaceCa
 }
 
 export function fetchSpaces(route: SpaceRouteConfig): Promise<SpaceItem[]> {
-  return apiRequest<SpaceItem[]>('/api/v1/spaces', {}, route.token, route.origin)
+  if (route.androidDevice) return nativeDeviceJson({ kind: 'spaces' })
+  return apiRequest<SpaceItem[]>(spaceApiPath(route, '/api/v1/spaces'), {}, route.token, route.origin)
 }
 
 /** 单个空间的最新摘要（entryCount / usedBytes），用于条目增删后刷新列表卡片。 */
 export function fetchSpace(route: SpaceRouteConfig, spaceId: string): Promise<SpaceItem> {
-  return apiRequest<SpaceItem>(`/api/v1/spaces/${encodeURIComponent(spaceId)}`, {}, route.token, route.origin)
+  if (route.androidDevice) return nativeDeviceJson({ kind: 'space', spaceId })
+  return apiRequest<SpaceItem>(spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}`), {}, route.token, route.origin)
 }
 
 export function createSpaceApi(
@@ -295,7 +334,8 @@ export async function downloadSpaceBlobChunk(
   blobId: string,
   chunkIndex: number,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  const url = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
+  const path = `/api/v1/spaces/${encodeURIComponent(spaceId)}/blobs/${encodeURIComponent(blobId)}/chunks/${chunkIndex}`
+  const url = resolveOrigin(route) + spaceApiPath(route, path)
   const res = await fetch(url, {
     credentials: 'omit', redirect: 'error',
     headers: { Authorization: `Bearer ${route.token}` },
@@ -312,12 +352,13 @@ export function fetchSpaceEntries(
   spaceId: string,
   params?: { search?: string; entryType?: string },
 ): Promise<SpaceEntrySummary[]> {
+  if (route.androidDevice) return nativeDeviceJson({ kind: 'entries', spaceId, ...params })
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
   if (params?.entryType) qs.set('entryType', params.entryType)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return apiRequest<SpaceEntrySummary[]>(
-    `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries${suffix}`,
+    spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries${suffix}`),
     {},
     route.token,
     route.origin,
@@ -344,8 +385,9 @@ export function fetchSpaceEntryDetail(
   revision?: number,
 ): Promise<SpaceEntryDetail> {
   const qs = revision ? `?revision=${revision}` : ''
+  if (route.androidDevice) return nativeDeviceJson({ kind: 'entry', spaceId, entryId, revision })
   return apiRequest<SpaceEntryDetail>(
-    `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}${qs}`,
+    spaceApiPath(route, `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}${qs}`),
     {},
     route.token,
     route.origin,
@@ -374,7 +416,10 @@ export async function downloadEntryBlob(
   password?: string,
   revision?: number,
 ): Promise<Blob> {
-  const base = `${resolveOrigin(route)}/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/download`
+  if (password && route.kind === 'device-read') throw new Error('设备只读：登录 Core 后可编辑')
+  if (route.androidDevice) return new Blob([await nativeDeviceRead({ kind: 'download', spaceId, entryId, revision })])
+  const path = `/api/v1/spaces/${encodeURIComponent(spaceId)}/entries/${encodeURIComponent(entryId)}/download`
+  const base = resolveOrigin(route) + spaceApiPath(route, path)
   const res = await (password
     ? fetch(base, {
         method: 'POST',
@@ -390,7 +435,9 @@ export async function downloadEntryBlob(
         headers: { Authorization: `Bearer ${route.token}` },
       })).catch(() => { throw new ApiError(0, '无法连接 Core 下载文件') })
   if (!res.ok) {
-    throw new Error(res.status === 403 ? '空间密码不正确或无权下载' : `下载失败 (${res.status})`)
+    const message = res.status === 403 ? '空间密码不正确或无权下载' : `下载失败 (${res.status})`
+    if (route.kind === 'device-read') throw new ApiError(res.status, message)
+    throw new Error(message)
   }
   return res.blob()
 }
@@ -478,9 +525,28 @@ export function revokeSpaceTokenApi(route: SpaceRouteConfig, spaceId: string, to
   )
 }
 
-export function fetchSpaceAuditLogs(route: SpaceRouteConfig, spaceId: string, limit = 100): Promise<SpaceAuditLogItem[]> {
+export interface SpaceDeviceGrant {
+  clientId: string
+  deviceName: string
+  platform: string
+  canRead: boolean
+  explicit: boolean
+}
+
+export function fetchSpaceDeviceGrants(route: SpaceRouteConfig, spaceId: string): Promise<SpaceDeviceGrant[]> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/device-grants`, {}, route.token, route.origin)
+}
+
+export function setSpaceDeviceGrant(route: SpaceRouteConfig, spaceId: string, clientId: string, allow: boolean): Promise<void> {
+  return apiRequest(`/api/v1/spaces/${encodeURIComponent(spaceId)}/device-grants/${encodeURIComponent(clientId)}`,
+    { method: allow ? 'PUT' : 'DELETE' }, route.token, route.origin)
+}
+
+export function fetchSpaceAuditLogs(route: SpaceRouteConfig, spaceId: string, limit = 100, action?: string): Promise<SpaceAuditLogItem[]> {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (action) query.set('action', action)
   return apiRequest<SpaceAuditLogItem[]>(
-    `/api/v1/spaces/${encodeURIComponent(spaceId)}/audit-logs?limit=${limit}`,
+    `/api/v1/spaces/${encodeURIComponent(spaceId)}/audit-logs?${query}`,
     {},
     route.token,
     route.origin,

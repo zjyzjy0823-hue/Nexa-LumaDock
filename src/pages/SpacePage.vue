@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ApiError } from '../api/client'
 import OpusIcon from '../components/ui/OpusIcon.vue'
 import FleetCoreSignIn from '../components/chat/FleetCoreSignIn.vue'
 import SpacePasswordGate from '../components/space/SpacePasswordGate.vue'
 import { useCopyFeedback } from '../composables/useCopyFeedback'
 import { useSpaceStore } from '../stores/space'
-import type { SpaceTier, SpaceTokenScope, StandardSpaceConflict } from '../services/spaceApi'
+import { fetchSpaceDeviceGrants, inferSpaceTextTitle, setSpaceDeviceGrant, type SpaceDeviceGrant, type SpaceTier, type SpaceTokenScope, type StandardSpaceConflict } from '../services/spaceApi'
 import type { SpaceEntryType } from '../services/spaceCrypto'
 
 const props = defineProps<{ mobile: boolean }>()
@@ -28,11 +29,16 @@ interface QueuedUploadFile {
 }
 
 const activeTab = ref<SpaceSubView>('entries')
+const auditAction = ref('')
+const deviceGrants = ref<SpaceDeviceGrant[] | null>(null)
+const grantBusy = ref('')
+const grantError = ref('')
 const canvasMode = ref<CanvasMode>('compose')
 const composeTab = ref<ComposeTab>('text')
 const searchQuery = ref('')
 const filterType = ref<SpaceEntryType | 'all'>('all')
 const mobilePanel = ref<'spaces' | 'entries' | 'canvas'>('spaces')
+const showDeviceSignIn = ref(false)
 const deciding = ref('')
 const decisionError = ref('')
 const pinBusy = ref(false)
@@ -246,20 +252,12 @@ function parseTags(raw: string): string[] {
     .filter(Boolean)
 }
 
-function inferTitleFromText(text: string): string {
-  const firstLine = text
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(Boolean)
-  if (!firstLine) return '未命名文本'
-  return firstLine.length > 42 ? `${firstLine.slice(0, 42)}…` : firstLine
-}
-
 // ---------------------------------------------------------------------------
 // 视图与画布切换
 // ---------------------------------------------------------------------------
 
 function openCompose(tab: ComposeTab) {
+  if (spaceStore.deviceReadOnly) return
   activeTab.value = 'entries'
   canvasMode.value = 'compose'
   composeTab.value = tab
@@ -270,6 +268,7 @@ function openCompose(tab: ComposeTab) {
 }
 
 function switchSubTab(tab: SpaceSubView) {
+  if (spaceStore.deviceReadOnly && tab !== 'entries') return
   activeTab.value = tab
   editingStandard.value = false
   if (props.mobile && tab !== 'entries') {
@@ -278,7 +277,9 @@ function switchSubTab(tab: SpaceSubView) {
 }
 
 async function handleSelectSpace(spaceId: string) {
+  const route = spaceStore.route
   await spaceStore.selectSpace(spaceId)
+  if (route !== spaceStore.route || spaceId !== spaceStore.selectedSpaceId) return
   activeTab.value = 'entries'
   editingStandard.value = false
   // 切换空间时如果空间里还没有选中条目，右侧默认展示撰写/上传大画布
@@ -289,10 +290,12 @@ async function handleSelectSpace(spaceId: string) {
 }
 
 async function handleSelectEntry(entryId: string) {
+  const route = spaceStore.route
   editingStandard.value = false
   activeTab.value = 'entries'
   canvasMode.value = 'detail'
   await spaceStore.selectEntry(entryId)
+  if (route !== spaceStore.route || entryId !== spaceStore.selectedEntryId) return
   if (props.mobile) {
     mobilePanel.value = 'canvas'
   }
@@ -320,6 +323,7 @@ function handleMobileBack() {
 // ---------------------------------------------------------------------------
 
 function openCreateSpaceDialog(presetTier?: SpaceTier) {
+  if (spaceStore.deviceReadOnly) return
   if (presetTier) {
     if (presetTier === 'protected' && spaceStore.capabilities && !spaceStore.capabilities.protectedAvailable) {
       newSpaceTier.value = 'standard'
@@ -451,7 +455,7 @@ async function handleArchiveCurrentSpace() {
 
 async function submitComposeText(password?: string) {
   const rawText = composeText.value
-  const finalTitle = composeTitle.value.trim() || inferTitleFromText(rawText)
+  const finalTitle = composeTitle.value.trim() || inferSpaceTextTitle(rawText)
   composeBusy.value = true
   try {
     await spaceStore.createEntry({
@@ -509,6 +513,7 @@ function handleComposeKeydown(event: KeyboardEvent) {
 // ---------------------------------------------------------------------------
 
 function appendFilesToQueue(fileList: FileList | File[]) {
+  if (spaceStore.deviceReadOnly) return
   const files = Array.from(fileList)
   if (!files.length) return
   const maxBytes = spaceStore.capabilities?.maxFileBytes ?? 0
@@ -570,6 +575,7 @@ function hasFilePayload(event: DragEvent): boolean {
 function handleCanvasDragEnter(event: DragEvent) {
   if (!currentSpace.value || !hasFilePayload(event)) return
   event.preventDefault()
+  if (spaceStore.deviceReadOnly) return
   dragDepth += 1
   isDraggingFile.value = true
 }
@@ -578,7 +584,7 @@ function handleCanvasDragOver(event: DragEvent) {
   if (!currentSpace.value || !hasFilePayload(event)) return
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
+    event.dataTransfer.dropEffect = spaceStore.deviceReadOnly ? 'none' : 'copy'
   }
 }
 
@@ -599,7 +605,7 @@ function handleCanvasDrop(event: DragEvent) {
 }
 
 function handleGlobalPaste(event: ClipboardEvent) {
-  if (!currentSpace.value || gateOpen.value || createSpaceOpen.value) return
+  if (spaceStore.deviceReadOnly || !currentSpace.value || gateOpen.value || createSpaceOpen.value) return
   const items = event.clipboardData?.items
   if (!items?.length) return
   const pastedFiles: File[] = []
@@ -729,7 +735,7 @@ async function saveEditStandard() {
   try {
     await spaceStore.updateStandardEntry(
       currentDetail.value,
-      editTitle.value.trim() || inferTitleFromText(editText.value),
+      editTitle.value.trim() || inferSpaceTextTitle(editText.value),
       editText.value,
       parseTags(editTags.value),
     )
@@ -882,9 +888,10 @@ function handleVisibilityChange() {
   }
 }
 
-watch(activeTab, tab => {
+watch([activeTab, auditAction], ([tab]) => {
+  if (spaceStore.deviceReadOnly) return
   if (tab === 'tokens' || tab === 'audit') {
-    void spaceStore.loadTokensAndAudit()
+    void spaceStore.loadTokensAndAudit(tab === 'audit' ? auditAction.value : undefined)
   }
   if (tab === 'conflicts') {
     decisionError.value = ''
@@ -898,13 +905,53 @@ watch(
     editingStandard.value = false
     clearUploadQueue()
     uploadNote.value = ''
-    if (activeTab.value === 'tokens' || activeTab.value === 'audit') {
-      void spaceStore.loadTokensAndAudit()
+    if (!spaceStore.deviceReadOnly && (activeTab.value === 'tokens' || activeTab.value === 'audit')) {
+      void spaceStore.loadTokensAndAudit(activeTab.value === 'audit' ? auditAction.value : undefined)
     }
   },
 )
 
+const deviceGrantTarget = computed(() => {
+  const { route, selectedSpaceId, deviceReadOnly, offline } = spaceStore
+  if (activeTab.value !== 'security' || currentSpace.value?.tier !== 'standard' || deviceReadOnly || offline || !route || !selectedSpaceId) return null
+  return { route, spaceId: selectedSpaceId }
+})
+
+watch(deviceGrantTarget, async target => {
+  deviceGrants.value = null
+  grantError.value = ''
+  grantBusy.value = ''
+  if (!target) return
+  try {
+    const rows = await fetchSpaceDeviceGrants(target.route, target.spaceId)
+    if (target === deviceGrantTarget.value) deviceGrants.value = rows
+  } catch (cause) {
+    if (target === deviceGrantTarget.value && !(cause instanceof ApiError && cause.status === 404)) {
+      grantError.value = cause instanceof Error ? cause.message : '无法读取设备授权'
+    }
+  }
+})
+
+async function toggleDeviceGrant(grant: SpaceDeviceGrant) {
+  const target = deviceGrantTarget.value
+  if (!target || grantBusy.value) return
+  grantBusy.value = grant.clientId
+  grantError.value = ''
+  try {
+    await setSpaceDeviceGrant(target.route, target.spaceId, grant.clientId, !grant.canRead)
+    if (target !== deviceGrantTarget.value) return
+    deviceGrants.value = deviceGrants.value?.map(row => row.clientId === grant.clientId
+      ? { ...row, canRead: !grant.canRead, explicit: true }
+      : row) ?? null
+  } catch (cause) {
+    if (target === deviceGrantTarget.value) grantError.value = cause instanceof Error ? cause.message : '更新设备授权失败'
+  } finally {
+    if (target === deviceGrantTarget.value) grantBusy.value = ''
+  }
+}
+
 onMounted(() => {
+  void spaceStore.refreshAndroidDeviceBinding()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('paste', handleGlobalPaste)
 })
@@ -914,6 +961,10 @@ watch([() => spaceStore.route, () => spaceStore.available], () => {
   canvasMode.value = 'compose'
   activeTab.value = 'entries'
   composeTitle.value = composeText.value = composeTags.value = uploadNote.value = ''
+  showDeviceSignIn.value = false
+  dragDepth = 0
+  isDraggingFile.value = false
+  closeCreateSpaceDialog()
   newSpacePassword.value = ''
   clearUploadQueue()
   closeGate()
@@ -926,6 +977,11 @@ onUnmounted(() => {
   clearUploadQueue()
   spaceStore.clearSensitiveMemory()
 })
+
+defineExpose({
+  openSpace: handleSelectSpace,
+  openSpaceList: () => { mobilePanel.value = 'spaces' },
+})
 </script>
 
 <template>
@@ -937,10 +993,10 @@ onUnmounted(() => {
     @drop="handleCanvasDrop"
   >
     <!-- 隐藏多文件选择器 -->
-    <input ref="fileInputRef" type="file" multiple class="sr-only" @change="handleFileInputChange" />
+    <input v-if="!spaceStore.deviceReadOnly" ref="fileInputRef" type="file" multiple class="sr-only" @change="handleFileInputChange" />
 
     <!-- 全页文件拖拽高亮引导层 -->
-    <div v-if="isDraggingFile && currentSpace" class="drag-overlay" aria-hidden="true">
+    <div v-if="!spaceStore.deviceReadOnly && isDraggingFile && currentSpace" class="drag-overlay" aria-hidden="true">
       <div class="drag-overlay-card mat">
         <span class="drag-overlay-ic"><OpusIcon name="arrowUp" /></span>
         <strong>松开上传</strong>
@@ -953,11 +1009,11 @@ onUnmounted(() => {
         <OpusIcon name="chevL" />
       </button>
       <div class="t">{{ mobileHeaderTitle }}</div>
-      <button v-if="mobilePanel === 'spaces' && spaceStore.route && !spaceStore.offline" type="button" class="icon-btn" aria-label="新建空间" @click="openCreateSpaceDialog()">
+      <button v-if="!spaceStore.deviceReadOnly && mobilePanel === 'spaces' && spaceStore.route && !spaceStore.offline" type="button" class="icon-btn" aria-label="新建空间" @click="openCreateSpaceDialog()">
         <OpusIcon name="plus" />
       </button>
       <button
-        v-else-if="mobilePanel === 'entries' && currentSpace"
+        v-else-if="!spaceStore.deviceReadOnly && mobilePanel === 'entries' && currentSpace"
         type="button"
         class="icon-btn"
         aria-label="写文本"
@@ -971,10 +1027,22 @@ onUnmounted(() => {
     <div v-if="spaceStore.linkedCore && (!mobile || mobilePanel === 'spaces')" class="space-source" aria-label="共享空间位置">
       <button type="button" class="btn btn-sm" :class="spaceStore.localView ? 'btn-ghost' : 'btn-primary'" :aria-pressed="!spaceStore.localView" @click="spaceStore.localView = false">Core 共享空间</button>
       <button type="button" class="btn btn-sm" :class="spaceStore.localView ? 'btn-primary' : 'btn-ghost'" :aria-pressed="spaceStore.localView" @click="spaceStore.localView = true">本机空间</button>
-      <button v-if="!spaceStore.localView && spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-ghost" :disabled="importBusy" @click="importLocalSpaces">{{ importBusy ? '正在导入…' : '导入本机普通空间' }}</button>
+      <button v-if="!spaceStore.deviceReadOnly && !spaceStore.localView && spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-ghost" :disabled="importBusy" @click="importLocalSpaces">{{ importBusy ? '正在导入…' : '导入本机普通空间' }}</button>
     </div>
     <FleetCoreSignIn v-if="spaceStore.coreSignInRequired" feature="共享空间" />
+    <div v-else-if="spaceStore.deviceReadOnly" class="space-device-banner">
+      <div class="space-device-banner-head">
+        <span>设备只读 · 登录 Core 后可编辑</span>
+        <button type="button" class="btn btn-sm btn-ghost" :aria-expanded="showDeviceSignIn"
+          @click="spaceStore.openAndroidSpaceSignIn() || (showDeviceSignIn = !showDeviceSignIn)">
+          {{ showDeviceSignIn ? '取消登录' : '登录 Core' }}
+        </button>
+      </div>
+      <FleetCoreSignIn v-if="showDeviceSignIn" feature="共享空间" />
+    </div>
     <p v-if="!spaceStore.available" class="space-route-status muted" role="status">{{ spaceStore.waitingForConnection ? '正在读取 Core 连接…' : '请连接并登录 Core 后打开共享空间。' }}</p>
+    <button v-if="spaceStore.android && !spaceStore.available" type="button" class="btn btn-sm btn-ghost"
+      @click="spaceStore.openAndroidSpaceSignIn()">登录 Core</button>
     <div v-else class="space-shell" :class="{ 'is-mobile': mobile, 'is-empty-state': !mobile && !spaceStore.loading && spaceStore.spaces.length === 0 }">
       <!-- ================================================================
            左栏：空间导航轨道
@@ -985,13 +1053,13 @@ onUnmounted(() => {
             <h2>共享空间</h2>
             <span class="nav-count num">{{ spaceStore.spaces.length }}</span>
           </div>
-          <button v-if="spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-primary" @click="openCreateSpaceDialog()">
+          <button v-if="!spaceStore.deviceReadOnly && spaceStore.route && !spaceStore.offline" type="button" class="btn btn-sm btn-primary" @click="openCreateSpaceDialog()">
             <OpusIcon name="plus" /> 新建
           </button>
         </div>
 
         <div v-if="spaceStore.error" class="space-alert" role="alert">{{ spaceStore.error }}</div>
-        <div v-if="spaceStore.offline || spaceStore.pendingCount || spaceStore.syncError || spaceStore.rejected.length" class="space-alert" role="status">
+        <div v-if="!spaceStore.deviceReadOnly && (spaceStore.offline || spaceStore.pendingCount || spaceStore.syncError || spaceStore.rejected.length)" class="space-alert" role="status">
           <p v-if="spaceStore.offline">离线 · 显示已保存在本机的内容</p>
           <p v-if="spaceStore.pendingCount">{{ spaceStore.pendingCount }} 项待同步</p>
           <p v-if="spaceStore.syncError">{{ spaceStore.syncError }}</p>
@@ -1058,7 +1126,7 @@ onUnmounted(() => {
                 内容
               </button>
               <button
-                v-if="currentSpace.tier !== 'e2ee'"
+                v-if="!spaceStore.deviceReadOnly && currentSpace.tier !== 'e2ee'"
                 type="button"
                 role="tab"
                 :aria-selected="activeTab === 'tokens'"
@@ -1068,6 +1136,7 @@ onUnmounted(() => {
                 Token
               </button>
               <button
+                v-if="!spaceStore.deviceReadOnly"
                 type="button"
                 role="tab"
                 :aria-selected="activeTab === 'audit'"
@@ -1077,6 +1146,7 @@ onUnmounted(() => {
                 审计
               </button>
               <button
+                v-if="!spaceStore.deviceReadOnly"
                 type="button"
                 role="tab"
                 :aria-selected="activeTab === 'security'"
@@ -1085,7 +1155,7 @@ onUnmounted(() => {
               >
                 {{ currentSpace.tier === 'standard' ? '管理' : '安全' }}
               </button>
-              <button v-if="currentSpace.tier === 'standard'" type="button" role="tab"
+              <button v-if="!spaceStore.deviceReadOnly && currentSpace.tier === 'standard'" type="button" role="tab"
                 :aria-selected="activeTab === 'conflicts'" :class="{ active: activeTab === 'conflicts' }"
                 @click="switchSubTab('conflicts')">冲突</button>
             </div>
@@ -1158,7 +1228,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 底部常驻固定双主入口：零弹窗直达右侧大画布 -->
-          <div class="catalog-dock">
+          <div v-if="!spaceStore.deviceReadOnly" class="catalog-dock">
             <button
               type="button"
               class="dock-btn"
@@ -1192,7 +1262,7 @@ onUnmounted(() => {
       <main v-show="!mobile || mobilePanel === 'canvas'" class="space-col-canvas">
         <template v-if="currentSpace">
           <!-- 1. 内容视图 -> 沉浸式撰写/上传画布 -->
-          <div v-if="activeTab === 'entries' && (canvasMode === 'compose' || !currentDetail)" class="canvas-inner canvas-compose">
+          <div v-if="!spaceStore.deviceReadOnly && activeTab === 'entries' && (canvasMode === 'compose' || !currentDetail)" class="canvas-inner canvas-compose">
             <header class="canvas-head">
               <div class="canvas-mode-switch" role="tablist" aria-label="新增方式">
                 <button
@@ -1416,7 +1486,7 @@ onUnmounted(() => {
                 >
                   <OpusIcon name="lock" /> 立即锁定
                 </button>
-                <button type="button" class="btn btn-sm btn-ghost danger-text" @click="handleDeleteEntry">
+                <button v-if="!spaceStore.deviceReadOnly" type="button" class="btn btn-sm btn-ghost danger-text" @click="handleDeleteEntry">
                   <OpusIcon name="trash" /> 删除
                 </button>
               </div>
@@ -1424,7 +1494,7 @@ onUnmounted(() => {
 
             <!-- 2A. Standard 普通共享 -->
             <template v-if="currentSpace.tier === 'standard'">
-              <div v-if="!editingStandard" class="detail-content">
+              <div v-if="spaceStore.deviceReadOnly || !editingStandard" class="detail-content">
                 <template v-if="currentDetail.entryType === 'file'">
                   <div class="file-hero-card">
                     <span class="file-hero-ext mono">{{ fileExtensionBadge(currentDetail.fileName ?? currentDetail.title) }}</span>
@@ -1433,7 +1503,7 @@ onUnmounted(() => {
                       <div class="faint num">{{ formatBytes(currentDetail.sizeBytes) }}</div>
                     </div>
                     <div class="file-hero-actions">
-                      <button type="button" class="btn btn-sm btn-ghost" @click="startEditStandard">
+                      <button v-if="!spaceStore.deviceReadOnly" type="button" class="btn btn-sm btn-ghost" @click="startEditStandard">
                         <OpusIcon name="pencil" /> 备注
                       </button>
                       <button type="button" class="btn btn-primary btn-sm" @click="downloadStandardFile">
@@ -1472,7 +1542,7 @@ onUnmounted(() => {
                       >
                         <OpusIcon :name="isCopied('std-text') ? 'check' : 'copy'" /> {{ isCopied('std-text') ? '已复制' : '复制' }}
                       </button>
-                      <button type="button" class="btn btn-sm btn-ghost" @click="startEditStandard">
+                      <button v-if="!spaceStore.deviceReadOnly" type="button" class="btn btn-sm btn-ghost" @click="startEditStandard">
                         <OpusIcon name="pencil" /> 编辑
                       </button>
                     </div>
@@ -1481,7 +1551,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- 折叠式 API 读取示例 -->
-                <details class="api-disclosure">
+                <details v-if="!spaceStore.deviceReadOnly" class="api-disclosure">
                   <summary>
                     <OpusIcon name="api" />
                     <span>API</span>
@@ -1622,7 +1692,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 3. API Token 管理画布 -->
-          <div v-else-if="activeTab === 'tokens'" class="canvas-inner canvas-subpanel">
+          <div v-else-if="!spaceStore.deviceReadOnly && activeTab === 'tokens'" class="canvas-inner canvas-subpanel">
             <header class="canvas-head">
               <h3 class="canvas-title">API Token</h3>
             </header>
@@ -1697,9 +1767,13 @@ onUnmounted(() => {
           </div>
 
           <!-- 4. 审计日志画布 -->
-          <div v-else-if="activeTab === 'audit'" class="canvas-inner canvas-subpanel">
+          <div v-else-if="!spaceStore.deviceReadOnly && activeTab === 'audit'" class="canvas-inner canvas-subpanel">
             <header class="canvas-head">
               <h3 class="canvas-title">审计日志</h3>
+              <select v-model="auditAction" class="input" aria-label="按操作筛选审计日志">
+                <option value="">全部操作</option>
+                <option value="device.read">设备读取</option>
+              </select>
             </header>
 
             <div class="subpanel-card" data-surface-role="list">
@@ -1707,7 +1781,7 @@ onUnmounted(() => {
               <div v-for="log in spaceStore.auditLogs" :key="log.id" class="audit-row">
                 <span class="audit-outcome" :class="log.outcome">{{ log.outcome }}</span>
                 <strong>{{ log.action }}</strong>
-                <span class="faint">{{ log.actorKind }}</span>
+                <span class="faint">{{ log.actorKind === 'device' ? log.actorId : log.actorKind }}</span>
                 <span class="muted audit-detail">{{ log.detail }}</span>
                 <span class="faint mono audit-time">{{ log.createdAt.slice(0, 19).replace('T', ' ') }}</span>
               </div>
@@ -1715,7 +1789,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 5. 空间管理与安全设置画布 -->
-          <div v-else-if="activeTab === 'conflicts'" class="canvas-inner canvas-subpanel space-conflicts">
+          <div v-else-if="!spaceStore.deviceReadOnly && activeTab === 'conflicts'" class="canvas-inner canvas-subpanel space-conflicts">
             <h3>同步冲突</h3>
             <p v-if="spaceStore.conflictsLoading" role="status">正在读取 Core 候选版本…</p>
             <p v-if="decisionError || spaceStore.conflictError" class="space-alert" role="alert">{{ decisionError || spaceStore.conflictError }}</p>
@@ -1742,10 +1816,26 @@ onUnmounted(() => {
               </div>
             </article>
           </div>
-          <div v-else-if="activeTab === 'security'" class="canvas-inner canvas-subpanel">
+          <div v-else-if="!spaceStore.deviceReadOnly && activeTab === 'security'" class="canvas-inner canvas-subpanel">
             <header class="canvas-head">
               <h3 class="canvas-title">{{ currentSpace.tier === 'standard' ? '管理' : '安全' }}</h3>
             </header>
+
+            <section v-if="deviceGrants || grantError" class="subpanel-card" aria-label="设备读取授权">
+              <h4>设备读取授权</h4>
+              <p v-if="grantError" class="space-alert" role="alert">{{ grantError }}</p>
+              <p v-if="deviceGrants?.length === 0" class="muted">这个工作区还没有已配对设备。</p>
+              <div v-for="grant in deviceGrants ?? []" :key="grant.clientId" class="token-item">
+                <div>
+                  <strong>{{ grant.deviceName }}</strong>
+                  <span class="muted"> · {{ grant.platform }} · {{ grant.canRead ? (grant.explicit ? '已授权' : '默认允许') : '无读取权限' }}</span>
+                </div>
+                <button type="button" class="btn btn-sm" :class="grant.canRead ? 'btn-ghost' : 'btn-primary'"
+                  :disabled="!!grantBusy" @click="toggleDeviceGrant(grant)">
+                  {{ grantBusy === grant.clientId ? '更新中…' : grant.canRead ? '撤销读取' : '授权读取' }}
+                </button>
+              </div>
+            </section>
 
             <div v-if="currentSpace.tier !== 'standard'" class="subpanel-card">
               <h4>修改密码</h4>
@@ -1794,7 +1884,7 @@ onUnmounted(() => {
         </template>
 
         <!-- 无空间时的极简引导大画布 -->
-        <div v-else class="canvas-welcome">
+        <div v-else-if="!spaceStore.deviceReadOnly" class="canvas-welcome">
           <div class="welcome-ic"><OpusIcon name="shield" /></div>
           <h3>创建共享空间</h3>
 
@@ -1824,6 +1914,7 @@ onUnmounted(() => {
 
     <!-- 新建空间原生 <dialog closedby="any"> -->
     <dialog
+      v-if="!spaceStore.deviceReadOnly"
       ref="createSpaceDialogRef"
       closedby="any"
       class="dlg space-dlg"
@@ -1921,6 +2012,8 @@ onUnmounted(() => {
 }
 
 .space-route-status { padding: 16px; }
+.space-device-banner { padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.space-device-banner-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .space-conflicts { display: grid; gap: 12px; }
 .space-conflict { padding: 14px; border-radius: var(--r-sm); }
 .space-conflict-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

@@ -26,7 +26,21 @@ from agent_node.config import (
 from agent_node.crypto_chunks import decrypt_chunk, encrypt_chunk, generate_file_key, iter_encrypted_file_chunks
 from agent_node.daemon import AgentNodeDaemon
 from agent_node.transfer import DirectArtifactStore, create_direct_transfer_app
-from agent_node.worktree import create_session_worktree, remove_session_worktree
+from agent_node.worktree import create_session_worktree, project_identity, remove_session_worktree
+
+
+def test_project_identity_matches_ssh_and_https_checkouts(tmp_path):
+    first = tmp_path / "workstation-copy"
+    second = tmp_path / "laptop-copy"
+    for folder, remote in ((first, "git@example.invalid:team/studiolo.git"),
+                           (second, "https://credential@example.invalid/team/studiolo")):
+        folder.mkdir()
+        subprocess.run(["git", "init", "-q", str(folder)], check=True)
+        subprocess.run(["git", "-C", str(folder), "remote", "add", "origin", remote], check=True)
+    identity = project_identity(first, (tmp_path,))
+    assert identity == project_identity(second, (tmp_path,))
+    assert identity["projectName"] == "studiolo"
+    assert identity["projectKey"].startswith("git:") and "credential" not in str(identity)
 
 
 def test_allowed_roots_and_non_loopback_tls(tmp_path):
@@ -114,6 +128,37 @@ def test_git_worktree_concurrency_and_sandbox(tmp_path):
 
     remove_session_worktree(repo, wt1, roots)
     remove_session_worktree(repo, wt2, roots)
+
+
+def test_session_approval_remembers_only_the_exact_non_high_risk_command(tmp_path):
+    async def run():
+        daemon = AgentNodeDaemon(NodeConfig(
+            "http://127.0.0.1:8000", "sn_live_test", (tmp_path,),
+            direct=DirectTransferConfig(enabled=False),
+        ), adapters={}, staging_dir=tmp_path / "stage")
+        frames: asyncio.Queue = asyncio.Queue()
+
+        class Socket:
+            async def send(self, payload):
+                await frames.put(json.loads(payload))
+
+        ws = Socket()
+
+        async def approve(call_id, command, risk, decision):
+            task = asyncio.create_task(daemon._request_approval(ws, provider="mock", session_id="session",
+                                                               call_id=call_id, command=command, risk=risk))
+            request = await asyncio.wait_for(frames.get(), timeout=1)
+            assert request["callId"] == call_id
+            await daemon.handle_command(ws, {"type": "permission.respond", "callId": call_id, "decision": decision})
+            return await task
+
+        assert await approve("first", "git status", "medium", "allow_session") == "allow_once"
+        assert await asyncio.wait_for(daemon._request_approval(ws, provider="mock", session_id="session",
+                                                              call_id="repeat", command="git status", risk="medium"), timeout=1) == "allow_once"
+        assert await approve("different", "git status --short", "medium", "deny") == "deny"
+        assert await approve("high", "git status", "high", "deny") == "deny"
+
+    asyncio.run(run())
 
 
 def test_daemon_mock_approval_and_handoff_and_stdio_jsonrpc(tmp_path):
@@ -341,8 +386,19 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
         await daemon.handle_command(ws, {"type": "session.history", "provider": "mock", "sessionId": sid, "requestId": "hist-1"})
         hist = next(f["messages"] for f in frames if f.get("requestId") == "hist-1")
         assert any(m.get("role") == "assistant" and m.get("thought") and m.get("toolCalls") for m in hist)
+        for i in range(2):
+            await daemon.handle_command(ws, {"type": "prompt.send", "provider": "mock", "sessionId": sid,
+                                             "text": f"Follow up {i}", "requestId": f"follow-up-{i}"})
         await daemon.handle_command(ws, {"type": "session.compact", "provider": "mock", "sessionId": sid, "requestId": "cmp-1"})
-        assert any(f["type"] == "SessionCompacted" and f["supported"] is True for f in frames)
+        compact = next(f for f in frames if f["type"] == "SessionCompacted")
+        assert compact["systemEvent"]["kind"] == "compacted"
+        assert compact["systemEvent"]["detail"]["retainedTurns"] == 1
+        await daemon.handle_command(ws, {"type": "session.history", "provider": "mock", "sessionId": sid, "requestId": "hist-compact",
+                                         "pagination": True, "limit": 50})
+        history = next(f["messages"] for f in frames if f.get("requestId") == "hist-compact")
+        assert history[:len(hist)] == hist
+        assert history[-1]["id"] == compact["messageId"]
+        assert history[-1]["systemEvents"] == [compact["systemEvent"]]
         await daemon.handle_command(ws, {"type": "session.delete", "provider": "mock", "sessionId": sid, "requestId": "del-1"})
         assert any(f["type"] == "SessionDeleted" and f["sessionId"] == sid for f in frames)
 
@@ -368,10 +424,26 @@ def test_workspace_files_diff_checkpoints_and_session_lifecycle(tmp_path):
         assert any(f["type"] == "CheckpointReverted" and "src/app.py" in f["restoredFiles"] for f in frames)
 
         daemon._active_runs.add(("mock", sid2))
-        daemon._run_buffers[("mock", sid2)] = [{"type": "TextDelta", "sessionId": sid2, "runId": "r-buf", "text": "buffered"}]
+        from agent_node.daemon import SessionStream
+
+        stream = SessionStream()
+        stream.append({"type": "TextDelta", "sessionId": sid2, "runId": "r-buf", "text": "buffered"})
+        daemon._session_streams[("mock", sid2)] = stream
         await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2, "requestId": "sub-1"})
         sub_snap = next(f for f in frames if f["type"] == "SessionStreamReplay" and f.get("requestId") == "sub-1")
         assert sub_snap["active"] is True and sub_snap["events"][0]["text"] == "buffered"
+        daemon._active_runs.discard(("mock", sid2))
+        stream.append({"type": "Completed", "sessionId": sid2, "runId": "r-buf"})
+        await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2,
+                                        "afterSequence": 1, "streamId": stream.stream_id, "requestId": "sub-completed"})
+        completed = next(f for f in frames if f.get("requestId") == "sub-completed")
+        assert completed["active"] is False and completed["events"][0]["type"] == "Completed"
+        for _ in range(501):
+            stream.append({"type": "TextDelta", "text": "overflow"})
+        await daemon.handle_command(ws, {"type": "session.subscribe", "provider": "mock", "sessionId": sid2,
+                                        "afterSequence": 1, "streamId": stream.stream_id, "requestId": "sub-gap"})
+        gap = next(f for f in frames if f.get("requestId") == "sub-gap")
+        assert gap["snapshotRequired"] is True and gap["events"] == []
 
         # 7. Worktree 沙箱合并回主分支工作区
         await daemon.handle_command(ws, {"type": "session.open", "provider": "mock", "cwd": str(repo), "useWorktree": True, "requestId": "open-wt"})

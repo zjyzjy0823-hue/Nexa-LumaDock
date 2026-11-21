@@ -35,6 +35,7 @@ jobs:
       - run: npm run test:data-bounded-reads
       - run: npm run test:fleet
       - run: npm run test:space-crypto
+      - run: node --test tests/space-device-reads.test.mjs
       - run: npm run test:theme-engine
       - run: npm run test:scheduler
       - run: npm run test:desktop
@@ -112,7 +113,10 @@ jobs:
         working-directory: agent-adapters/openclaw/plugin
       - run: python scripts/export-agent-tools.py --check
       - name: Generate temporary JWT secret
-        run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+        run: |
+          secret=$(openssl rand -hex 32)
+          echo "::add-mask::$secret"
+          echo "JWT_SECRET=$secret" >> "$GITHUB_ENV"
       - run: python -m alembic -c alembic.ini upgrade head
         working-directory: backend
       - run: python tests/postgres_smoke.py

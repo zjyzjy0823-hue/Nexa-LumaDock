@@ -2,12 +2,14 @@
 
 mod pairing;
 mod repository;
+mod space_reads;
 mod sync;
 #[cfg(test)]
 mod tests;
 
 pub use pairing::*;
 pub use repository::*;
+pub use space_reads::*;
 pub use sync::*;
 
 use chrono::{SecondsFormat, Utc};
